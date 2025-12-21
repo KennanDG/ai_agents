@@ -1,0 +1,98 @@
+# =========
+# Secrets
+# =========
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+aws-credentials*
+secrets*.json
+
+# =========
+# OS / Editor
+# =========
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+.idea/
+*.iml
+
+# =========
+# Python
+# =========
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+pip-wheel-metadata/
+.pyre/
+.pytype/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# =========
+# Node / Web (if added later)
+# =========
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.next/
+out/
+dist/
+coverage/
+
+# =========
+# Logs
+# =========
+*.log
+
+# =========
+# Databases / local state
+# =========
+*.sqlite
+*.sqlite3
+data/
+storage/
+tmp/
+temp/
+
+# =========
+# RAG / embeddings outputs (keep generated artifacts out of git)
+# =========
+embeddings/
+vectorstore/
+chroma/
+faiss_index/
+indexes/
+
+# =========
+# Docker
+# =========
+*.pid

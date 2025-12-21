@@ -29,3 +29,22 @@ A personal, long-term project to build an **agentic AI platform**: reusable AI a
 - **RAG**: ingestion → chunking → embeddings → retrieval → grounded answers
 - **Memory**: optional durable user preferences + session state
 - **Orchestration**: routing, guardrails, retries, tool error handling
+
+
+---
+
+## Getting Started
+
+### Prereqs
+- Git
+- Python 3.11+ (recommended)
+- (Optional) Node 18+ if you add a web UI later
+
+### Setup (Python-first)
+```bash
+# from repo root
+python -m venv .venv
+source .venv/bin/activate  # (WSL/Linux/macOS)
+# .venv\Scripts\activate   # (Windows PowerShell)
+
+pip install -U pip
