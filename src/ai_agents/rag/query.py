@@ -16,6 +16,16 @@ def answer(question: str, settings: RagSettings) -> str:
 
     retriever = build_retriever(vs, settings.k) # fetch documents
 
+    docs = retriever.invoke(question)
+
+    print("\n--- RETRIEVED DOCS ---")
+
+    for i, d in enumerate(docs, 1):
+        src = d.metadata.get("source", "unknown")
+        print(f"[{i}] source={src}")
+        print(d.page_content[:300].replace("\n", " "))
+        print()
+
     chain = build_rag_chain(retriever, settings.chat_model) # RAG pipeline
 
     return chain.invoke(question) # Returns LLM response

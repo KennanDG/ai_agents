@@ -8,6 +8,13 @@ def main():
         raise SystemExit(2)
 
     settings = RagSettings()
+
+    print("persist_dir:", settings.persist_dir)
+    print("collection:", f"{settings.collection_name}-{settings.namespace}")
+    print("embedding_model:", settings.embedding_model)
+    print("chat_model:", settings.chat_model)
+    print("k:", settings.k)
+
     q = sys.argv[1]
     print(answer(q, settings))
 

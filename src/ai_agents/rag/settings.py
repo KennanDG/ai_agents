@@ -6,11 +6,11 @@ class RagSettings(BaseModel):
     chat_model: str = Field(default="llama3.1:8b")
 
     # Chunking
-    chunk_size: int = Field(default=500)
-    chunk_overlap: int = Field(default=50)
+    chunk_size: int = Field(default=1_000)
+    chunk_overlap: int = Field(default=100)
 
     # Retrieval
-    k: int = Field(default=3)
+    k: int = Field(default=8)
 
     # Storage
     collection_name: str = Field(default="rag")
