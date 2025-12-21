@@ -82,6 +82,7 @@ data/
 storage/
 tmp/
 temp/
+.chroma
 
 # =========
 # RAG / embeddings outputs (keep generated artifacts out of git)
