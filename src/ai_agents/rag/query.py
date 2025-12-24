@@ -2,8 +2,10 @@ from .chain import build_rag_chain
 from .embeddings import build_ollama_embeddings
 from .settings import RagSettings
 from .vectorstore import build_qdrant, build_retriever
+from langsmith import traceable
 
 
+@traceable
 def answer(question: str, settings: RagSettings) -> str:
     
     embeddings = build_ollama_embeddings(settings.embedding_model) # Embedding model

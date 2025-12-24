@@ -1,30 +1,18 @@
 import os
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import BaseModel
+from ai_agents.config.settings import settings
 
 
-class RagSettings(BaseSettings):
+class RagSettings(BaseModel):
+    # Inherit infra from global settings
+    ollama_host: str = settings.ollama_host
+    qdrant_url: str = settings.qdrant_url
+    embedding_model: str = settings.embedding_model
+    chat_model: str = settings.chat_model
+    k: int = settings.k
 
-    model_config = SettingsConfigDict(
-        env_file=os.getenv("ENV_FILE", ".env"),
-        extra="ignore",
-    )
-
-    # Endpoints
-    ollama_host: str = Field(default="http://localhost:11434", alias="OLLAMA_HOST")
-    qdrant_url: str = Field(default="http://localhost:6333", alias="QDRANT_URL")
-
-    # Models
-    embedding_model: str = Field(default="nomic-embed-text", alias="EMBEDDING_MODEL")
-    chat_model: str = Field(default="llama3.1:8b", alias="CHAT_MODEL")
-
-    # Retrieval
-    k: int = Field(default=8, alias="K")
-
-    # Chunking
-    chunk_size: int = Field(default=500, alias="CHUNK_SIZE")
-    chunk_overlap: int = Field(default=50, alias="CHUNK_OVERLAP")
-
-    # Storage
-    collection_name: str = Field(default="rag-default", alias="QDRANT_COLLECTION")
-    namespace: str = Field(default="default", alias="RAG_NAMESPACE")
+    # RAG-specific behavior
+    chunk_size: int = 500
+    chunk_overlap: int = 50
+    collection_name: str = "rag-default"
+    namespace: str = "default"

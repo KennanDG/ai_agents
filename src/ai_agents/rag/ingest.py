@@ -8,8 +8,10 @@ from .loaders import load_text_files
 from .settings import RagSettings
 from .splitter import split_docs
 from .vectorstore import build_qdrant, upsert_documents
+from langsmith import traceable
 
 
+@traceable
 def ingest_files(paths: Iterable[str | Path], settings: RagSettings) -> int:
     
     docs = load_text_files(paths)

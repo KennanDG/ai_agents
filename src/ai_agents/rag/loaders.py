@@ -4,7 +4,10 @@ from typing import Iterable, List
 
 from langchain_core.documents import Document
 from langchain_community.document_loaders import TextLoader
+from langsmith import traceable
 
+
+@traceable
 def load_text_files(paths: Iterable[str | Path]) -> List[Document]:
     
     docs: List[Document] = []

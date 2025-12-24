@@ -1,7 +1,10 @@
 from typing import List
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langsmith import traceable
 
+
+@traceable
 def split_docs(
     docs: List[Document],
     chunk_size: int,

@@ -38,6 +38,13 @@ services:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1          # number of GPUs to use (or 'all')
+              capabilities: [gpu]
     restart: unless-stopped
   
   
@@ -55,6 +62,8 @@ services:
     volumes:
       - .:/workspaces/ai_agents:cached
     command: sleep infinity
+    env_file:
+      - .env.docker
     environment:
       PYTHONPATH: /workspaces/ai_agents/src
       OLLAMA_HOST: http://ollama:11434
