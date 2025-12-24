@@ -6,7 +6,7 @@ from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams
+from qdrant_client.models import Distance, VectorParams, Filter, FieldCondition, MatchValue
 
 from .settings import RagSettings
 
@@ -39,14 +39,22 @@ def build_qdrant(settings: RagSettings, embedding_fn):
     )
 
 
+def delete_source(vs: QdrantVectorStore, source_uri: str):
+    client = vs.client
+    collection = vs.collection_name
+    flt = Filter(
+        must=[FieldCondition(key="source_uri", match=MatchValue(value=source_uri))]
+    )
+    client.delete(collection_name=collection, points_selector=flt)
+
+
 def build_retriever(vs: QdrantVectorStore, k: int):
     return vs.as_retriever(search_kwargs={"k": k})
 
 
-def upsert_documents(vs: QdrantVectorStore, docs: List):
-    # LangChain will generate IDs if not provided.
-    # Later: pass stable IDs for idempotency.
-    vs.add_documents(docs)
+def upsert_documents(vs: QdrantVectorStore, docs, ids: list[str]):
+    # LangChain Qdrant vectorstore supports ids for add_documents
+    vs.add_documents(docs, ids=ids)
 
 
 
