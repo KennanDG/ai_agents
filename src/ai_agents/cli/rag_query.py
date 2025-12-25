@@ -1,6 +1,8 @@
 import sys
-from ai_agents.rag.settings import RagSettings
+
 from ai_agents.rag.query import answer
+from ai_agents.rag.settings import RagSettings
+
 
 def main():
     if len(sys.argv) < 2:
@@ -9,7 +11,7 @@ def main():
 
     settings = RagSettings()
 
-    print("persist_dir:", settings.persist_dir)
+    print("qdrant_url:", settings.qdrant_url)
     print("collection:", f"{settings.collection_name}-{settings.namespace}")
     print("embedding_model:", settings.embedding_model)
     print("chat_model:", settings.chat_model)

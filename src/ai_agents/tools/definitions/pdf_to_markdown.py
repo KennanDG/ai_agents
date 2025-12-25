@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
+from langsmith import traceable
 
 # Request Model
 class PdfToMarkdownRequest(BaseModel):
@@ -50,7 +51,7 @@ class PdfToMarkdownResult(BaseModel):
 
 
 
-
+@traceable
 def pdf_to_markdown(req: PdfToMarkdownRequest) -> PdfToMarkdownResult:
     try:
         import fitz  # PyMuPDF
