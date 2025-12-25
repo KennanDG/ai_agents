@@ -44,8 +44,6 @@ def load_text_files(paths: Iterable[str | Path]) -> List[Document]:
             doc.metadata = {
                 **(doc.metadata or {}),
                 "source": "file",
-                "path": str(path.resolve()),
-                "source": "file",
                 "source_uri": f"file:{relative_path}",  # stable across WSL/devcontainer
                 "path": str(path.resolve()),
                 "path_rel": relative_path,
