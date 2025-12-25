@@ -10,6 +10,10 @@ from .loaders import load_text_files
 from .settings import RagSettings
 from .splitter import split_docs
 from .vectorstore import build_qdrant, delete_source, upsert_documents
+from ai_agents.db.session import SessionLocal
+from ai_agents.rag.repo import upsert_source, replace_chunks
+from sqlalchemy import select
+from ai_agents.db.models import RagChunk
 
 
 # ---------------- Create IDs for document embeddings ----------------
@@ -45,33 +49,78 @@ def ingest_files(paths: Iterable[str | Path], settings: RagSettings) -> int:
     embeddings = build_ollama_embeddings(settings.embedding_model)
     vs = build_qdrant(settings=settings, embedding_fn=embeddings)
 
-    # attach metadata + build stable IDs
-    ids: list[str] = []
-    for i, doc in enumerate(splits):
-        # assuming loaders set metadata["path"] already
-        file_path = doc.metadata.get("path")
-        source_uri = f"file:{file_path}" if file_path else "unknown"
+    # Pre-compute file-level hashes (once per file)
+    file_hashes: dict[str, str] = {}
+    
+    for doc in docs:
+        relative_path = doc.metadata["path_rel"]
+        file_hashes[relative_path] = _sha256_file(Path(doc.metadata["path"]))
 
-        # compute full file hash if we can
-        content_hash = _sha256_file(Path(file_path)) if file_path else _sha256_text(doc.page_content)
+    
+    ids: list[str] = [] # attach metadata + build stable IDs
 
+    chunk_counters: dict[str, int] = {} # chunk_index must be per source
+
+    for doc in splits:
+        relative_path = doc.metadata["path_rel"]
+        source_uri = f"file:{relative_path}"
+
+        chunk_index = chunk_counters.get(source_uri, 0)
+        chunk_counters[source_uri] = chunk_index + 1
+
+        content_hash = file_hashes[relative_path]
         chunk_hash = _sha256_text(doc.page_content)
-        point_id = _make_point_id(source_uri, content_hash, i, chunk_hash)
+
+        point_id = _make_point_id(
+            source_uri=source_uri,
+            content_hash=content_hash,
+            chunk_index=chunk_index,
+            chunk_hash=chunk_hash,
+        )
 
         doc.metadata.update({
             "source_uri": source_uri,
             "content_hash": content_hash,
-            "chunk_index": i,
+            "chunk_index": chunk_index,
             "chunk_hash": chunk_hash,
         })
+
         ids.append(point_id)
 
-    # easiest true-idempotent behavior: delete all existing points for each source_uri
-    # (dedupe sources)
-    for src in sorted({doc.metadata["source_uri"] for doc in splits if "source_uri" in doc.metadata}):
+    # Delete existing vectors per source (true idempotency)
+    for src in sorted(chunk_counters.keys()):
         delete_source(vs, src)
+    
 
-    # Basic upsert (no ids). Next step: pass stable ids.
-    upsert_documents(vs, splits)
+    upsert_documents(vs, splits, ids)
     
     return len(splits)
+
+
+    # for i, doc in enumerate(splits):
+    #     # assuming loaders set metadata["path"] already
+    #     file_path = doc.metadata.get("path")
+    #     source_uri = f"file:{file_path}" if file_path else "unknown"
+
+    #     # compute full file hash if we can
+    #     content_hash = _sha256_file(Path(file_path)) if file_path else _sha256_text(doc.page_content)
+
+    #     chunk_hash = _sha256_text(doc.page_content)
+    #     point_id = _make_point_id(source_uri, content_hash, i, chunk_hash)
+
+    #     doc.metadata.update({
+    #         "source_uri": source_uri,
+    #         "content_hash": content_hash,
+    #         "chunk_index": i,
+    #         "chunk_hash": chunk_hash,
+    #     })
+    #     ids.append(point_id)
+
+    # # easiest true-idempotent behavior: delete all existing points for each source_uri
+    # # (dedupe sources)
+    # for src in sorted({doc.metadata["source_uri"] for doc in splits if "source_uri" in doc.metadata}):
+    #     delete_source(vs, src)
+
+    # upsert_documents(vs, splits, ids)
+    
+    # return len(splits)
