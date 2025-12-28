@@ -1,7 +1,9 @@
 from collections import defaultdict
 from langchain_core.documents import Document
+from langsmith import traceable
 
 
+@traceable
 def rrf_fuse(results_by_query: list[list[Document]], k: int = 60, rrf_k: int = 60) -> list[Document]:
     """
     results_by_query: list of ranked doc lists (one list per query variant)

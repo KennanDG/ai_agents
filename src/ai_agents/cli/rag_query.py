@@ -15,7 +15,13 @@ def main():
     print("collection:", f"{settings.collection_name}-{settings.namespace}")
     print("embedding_model:", settings.embedding_model)
     print("chat_model:", settings.chat_model)
+    print("query_model:", settings.query_model)
+    print("rerank_model:", settings.rerank_model)
     print("k:", settings.k)
+    print("candidate_k:", settings.candidate_k)
+    print("k_per_query:", settings.k_per_query)
+    print("rrf_k:", settings.rrf_k)
+    print("n_query_expansions:", settings.n_query_expansions)
 
     q = sys.argv[1]
     print(answer(q, settings))
