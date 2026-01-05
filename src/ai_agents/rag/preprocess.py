@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 import hashlib
 import re
 import subprocess
+import base64
+import json
+import urllib.request
+
 
 from langchain_core.documents import Document
 
@@ -141,6 +146,13 @@ def ocr_image_text(image_path: Path) -> str:
         import pytesseract
     except Exception as e:
         raise RuntimeError("Install deps: pillow pytesseract + system tesseract-ocr") from e
+    
+    import shutil
+
+    if shutil.which("tesseract") is None:
+        raise RuntimeError(
+            "tesseract binary not found. Install tesseract-ocr in the container."
+        )
 
     img = Image.open(image_path)
 
@@ -149,11 +161,38 @@ def ocr_image_text(image_path: Path) -> str:
 
 def caption_image(image_path: Path, *, caption_model: str) -> str:
     """
-    Caption using an LLM/VLM. Implementation depends on your stack.
-    Start with a stub that you can hook into Ollama later.
+    Caption image doc using an LLM/VLM through Ollama API call
     """
-    # TODO: implement with your chosen VLM. For now, return a basic placeholder.
-    return f"Image file '{image_path.name}' (captioning not yet wired)."
+
+    ollama_url = os.getenv("OLLAMA_HOST", "http://ollama:11434")
+    
+    prompt = (
+        "Write a concise caption for this image for use in a RAG knowledge base. "
+        "Focus on: (1) what it is, (2) key entities/terms, (3) any diagram/chart meaning. "
+        "Return 2-4 sentences. No fluff."
+    )
+
+    img_b64 = base64.b64encode(image_path.read_bytes()).decode()
+
+    payload = {
+        "model": caption_model,
+        "prompt": prompt,
+        "images": [img_b64],
+        "stream": False,
+    }
+
+    req = urllib.request.Request(
+        f"{ollama_url}/api/generate",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        data = json.loads(resp.read().decode())
+
+    # Ollama returns `response` for non-streaming generate
+    return (data.get("response") or "").strip()
 
 
 def image_to_derived_md(
@@ -171,7 +210,11 @@ def image_to_derived_md(
     out_md = _derive_md_path(derived_img_md_dir, path_rel, content_hash)
 
     ocr_text = ocr_image_text(image_path)
-    cap = caption_image(image_path, caption_model=caption_model)
+    
+    try:
+        cap = caption_image(image_path, caption_model=caption_model)
+    except Exception as e:
+        raise RuntimeError(f"caption failed for image: {image_path}") from e
 
     md = (
         "---\n"
@@ -206,10 +249,31 @@ def parse_frontmatter_for_source_uri(md_text: str) -> Optional[str]:
     if len(parts) != 3:
         return None
     
-    fm = parts[1]
+    frontmatter = parts[1]
 
-    for line in fm.splitlines():
+    for line in frontmatter.splitlines():
         if line.strip().startswith(f"{DERIVED_SOURCE_URI_KEY}:"):
             return line.split(":", 1)[1].strip()
         
     return None
+
+
+
+def parse_frontmatter_key(md_text: str, key: str) -> Optional[str]:
+    
+    if not md_text.startswith("---"):
+        return None
+    
+    parts = md_text.split("---", 2)
+
+    if len(parts) != 3:
+        return None
+    
+    frontmatter = parts[1]
+
+    for line in frontmatter.splitlines():
+        if line.strip().startswith(f"{key}:"):
+            return line.split(":", 1)[1].strip()
+        
+    return None
+

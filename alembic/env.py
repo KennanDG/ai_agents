@@ -6,7 +6,7 @@ from sqlalchemy import pool
 from alembic import context
 
 import os
-from ai_agents.db.base import Base
+from ai_agents.db.models import Base
 from ai_agents.db import models
 
 # this is the Alembic Config object, which provides

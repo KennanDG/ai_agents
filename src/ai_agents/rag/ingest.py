@@ -21,7 +21,7 @@ from ai_agents.config.constants import QDRANT_ID_NAMESPACE
 from .preprocess import (
     expand_inputs, is_text, is_pdf, is_image,
     pdf_to_derived_md, image_to_derived_md,
-    parse_frontmatter_for_source_uri,
+    parse_frontmatter_for_source_uri, parse_frontmatter_key
 )
 
 
@@ -75,11 +75,11 @@ def ingest_files(paths: Iterable[str | Path], settings: RagSettings) -> int:
         return path_rel, f"file:{path_rel}"
 
 
-    for p in pdf_paths:
-        path_rel, source_uri = rel_and_source(p)
+    for path in pdf_paths:
+        path_rel, source_uri = rel_and_source(path)
         derived_md_paths.append(
             pdf_to_derived_md(
-                p,
+                path,
                 source_uri=source_uri,
                 path_rel=path_rel,
                 derived_pdf_md_dir=pdf_md_dir,
@@ -87,13 +87,15 @@ def ingest_files(paths: Iterable[str | Path], settings: RagSettings) -> int:
             )
         )
 
-    # caption model name can live in settings later; hardcode for now
-    caption_model = "your-vlm-here"
-    for p in img_paths:
-        path_rel, source_uri = rel_and_source(p)
+    # VLM
+    caption_model = settings.caption_model if hasattr(settings, "caption_model") else "llava:7b"
+
+
+    for path in img_paths:
+        path_rel, source_uri = rel_and_source(path)
         derived_md_paths.append(
             image_to_derived_md(
-                p,
+                path,
                 source_uri=source_uri,
                 path_rel=path_rel,
                 derived_img_md_dir=img_md_dir,
@@ -111,12 +113,19 @@ def ingest_files(paths: Iterable[str | Path], settings: RagSettings) -> int:
     if derived_md_paths:
         derived_docs = load_text_files(derived_md_paths)
 
-        # Override source_uri so stable IDs remain tied to ORIGINAL source, not derived file
+        # Override source_uri & original path so stable IDs remain tied to ORIGINAL source, not derived file
         for d in derived_docs:
             md_text = d.page_content
             override = parse_frontmatter_for_source_uri(md_text)
+            orig_rel = parse_frontmatter_key(md_text, "original_rel")
+
             if override:
                 d.metadata["source_uri"] = override
+            
+            if orig_rel:
+                # store original absolute path for hashing
+                d.metadata["original_path"] = str((Path(__file__).resolve().parents[3] / orig_rel).resolve())
+
             # optionally keep derived path info too:
             d.metadata["derived_path"] = d.metadata.get("path")
 
@@ -135,8 +144,10 @@ def ingest_files(paths: Iterable[str | Path], settings: RagSettings) -> int:
     file_hashes: dict[str, str] = {}
 
     for doc in docs:
-        relative_path = doc.metadata["path_rel"]
-        file_hashes[relative_path] = _sha256_file(Path(doc.metadata["path"]))
+        source_uri = doc.metadata["source_uri"]
+        original_path = doc.metadata.get("original_path")
+        path_to_hash = Path(original_path) if original_path else Path(doc.metadata["path"]) # Derived path Fallback
+        file_hashes[source_uri] = _sha256_file(path_to_hash)
 
 
     # Group splits by source_uri so chunk_index is per file
@@ -151,8 +162,7 @@ def ingest_files(paths: Iterable[str | Path], settings: RagSettings) -> int:
 
     with SessionLocal() as db:
         for source_uri, chunk_docs in by_source.items():
-            relative_path = chunk_docs[0].metadata["path_rel"]
-            content_hash = file_hashes[relative_path]
+            content_hash = file_hashes[source_uri]
 
             # 1) Upsert source & check unchanged
             src_row, unchanged = upsert_source(

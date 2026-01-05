@@ -13,9 +13,11 @@ class Settings(BaseSettings):
 
     # Ollama
     ollama_host: str = Field(default="http://localhost:11434", alias="OLLAMA_HOST")
+    ollama_url: str = Field(default="http://host.docker.internal:11434", alias="OLLAMA_URL")
     chat_model: str = Field(default="llama3.1:8b", alias="CHAT_MODEL")                   # Main LLM
     embedding_model: str = Field(default="nomic-embed-text", alias="EMBEDDING_MODEL")    # Doc embedding
-    query_model: str = Field(default="qwen2.5:3b-instruct", alias="QUERY_MODEL")         # Query translation / reranking
+    query_model: str = Field(default="qwen2.5:3b-instruct", alias="QUERY_MODEL")         # Query translation
+    caption_model: str = Field(default="moondream:1.8b", alias="CAPTION_MODEL")                # VLM
 
     # Cross-encoder reranker (sentence-transformers)
     rerank_model: str = Field(default="BAAI/bge-reranker-base", alias="RERANK_MODEL")

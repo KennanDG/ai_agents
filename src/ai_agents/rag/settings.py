@@ -7,11 +7,13 @@ class RagSettings(BaseModel):
 
     # Inherit from global settings
     ollama_host: str = settings.ollama_host
+    ollama_url: str = settings.ollama_url
     qdrant_url: str = settings.qdrant_url
     embedding_model: str = settings.embedding_model
     chat_model: str = settings.chat_model
     query_model: str = settings.query_model
     rerank_model: str = settings.rerank_model
+    caption_model: str = settings.caption_model
     k: int = settings.k
     candidate_k: int = settings.candidate_k
     k_per_query: int = settings.k_per_query
