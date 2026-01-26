@@ -57,7 +57,9 @@ services:
 
 
   dev:
-    image: python:3.11-slim
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
     working_dir: /workspaces/ai_agents
     volumes:
       - .:/workspaces/ai_agents:cached

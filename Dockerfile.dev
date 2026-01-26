@@ -1,0 +1,11 @@
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y \
+    tesseract-ocr \
+    ocrmypdf \
+    ghostscript \
+    poppler-utils \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspaces/ai_agents
