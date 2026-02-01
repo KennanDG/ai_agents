@@ -52,7 +52,9 @@ def answer(question: str, settings: RagSettings) -> str:
         question=question,
         docs=fused_docs,
         model_name=settings.rerank_model,
-        top_k=settings.k
+        top_k=settings.k,
+        max_chars=512,
+        device=settings.rerank_device
     )
 
     # 5) Make a “static retriever” that always returns final_docs

@@ -16,11 +16,12 @@ class Settings(BaseSettings):
     ollama_url: str = Field(default="http://host.docker.internal:11434", alias="OLLAMA_URL")
     chat_model: str = Field(default="llama3.1:8b", alias="CHAT_MODEL")                   # Main LLM
     embedding_model: str = Field(default="nomic-embed-text", alias="EMBEDDING_MODEL")    # Doc embedding
-    query_model: str = Field(default="qwen2.5:3b-instruct", alias="QUERY_MODEL")         # Query translation
+    query_model: str = Field(default="llama3.1:8b", alias="QUERY_MODEL")         # Query translation   "qwen2.5:3b-instruct"
     caption_model: str = Field(default="moondream:1.8b", alias="CAPTION_MODEL")                # VLM
 
     # Cross-encoder reranker (sentence-transformers)
     rerank_model: str = Field(default="BAAI/bge-reranker-base", alias="RERANK_MODEL")
+    rerank_device: str = Field(default="cuda", alias="RERANK_DEVICE")
 
     # Qdrant
     qdrant_url: str = Field(default="http://localhost:6333", alias="QDRANT_URL")
@@ -33,11 +34,11 @@ class Settings(BaseSettings):
     )
 
     # Retrieval
-    k: int = Field(default=20, alias="K")
-    candidate_k: int = Field(default=50, alias="CANDIDATE_K")   # docs kept after RRF before rerank
-    k_per_query: int = Field(default=10, alias="K_PER_QUERY")    # docs retrieved per expanded query
+    k: int = Field(default=8, alias="K")
+    candidate_k: int = Field(default=30, alias="CANDIDATE_K")   # docs kept after RRF before rerank
+    k_per_query: int = Field(default=8, alias="K_PER_QUERY")    # docs retrieved per expanded query
     rrf_k: int = Field(default=60, alias="RRF_K")               # RRF constant
-    n_query_expansions: int = Field(default=5, alias="N_QUERY_EXPANSIONS")
+    n_query_expansions: int = Field(default=2, alias="N_QUERY_EXPANSIONS")
 
 
 

@@ -72,6 +72,8 @@ def retrieve_node(state: RagGraphState) -> RagGraphState:
         docs=fused_docs,
         model_name=settings.rerank_model,
         top_k=settings.k,
+        max_chars=512,
+        device=settings.rerank_device
     )
 
     # Debug print (same as your current flow)

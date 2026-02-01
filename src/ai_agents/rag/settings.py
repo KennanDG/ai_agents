@@ -13,6 +13,7 @@ class RagSettings(BaseModel):
     chat_model: str = settings.chat_model
     query_model: str = settings.query_model
     rerank_model: str = settings.rerank_model
+    rerank_device: str = settings.rerank_device
     caption_model: str = settings.caption_model
     k: int = settings.k
     candidate_k: int = settings.candidate_k
