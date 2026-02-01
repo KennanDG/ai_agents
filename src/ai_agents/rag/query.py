@@ -6,6 +6,8 @@ from .chain import build_rag_chain
 from .embeddings import build_ollama_embeddings
 from .settings import RagSettings
 from .vectorstore import build_qdrant, build_retriever
+from .singletons import get_rag_graph
+
 from .query_translations.query_expansion import expand_queries
 from .query_translations.rag_fusion import rrf_fuse
 from .query_translations.cross_encoder import cross_encoder_rerank
@@ -67,3 +69,12 @@ def answer(question: str, settings: RagSettings) -> str:
     chain = build_rag_chain(static_retriever, settings.chat_model) # RAG pipeline
 
     return chain.invoke(question) # Returns LLM response
+
+
+
+
+@traceable(name="rag_answer_langgraph", tags=["langgraph", "rag"])
+def answer_langgraph(question: str, settings: RagSettings) -> str:
+    graph = get_rag_graph() # Fetches singleton graph
+    final_state = graph.invoke({"question": question, "settings": settings})
+    return final_state["answer"]

@@ -1,6 +1,6 @@
 import sys
 
-from ai_agents.rag.query import answer
+from ai_agents.rag.query import answer, answer_langgraph
 from ai_agents.rag.settings import RagSettings
 
 
@@ -24,7 +24,7 @@ def main():
     print("n_query_expansions:", settings.n_query_expansions)
 
     q = sys.argv[1]
-    print(answer(q, settings))
+    print(answer_langgraph(q, settings))
 
 if __name__ == "__main__":
     main()

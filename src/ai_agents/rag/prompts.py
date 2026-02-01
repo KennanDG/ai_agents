@@ -12,7 +12,7 @@ QUERY_EXPANSION_PROMPT = ChatPromptTemplate.from_messages(
             "user",
             "Rewrite the user question into {n} diverse search queries.\n"
             "Rules:\n"
-            "- Keep each query short (<= 15 words)\n"
+            "- Keep each query concise (<= 1-2 sentences)\n"
             "- Use different wording or synonyms\n"
             "- Expand acronyms if helpful\n"
             "- Output ONLY a JSON array of strings\n\n"

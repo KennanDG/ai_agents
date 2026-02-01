@@ -74,7 +74,7 @@ services:
       QDRANT_COLLECTION: rag-default
       CHAT_MODEL: llama3.1:8b
       EMBEDDING_MODEL: nomic-embed-text
-      K: "8"
+      
     depends_on:
       - postgres
       - qdrant

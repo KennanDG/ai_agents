@@ -33,9 +33,9 @@ class Settings(BaseSettings):
     )
 
     # Retrieval
-    k: int = Field(default=8, alias="K")
-    candidate_k: int = Field(default=30, alias="CANDIDATE_K")   # docs kept after RRF before rerank
-    k_per_query: int = Field(default=4, alias="K_PER_QUERY")    # docs retrieved per expanded query
+    k: int = Field(default=20, alias="K")
+    candidate_k: int = Field(default=50, alias="CANDIDATE_K")   # docs kept after RRF before rerank
+    k_per_query: int = Field(default=10, alias="K_PER_QUERY")    # docs retrieved per expanded query
     rrf_k: int = Field(default=60, alias="RRF_K")               # RRF constant
     n_query_expansions: int = Field(default=5, alias="N_QUERY_EXPANSIONS")
 

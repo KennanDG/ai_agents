@@ -20,7 +20,7 @@ def cross_encoder_rerank(
     docs: List[Document],
     model_name: str,
     top_k: int,
-    max_chars: int = 800,
+    max_chars: int = 512,
 ) -> List[Document]:
     """
     Uses a CrossEncoder model to score the relevance of each document returned
