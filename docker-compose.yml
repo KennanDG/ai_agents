@@ -74,7 +74,15 @@ services:
       QDRANT_COLLECTION: rag-default
       CHAT_MODEL: llama3.1:8b
       EMBEDDING_MODEL: nomic-embed-text
-      
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1          # or 'all'
+              capabilities: [gpu]
     depends_on:
       - postgres
       - qdrant

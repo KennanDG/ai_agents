@@ -81,6 +81,9 @@ def retrieve_node(state: RagGraphState) -> RagGraphState:
     for i, doc in enumerate(final_docs, 1):
         src = doc.metadata.get("source_uri", doc.metadata.get("source", "unknown"))
         print(f"[{i}] {src}")
+        print()
+        print(f"Length of chunk: {len(doc.page_content)}")
+        print()
         print(doc.page_content[:300].replace("\n", " "))
         print()
 
