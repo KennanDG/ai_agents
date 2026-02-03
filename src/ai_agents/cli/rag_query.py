@@ -1,4 +1,5 @@
 import sys
+import json
 
 from ai_agents.rag.query import answer, answer_langgraph
 from ai_agents.rag.settings import RagSettings
@@ -24,7 +25,13 @@ def main():
     print("n_query_expansions:", settings.n_query_expansions)
 
     q = sys.argv[1]
-    print(answer_langgraph(q, settings))
+    print()
+    print()
+    answer = answer_langgraph(q, settings)
+    answer = json.dumps(answer, indent=4)
+    print(answer)
+    print()
+    print()
 
 if __name__ == "__main__":
     main()

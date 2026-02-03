@@ -44,6 +44,8 @@ class RagGraphState(TypedDict, total=False):
 
     # inputs
     question: str
+    question_original: str 
+    rewritten_question: str 
     settings: RagSettings
 
     # --- Internal State ---
@@ -98,10 +100,16 @@ def init_state_node(state: RagGraphState) -> RagGraphState:
     settings = state["settings"]
     max_attempts = int(getattr(settings, "max_rag_attempts", 2))
 
+    # preserve the very first user question
+    question = state["question"]
+    question_original = state.get("question_original", question)
+
     return {
         "attempt": int(state.get("attempt", 0)),
         "max_attempts": max_attempts,
         "error": None,
+        "question_original": question_original,
+        "rewritten_question": state.get("rewritten_question", ""),
     }
 
 
@@ -305,6 +313,7 @@ def verify_answer_node(state: RagGraphState) -> RagGraphState:
     """
 
     question = state["question"]
+    original_question = state.get("question_original", question)
     answer = state["answer"]
     docs = state.get("retrieved_docs", [])
     settings = state["settings"]
@@ -331,6 +340,7 @@ def verify_answer_node(state: RagGraphState) -> RagGraphState:
         return chain.invoke(
             {
                 "context": context_text,
+                "original_question": original_question,
                 "question": question,
                 "answer": answer,
             }
@@ -341,19 +351,23 @@ def verify_answer_node(state: RagGraphState) -> RagGraphState:
             _invoke,
             attempts=int(getattr(settings, "verify_attempts", 2)),
         )
-        score = result.get("score", 0)
+        score = int(result.get("score", 0))
         reason = result.get("reason", "No reason provided")
+        rewritten_question = result.get("rewritten_question", question)
 
     except Exception as e:
         print(f"Verification failed: {e}")
         # FAIL OPEN: Assume the answer is good if the grader crashes
         score = 1 
         reason = f"Verification skipped due to error: {str(e)}"
+        rewritten_question = question
         error = f"verify_answer_node: {type(e).__name__}: {e}"
 
     return {
         "verification_score": score,
         "verification_reason": reason,
+        "rewritten_question": rewritten_question,
+        "question": rewritten_question if score == 0 and rewritten_question else question,
         "attempt": current_attempt + 1,
         "error": error
     }
@@ -400,6 +414,8 @@ def finalize_node(state: RagGraphState) -> RagGraphState:
             "attempt": int(state.get("attempt", 0)),
             "max_attempts": int(state.get("max_attempts", 0)),
             "error": state.get("error"),
+            "question_original": state.get("question_original", ""), 
+            "rewritten_question": state.get("rewritten_question", ""), 
         }
     }
 

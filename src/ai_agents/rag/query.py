@@ -83,7 +83,7 @@ def answer(question: str, settings: RagSettings) -> str:
 
 
 @traceable(name="rag_answer_langgraph", tags=["langgraph", "rag"])
-def answer_langgraph(question: str, settings: RagSettings) -> str:
+def answer_langgraph(question: str, settings: RagSettings) -> dict:
     graph = get_rag_graph() # Fetches singleton graph
     final_state = graph.invoke({"question": question, "settings": settings})
-    return final_state["answer"]
+    return final_state["result"]
