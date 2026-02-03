@@ -5,14 +5,13 @@ from langchain_core.documents import Document
 from langsmith import traceable
 from sentence_transformers import CrossEncoder
 
-_MODEL_CACHE: dict[str, CrossEncoder] = {}
+_MODEL_CACHE: dict[tuple[str, str], CrossEncoder] = {}
 
-def _get_model(model_name: str) -> CrossEncoder:
-
-    if model_name not in _MODEL_CACHE:
-        _MODEL_CACHE[model_name] = CrossEncoder(model_name)
-
-    return _MODEL_CACHE[model_name]
+def _get_model(model_name: str, device: str) -> CrossEncoder:
+    key = (model_name, device)
+    if key not in _MODEL_CACHE:
+        _MODEL_CACHE[key] = CrossEncoder(model_name, device=device)
+    return _MODEL_CACHE[key]
 
 @traceable
 def cross_encoder_rerank(
@@ -20,7 +19,8 @@ def cross_encoder_rerank(
     docs: List[Document],
     model_name: str,
     top_k: int,
-    max_chars: int = 800,
+    max_chars: int = 512,
+    device: str = "cuda"
 ) -> List[Document]:
     """
     Uses a CrossEncoder model to score the relevance of each document returned
@@ -31,7 +31,7 @@ def cross_encoder_rerank(
     if not docs:
         return []
 
-    model = _get_model(model_name)
+    model = _get_model(model_name, device)
 
     pairs = [(question, (d.page_content or "")[:max_chars]) for d in docs]
     scores = model.predict(pairs)  # higher score means the chunk is more relevant

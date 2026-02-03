@@ -7,7 +7,10 @@ from .prompts import build_rag_prompt
 
 @traceable
 def build_rag_chain(retriever, chat_model: str):
-    llm = ChatOllama(model=chat_model)
+    llm = ChatOllama(
+        model=chat_model,
+        temperature=0.0
+        )
     prompt = build_rag_prompt()
 
     # Question -> Retrieve Context -> Prompt -> LLM -> String

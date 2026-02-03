@@ -11,7 +11,7 @@ from ai_agents.rag.prompts import QUERY_EXPANSION_PROMPT
 @traceable
 def expand_queries(question: str, chat_model: str, n: int = 5) -> List[str]:
     
-    llm = ChatOllama(model=chat_model, temperature=0.2)
+    llm = ChatOllama(model=chat_model, temperature=0.3)
 
     msg = QUERY_EXPANSION_PROMPT.format_messages(
         question=question,
