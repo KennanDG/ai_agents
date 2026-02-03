@@ -9,7 +9,7 @@ from .prompts import build_rag_prompt
 def build_rag_chain(retriever, chat_model: str):
     llm = ChatOllama(
         model=chat_model,
-        temperature=0
+        temperature=0.0
         )
     prompt = build_rag_prompt()
 

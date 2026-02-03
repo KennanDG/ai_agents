@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     embedding_model: str = Field(default="nomic-embed-text", alias="EMBEDDING_MODEL")    # Doc embedding
     query_model: str = Field(default="llama3.1:8b", alias="QUERY_MODEL")         # Query translation   "qwen2.5:3b-instruct"
     caption_model: str = Field(default="moondream:1.8b", alias="CAPTION_MODEL")                # VLM
+    verify_model: str = chat_model
 
     # Cross-encoder reranker (sentence-transformers)
     rerank_model: str = Field(default="BAAI/bge-reranker-base", alias="RERANK_MODEL")
@@ -39,6 +40,15 @@ class Settings(BaseSettings):
     k_per_query: int = Field(default=8, alias="K_PER_QUERY")    # docs retrieved per expanded query
     rrf_k: int = Field(default=60, alias="RRF_K")               # RRF constant
     n_query_expansions: int = Field(default=2, alias="N_QUERY_EXPANSIONS")
+    enable_query_expansion: bool = Field(default=True, alias="ENABLE_QUERY_EXPANSION")
+    min_question_chars_for_expansion: int = Field(default=25, alias="MIN_QUESTION_CHARS_FOR_EXPANSION")
+
+    # Generation
+    max_rag_attempts: int = Field(default=2, alias="MAX_RAG_ATTEMPTS")
+    retrieve_attempts: int = Field(default=2, alias="RETRIEVE_ATTEMPTS")
+    generate_attempts: int = Field(default=2, alias="GENERATE_ATTEMPTS")
+    verify_attempts: int = Field(default=2, alias="VERIFY_ATTEMPTS")
+    verify_max_chars: int = Field(default=6_000, alias="VERIFY_MAX_CHARS")
 
 
 

@@ -6,11 +6,13 @@ from .chain import build_rag_chain
 from .embeddings import build_ollama_embeddings
 from .settings import RagSettings
 from .vectorstore import build_qdrant, build_retriever
-from .singletons import get_rag_graph
+from .singletons import get_rag_graph, get_vectorstore
+from .retrieval import parallel_retrieve
 
 from .query_translations.query_expansion import expand_queries
 from .query_translations.rag_fusion import rrf_fuse
 from .query_translations.cross_encoder import cross_encoder_rerank
+from .query_translations.plan import plan_queries
 
 
 @traceable(name="rag_answer", tags=["rag", "query-expansion", "rrf-fusion", "cross-encoder-rerank"])
@@ -19,24 +21,29 @@ def answer(question: str, settings: RagSettings) -> str:
     embeddings = build_ollama_embeddings(settings.embedding_model) # Embedding model
 
     # initialize the vector database
-    vs = build_qdrant(settings=settings, embedding_fn=embeddings)
+    vs = get_vectorstore(settings)
+    retriever = vs.as_retriever(search_kwargs={"k": settings.k_per_query})
 
     # base_retriever = build_retriever(vs, settings.k) # fetch documents
 
-    # 1) multi-query expansion
-    queries = expand_queries(
-        question, 
-        chat_model=settings.query_model, 
-        n=settings.n_query_expansions
+    # 1) multi-query expansion if enabled, otherwise just the user query is returned
+    plan = plan_queries(
+        question,
+        chat_model=settings.query_model,
+        n=settings.n_query_expansions,
+        enabled=getattr(settings, "enable_query_expansion", True),
+        min_question_chars=getattr(settings, "min_question_chars_for_expansion", 25),
     )
+
+    queries = plan.queries
     
 
-    # 2) retrieve for each query (smaller k each)
-    retriever = vs.as_retriever(search_kwargs={"k": settings.k_per_query})
-    results_by_query: list[list[Document]] = []
-    
-    for q in queries:
-        results_by_query.append(retriever.invoke(q))
+    # 2) PARALLEL retrieval
+    results_by_query = parallel_retrieve(
+        retriever=retriever,
+        queries=queries,
+        max_workers=8,
+    )
 
 
     # 3) RAG-Fusion: fuse ranked lists across queries (RRF)

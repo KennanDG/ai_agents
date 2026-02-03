@@ -4,24 +4,67 @@ from ai_agents.config.settings import settings
 
 
 class RagSettings(BaseModel):
+    """Settings for the LangGraph RAG pipeline.
 
-    # Inherit from global settings
-    ollama_host: str = settings.ollama_host
-    ollama_url: str = settings.ollama_url
-    qdrant_url: str = settings.qdrant_url
-    embedding_model: str = settings.embedding_model
-    chat_model: str = settings.chat_model
-    query_model: str = settings.query_model
-    rerank_model: str = settings.rerank_model
-    rerank_device: str = settings.rerank_device
-    caption_model: str = settings.caption_model
-    k: int = settings.k
-    candidate_k: int = settings.candidate_k
-    k_per_query: int = settings.k_per_query
-    rrf_k: int = settings.rrf_k
-    n_query_expansions: int = settings.n_query_expansions
+    This wrapper exists so the LangGraph workflow can rely on a single typed
+    settings object, while still inheriting defaults from the global
+    ai_agents.config.settings.settings.
 
-    # RAG-specific behavior
+    Use getattr(...) when pulling from the global settings so older configs
+    don't crash on missing fields.
+    """
+
+
+    # -------------------------
+    # Infrastructure defaults
+    # -------------------------
+    ollama_host: str = getattr(settings, "ollama_host", "http://localhost:11434")
+    ollama_url: str = getattr(settings, "ollama_url", getattr(settings, "ollama_host", "http://localhost:11434"))
+    qdrant_url: str = getattr(settings, "qdrant_url", "http://localhost:6333")
+
+    # -------------------------
+    # Model selection
+    # -------------------------
+    embedding_model: str = getattr(settings, "embedding_model", "nomic-embed-text")
+    chat_model: str = getattr(settings, "chat_model", "llama3.1:8b")
+    query_model: str = getattr(settings, "query_model", getattr(settings, "chat_model", "llama3.1:8b"))
+    rerank_model: str = getattr(settings, "rerank_model", "BAAI/bge-reranker-base")
+    rerank_device: str = getattr(settings, "rerank_device", "cpu")
+    verify_model: str = getattr(settings, "verify_model", getattr(settings, "chat_model", "llama3.1:8b"))
+
+    # -------------------------
+    # Retrieval configuration
+    # -------------------------
+    k: int = int(getattr(settings, "k", 8))
+    candidate_k: int = int(getattr(settings, "candidate_k", 100))
+    k_per_query: int = int(getattr(settings, "k_per_query", 10))
+    rrf_k: int = int(getattr(settings, "rrf_k", 60))
+
+    # Query expansion
+    enable_query_expansion: bool = bool(getattr(settings, "enable_query_expansion", True))
+    n_query_expansions: int = int(getattr(settings, "n_query_expansions", 2))
+    min_question_chars_for_expansion: int = int(getattr(settings, "min_question_chars_for_expansion", 25))
+
+    # -------------------------
+    # Retry & safety controls
+    # -------------------------
+    retrieve_attempts: int = int(getattr(settings, "retrieve_attempts", 2))
+    generate_attempts: int = int(getattr(settings, "generate_attempts", 2))
+    verify_attempts: int = int(getattr(settings, "verify_attempts", 2))
+
+    # max number of verification failures allowed before we stop retrying
+    max_rag_attempts: int = int(getattr(settings, "max_rag_attempts", 2))
+
+
+    # -------------------------
+    # Verification prompt context shaping
+    # -------------------------
+    verify_max_chars: int = int(getattr(settings, "verify_max_chars", 6000))
+
+
+    # -------------------------
+    # Chunking
+    # -------------------------
     chunk_size: int = 500
     chunk_overlap: int = 50
     collection_name: str = "rag-default"
