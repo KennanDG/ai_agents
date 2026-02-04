@@ -106,6 +106,10 @@ def pdf_to_derived_md(
     content_hash = _sha256_file(pdf_path)
     out_md = _derive_md_path(derived_pdf_md_dir, path_rel, content_hash)
 
+    # Skip conversion process if derived artifact already exists
+    if out_md.exists() and out_md.stat().st_size > 0:
+        return out_md
+
     # 1) extract
     res = pdf_to_markdown(PdfToMarkdownRequest(pdf_path=pdf_path, output_md_path=None))
     md = res.markdown
@@ -208,6 +212,10 @@ def image_to_derived_md(
     """
     content_hash = _sha256_file(image_path)
     out_md = _derive_md_path(derived_img_md_dir, path_rel, content_hash)
+
+    # Skip conversion process if derived artifact already exists
+    if out_md.exists() and out_md.stat().st_size > 0:
+        return out_md
 
     ocr_text = ocr_image_text(image_path)
     

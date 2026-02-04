@@ -14,7 +14,7 @@ from .vectorstore import build_qdrant, delete_source, upsert_documents
 from ai_agents.db.session import SessionLocal
 from ai_agents.rag.repo import upsert_source, replace_chunks
 from sqlalchemy import select
-from ai_agents.db.models import RagChunk
+from ai_agents.db.models import RagSource 
 import uuid
 from ai_agents.config.constants import QDRANT_ID_NAMESPACE
 
@@ -48,35 +48,67 @@ def _make_point_id(source_uri: str, content_hash: str, chunk_index: int, chunk_h
 
 @traceable
 def ingest_files(paths: Iterable[str | Path], settings: RagSettings) -> int:
+
     # 0) Expand directory/glob inputs
     input_paths = expand_inputs(paths)
     input_paths = [p for p in input_paths if p.suffix.lower() in {".md",".txt",".pdf",".png",".jpg",".jpeg",".webp"}]
 
     # 1) Split into text vs non-text
+    #TODO: refacotr this into a function that runs O(n) time complexity
     text_paths: list[Path] = [p for p in input_paths if is_text(p)]
     pdf_paths: list[Path] = [p for p in input_paths if is_pdf(p)]
     img_paths: list[Path] = [p for p in input_paths if is_image(p)]
 
     # 2) Preprocess non-text into derived markdown
-    # Directory layout you decided:
-    # data/corpus/... originals
-    # data/derived/... generated
     derived_root = Path("data/derived").resolve()
     pdf_md_dir = derived_root / "pdf_md"
     img_md_dir = derived_root / "images_md"
     ocr_pdf_dir = derived_root / "ocr_pdfs"
 
     derived_md_paths: list[Path] = []
+    candidate_hashes: dict[str, str] = {}
 
     # helper to compute repo-relative path and source_uri matching your loader convention
     def rel_and_source(p: Path) -> tuple[str, str]:
-        
         path_rel = _repo_relative(p)
         return path_rel, f"file:{path_rel}"
+    
+
+    for p in text_paths + pdf_paths + img_paths:
+        _, source_uri = rel_and_source(p)
+        candidate_hashes[source_uri] = _sha256_file(p)
+    
+
+    unchanged_sources: set[str] = set()
+
+    with SessionLocal() as db:
+        existing = db.scalars(
+            select(RagSource).where(RagSource.source_uri.in_(list(candidate_hashes.keys())))
+        ).all()
+
+        existing_by_uri = {rag_source.source_uri: rag_source for rag_source in existing}
+
+        for source_uri, content_hash in candidate_hashes.items():
+            src = existing_by_uri.get(source_uri)
+            if not src:
+                continue
+
+            if (
+                src.content_hash == content_hash
+                and src.collection_name == settings.collection_name
+                and src.namespace == settings.namespace
+                and src.chunk_size == settings.chunk_size
+                and src.chunk_overlap == settings.chunk_overlap
+            ):
+                unchanged_sources.add(source_uri)
 
 
     for path in pdf_paths:
         path_rel, source_uri = rel_and_source(path)
+
+        if source_uri in unchanged_sources:
+            continue
+
         derived_md_paths.append(
             pdf_to_derived_md(
                 path,
@@ -93,6 +125,10 @@ def ingest_files(paths: Iterable[str | Path], settings: RagSettings) -> int:
 
     for path in img_paths:
         path_rel, source_uri = rel_and_source(path)
+
+        if source_uri in unchanged_sources:
+            continue
+
         derived_md_paths.append(
             image_to_derived_md(
                 path,
@@ -106,9 +142,17 @@ def ingest_files(paths: Iterable[str | Path], settings: RagSettings) -> int:
     # 3) Load docs:
     # - text_paths are loaded normally
     # - derived_md_paths are loaded normally then we override their source_uri using frontmatter
+
+    changed_text_paths: list[Path] = []
+
+    for p in text_paths:
+        _, source_uri = rel_and_source(p)
+        if source_uri not in unchanged_sources:
+            changed_text_paths.append(p)
+
     docs = []
-    if text_paths:
-        docs.extend(load_text_files(text_paths))
+    if changed_text_paths:
+        docs.extend(load_text_files(changed_text_paths))
 
     if derived_md_paths:
         derived_docs = load_text_files(derived_md_paths)
@@ -131,9 +175,10 @@ def ingest_files(paths: Iterable[str | Path], settings: RagSettings) -> int:
 
         docs.extend(derived_docs)
     
-    # paths = [Path(p) for p in paths]
-
-    # docs = load_text_files(paths)
+    if not docs:
+        return 0
+    
+    
     splits = split_docs(docs, settings.chunk_size, settings.chunk_overlap)
 
     embeddings = build_ollama_embeddings(settings.embedding_model)
@@ -226,95 +271,3 @@ def ingest_files(paths: Iterable[str | Path], settings: RagSettings) -> int:
     return total
 
 
-
-
-
-
-# @traceable
-# def ingest_files(paths: Iterable[str | Path], settings: RagSettings) -> int:
-
-#     paths = [Path(p) for p in paths] # Ensures parameter is Path data type
-    
-#     # Split docs
-#     docs = load_text_files(paths)
-#     splits = split_docs(docs, settings.chunk_size, settings.chunk_overlap)
-
-#     # Embed
-#     embeddings = build_ollama_embeddings(settings.embedding_model)
-#     vs = build_qdrant(settings=settings, embedding_fn=embeddings)
-
-#     # Pre-compute file-level hashes (once per file)
-#     file_hashes: dict[str, str] = {}
-    
-#     for doc in docs:
-#         relative_path = doc.metadata["path_rel"]
-#         file_hashes[relative_path] = _sha256_file(Path(doc.metadata["path"]))
-
-    
-#     ids: list[str] = [] # attach metadata + build stable IDs
-
-#     chunk_counters: dict[str, int] = {} # chunk_index must be per source
-
-#     for doc in splits:
-#         relative_path = doc.metadata["path_rel"]
-#         source_uri = f"file:{relative_path}"
-
-#         chunk_index = chunk_counters.get(source_uri, 0)
-#         chunk_counters[source_uri] = chunk_index + 1
-
-#         content_hash = file_hashes[relative_path]
-#         chunk_hash = _sha256_text(doc.page_content)
-
-#         point_id = _make_point_id(
-#             source_uri=source_uri,
-#             content_hash=content_hash,
-#             chunk_index=chunk_index,
-#             chunk_hash=chunk_hash,
-#         )
-
-#         doc.metadata.update({
-#             "source_uri": source_uri,
-#             "content_hash": content_hash,
-#             "chunk_index": chunk_index,
-#             "chunk_hash": chunk_hash,
-#         })
-
-#         ids.append(point_id)
-
-#     # Delete existing vectors per source (true idempotency)
-#     for src in sorted(chunk_counters.keys()):
-#         delete_source(vs, src)
-    
-
-#     upsert_documents(vs, splits, ids)
-    
-#     return len(splits)
-
-
-#     # for i, doc in enumerate(splits):
-#     #     # assuming loaders set metadata["path"] already
-#     #     file_path = doc.metadata.get("path")
-#     #     source_uri = f"file:{file_path}" if file_path else "unknown"
-
-#     #     # compute full file hash if we can
-#     #     content_hash = _sha256_file(Path(file_path)) if file_path else _sha256_text(doc.page_content)
-
-#     #     chunk_hash = _sha256_text(doc.page_content)
-#     #     point_id = _make_point_id(source_uri, content_hash, i, chunk_hash)
-
-#     #     doc.metadata.update({
-#     #         "source_uri": source_uri,
-#     #         "content_hash": content_hash,
-#     #         "chunk_index": i,
-#     #         "chunk_hash": chunk_hash,
-#     #     })
-#     #     ids.append(point_id)
-
-#     # # easiest true-idempotent behavior: delete all existing points for each source_uri
-#     # # (dedupe sources)
-#     # for src in sorted({doc.metadata["source_uri"] for doc in splits if "source_uri" in doc.metadata}):
-#     #     delete_source(vs, src)
-
-#     # upsert_documents(vs, splits, ids)
-    
-#     # return len(splits)
