@@ -14,19 +14,26 @@ class Settings(BaseSettings):
     # Ollama
     ollama_host: str = Field(default="http://localhost:11434", alias="OLLAMA_HOST")
     ollama_url: str = Field(default="http://host.docker.internal:11434", alias="OLLAMA_URL")
-    chat_model: str = Field(default="llama3.1:8b", alias="CHAT_MODEL")                   # Main LLM
-    embedding_model: str = Field(default="nomic-embed-text", alias="EMBEDDING_MODEL")    # Doc embedding
-    query_model: str = Field(default="llama3.1:8b", alias="QUERY_MODEL")         # Query translation   "qwen2.5:3b-instruct"
-    caption_model: str = Field(default="moondream:1.8b", alias="CAPTION_MODEL")                # VLM
-    verify_model: str = chat_model
 
-    # Cross-encoder reranker (sentence-transformers)
-    rerank_model: str = Field(default="BAAI/bge-reranker-base", alias="RERANK_MODEL")
-    rerank_device: str = Field(default="cuda", alias="RERANK_DEVICE")
+
+    # Groq
+    chat_model: str = Field(default="llama-3.1-8b-instant", alias="CHAT_MODEL")                   # Main LLM
+    query_model: str = Field(default="llama-3.1-8b-instant", alias="QUERY_MODEL")         # Query translation   "qwen2.5:3b-instruct"
+    caption_model: str = Field(default="meta-llama/llama-4-scout-17b-16e-instruct", alias="CAPTION_MODEL")                # VLM
+    verify_model: str = Field(default="llama-3.1-8b-instant", alias="VERIFY_MODEL")
+    groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
+    groq_api_url: str | None = Field(default="https://api.groq.com/openai/v1", alias="GROQ_API_URL")
+    
 
     # Qdrant
     qdrant_url: str = Field(default="http://localhost:6333", alias="QDRANT_URL")
     qdrant_collection: str = Field(default="rag-default", alias="QDRANT_COLLECTION")
+
+    # FastEmbed
+    embedding_model: str = Field(default="nomic-ai/nomic-embed-text-v1.5", alias="EMBEDDING_MODEL")    # Doc embedding
+    rerank_model: str = Field(default="BAAI/bge-reranker-base", alias="RERANK_MODEL")
+    rerank_device: str = Field(default="cpu", alias="RERANK_DEVICE") 
+
 
     # DB
     database_url: str = Field(

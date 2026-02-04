@@ -1,12 +1,14 @@
 from __future__ import annotations
 from typing import List, Tuple
+import json
 
 from langchain_core.documents import Document
 from langchain_ollama import ChatOllama
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_groq import ChatGroq
 from langsmith import traceable
-import json
+
 from ai_agents.rag.prompts import RERANK_PROMPT
+from ai_agents.config.settings import settings
 
 
 def _format_passages(docs: List[Document], max_chars: int = 600) -> str:
@@ -26,12 +28,17 @@ def _format_passages(docs: List[Document], max_chars: int = 600) -> str:
 
 
 
+# ---- Deprecated ----
 @traceable
 def rerank_docs(question: str, docs: List[Document], chat_model: str, top_k: int) -> List[Document]:
     if not docs:
         return []
 
-    llm = ChatOllama(model=chat_model, temperature=0.0)
+    llm = ChatGroq(
+        model=chat_model,
+        api_key=settings.groq_api_key,
+        temperature=0.0,
+    )
 
     passages = _format_passages(docs)
 

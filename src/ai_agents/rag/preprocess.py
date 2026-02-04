@@ -10,10 +10,13 @@ import subprocess
 import base64
 import json
 import urllib.request
+import mimetypes
 
 
 from langchain_core.documents import Document
+from groq import Groq
 
+from ai_agents.config.settings import settings
 from ..tools.definitions.pdf_to_markdown import pdf_to_markdown, PdfToMarkdownRequest
 
 TEXT_EXTS = {".md", ".txt"}
@@ -165,10 +168,36 @@ def ocr_image_text(image_path: Path) -> str:
 
 def caption_image(image_path: Path, *, caption_model: str) -> str:
     """
-    Caption image doc using an LLM/VLM through Ollama API call
+    Generate a concise caption for an image using a Groq-hosted vision model
+    via the OpenAI-compatible API.
+
+    Args:
+        image_path: Path to the image file.
+        caption_model: Groq vision-capable model name (e.g. "meta-llama/llama-4-scout-17b-16e-instruct").
+
+    Returns:
+        Caption string.
     """
 
-    ollama_url = os.getenv("OLLAMA_HOST", "http://ollama:11434")
+    if not image_path.exists():
+        raise FileNotFoundError(f"Image not found: {image_path}")
+
+    if not settings.groq_api_key:
+        raise ValueError("Missing GROQ_API_KEY (settings.groq_api_key).")
+    
+    
+    # Guess MIME type (falls back to image/png if unknown)
+    mime_type, _ = mimetypes.guess_type(str(image_path))
+    if mime_type is None:
+        mime_type = "image/png"
+
+
+    api_key = settings.groq_api_key
+
+    img_b64 = base64.b64encode(image_path.read_bytes()).decode()
+    data_url = f"data:{mime_type};base64,{img_b64}"
+
+    client = Groq(api_key=api_key)
     
     prompt = (
         "Write a concise caption for this image for use in a RAG knowledge base. "
@@ -176,27 +205,29 @@ def caption_image(image_path: Path, *, caption_model: str) -> str:
         "Return 2-4 sentences. No fluff."
     )
 
-    img_b64 = base64.b64encode(image_path.read_bytes()).decode()
 
-    payload = {
-        "model": caption_model,
-        "prompt": prompt,
-        "images": [img_b64],
-        "stream": False,
-    }
-
-    req = urllib.request.Request(
-        f"{ollama_url}/api/generate",
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
+    res = client.chat.completions.create(
+        model=caption_model,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url", 
+                        "image_url": {
+                            "url": data_url
+                        }
+                    },
+                ],
+            }
+        ],
+        temperature=0.0,
     )
 
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        data = json.loads(resp.read().decode())
+    content = res.choices[0].message.content
 
-    # Ollama returns `response` for non-streaming generate
-    return (data.get("response") or "").strip()
+    return (content or "").strip()
 
 
 def image_to_derived_md(

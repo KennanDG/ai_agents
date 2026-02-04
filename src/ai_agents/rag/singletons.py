@@ -2,7 +2,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 from .settings import RagSettings
-from .embeddings import build_ollama_embeddings
+from .embeddings import build_ollama_embeddings, build_fastembed_embeddings
 from .vectorstore import build_qdrant
 from .chain import build_rag_chain
 
@@ -16,8 +16,8 @@ _RETRIEVER = None
 # ---------------------------
 
 @lru_cache(maxsize=1)
-def get_embeddings(model_name: str):
-    return build_ollama_embeddings(model_name)
+def get_embeddings(model_name: str, chunk_size: int):
+    return build_fastembed_embeddings(model_name, chunk_size)
 
 
 # ---------------------------
@@ -27,7 +27,7 @@ def get_embeddings(model_name: str):
 def get_vectorstore(settings: RagSettings):
     global _VECTORSTORE
     if _VECTORSTORE is None:
-        emb = build_ollama_embeddings(settings.embedding_model)
+        emb = build_fastembed_embeddings(settings.embedding_model, settings.chunk_size)
         _VECTORSTORE = build_qdrant(settings=settings, embedding_fn=emb)
     return _VECTORSTORE
 

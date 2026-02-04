@@ -21,16 +21,20 @@ class RagSettings(BaseModel):
     ollama_host: str = getattr(settings, "ollama_host", "http://localhost:11434")
     ollama_url: str = getattr(settings, "ollama_url", getattr(settings, "ollama_host", "http://localhost:11434"))
     qdrant_url: str = getattr(settings, "qdrant_url", "http://localhost:6333")
+    groq_api_key: str = getattr(settings, "groq_api_key", os.environ.get("GROQ_API_KEY"))
+    groq_api_url: str = getattr(settings, "groq_api_url", os.environ.get("GROQ_API_URL"))
 
     # -------------------------
     # Model selection
     # -------------------------
-    embedding_model: str = getattr(settings, "embedding_model", "nomic-embed-text")
-    chat_model: str = getattr(settings, "chat_model", "llama3.1:8b")
-    query_model: str = getattr(settings, "query_model", getattr(settings, "chat_model", "llama3.1:8b"))
+    embedding_model: str = getattr(settings, "embedding_model", "nomic-ai/nomic-embed-text-v1.5")
+    chat_model: str = getattr(settings, "chat_model", "llama-3.1-8b-instant")
+    query_model: str = getattr(settings, "query_model", getattr(settings, "chat_model", "llama-3.1-8b-instant"))
+    verify_model: str = getattr(settings, "verify_model", getattr(settings, "chat_model", "llama-3.1-8b-instant"))
+    caption_model: str = getattr(settings, "caption_model", "meta-llama/llama-4-scout-17b-16e-instruct")
     rerank_model: str = getattr(settings, "rerank_model", "BAAI/bge-reranker-base")
-    rerank_device: str = getattr(settings, "rerank_device", "cpu")
-    verify_model: str = getattr(settings, "verify_model", getattr(settings, "chat_model", "llama3.1:8b"))
+    rerank_device: str = getattr(settings, "rerank_device", "cpu") 
+    
 
     # -------------------------
     # Retrieval configuration
@@ -65,7 +69,7 @@ class RagSettings(BaseModel):
     # -------------------------
     # Chunking
     # -------------------------
-    chunk_size: int = 500
+    chunk_size: int = 512
     chunk_overlap: int = 50
     collection_name: str = "rag-default"
     namespace: str = "default"

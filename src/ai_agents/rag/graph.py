@@ -6,7 +6,7 @@ import json
 from langchain_core.documents import Document
 from langchain_core.runnables import RunnableLambda
 from langchain_core.output_parsers import JsonOutputParser
-from langchain_ollama import ChatOllama
+from langchain_groq import ChatGroq
 from langsmith import traceable
 from langgraph.graph import StateGraph, START, END
 
@@ -332,7 +332,14 @@ def verify_answer_node(state: RagGraphState) -> RagGraphState:
     grader_prompt = build_grader_prompt()
     
 
-    llm = ChatOllama(model=grader, format="json", temperature=0)
+    llm = ChatGroq(
+        model=grader,
+        api_key=settings.groq_api_key,
+        temperature=0.0
+    ).bind(
+        response_format={"type": "json_object"}
+    )
+
     chain = grader_prompt | llm | JsonOutputParser()
 
 
