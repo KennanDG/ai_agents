@@ -6,7 +6,7 @@ import hashlib
 from langsmith import traceable
 from langchain_core.documents import Document
 
-from .embeddings import build_ollama_embeddings
+from .embeddings import build_fastembed_embeddings
 from .loaders import load_text_files, _repo_relative
 from .settings import RagSettings
 from .splitter import split_docs
@@ -39,6 +39,55 @@ def _make_point_id(source_uri: str, content_hash: str, chunk_index: int, chunk_h
     raw = f"{source_uri}|{content_hash}|{chunk_index}|{chunk_hash}"
 
     return str(uuid.uuid5(QDRANT_ID_NAMESPACE, raw))
+
+
+
+def infer_domain_key_from_source_uri(source_uri: str) -> str:
+    """
+    Returns a domain key like:
+      - "engineering"
+      - "robotics"
+      - "cs"
+    based on the folder layout under data/corpus/.
+    """
+    # expected: "file:data/corpus/<domain>/..."
+    prefix = "file:data/corpus/"
+    if not source_uri.startswith(prefix):
+        return "default"
+
+    rel = source_uri[len(prefix):]  # "<domain>/..."
+    parts = rel.replace("\\", "/").split("/")
+    if not parts:
+        return "default"
+
+    top = parts[0].lower()
+
+    # # If top-level is "cs", also include the next folder if present (ai/aws/java)
+    # if top == "cs" and len(parts) >= 2:
+    #     return f"cs/{parts[1].lower()}"
+
+    return top
+
+
+
+def map_domain_to_collection(domain_key: str) -> str:
+    """
+    Map domain_key -> base collection name.
+
+    """
+    mapping = {
+        "cs": "rag-cs",
+        "cybersecurity": "rag-cybersecurity",
+        "engineering": "rag-engineering",
+        "robotics": "rag-robotics",
+        "research": "rag-research",
+        "notes": "rag-notes",
+        "personal": "rag-personal",
+        "other": "rag-other",
+        "default": "rag-default",
+    }
+
+    return mapping.get(domain_key, mapping["default"])
 
 
 
@@ -93,9 +142,11 @@ def ingest_files(paths: Iterable[str | Path], settings: RagSettings) -> int:
             if not src:
                 continue
 
+            expected_collection = map_domain_to_collection(infer_domain_key_from_source_uri(source_uri))
+
             if (
                 src.content_hash == content_hash
-                and src.collection_name == settings.collection_name
+                and src.collection_name == expected_collection
                 and src.namespace == settings.namespace
                 and src.chunk_size == settings.chunk_size
                 and src.chunk_overlap == settings.chunk_overlap
@@ -158,30 +209,36 @@ def ingest_files(paths: Iterable[str | Path], settings: RagSettings) -> int:
         derived_docs = load_text_files(derived_md_paths)
 
         # Override source_uri & original path so stable IDs remain tied to ORIGINAL source, not derived file
-        for d in derived_docs:
-            md_text = d.page_content
+        for doc in derived_docs:
+            md_text = doc.page_content
             override = parse_frontmatter_for_source_uri(md_text)
             orig_rel = parse_frontmatter_key(md_text, "original_rel")
 
             if override:
-                d.metadata["source_uri"] = override
+                doc.metadata["source_uri"] = override
             
             if orig_rel:
                 # store original absolute path for hashing
-                d.metadata["original_path"] = str((Path(__file__).resolve().parents[3] / orig_rel).resolve())
+                doc.metadata["original_path"] = str((Path(__file__).resolve().parents[3] / orig_rel).resolve())
 
             # optionally keep derived path info too:
-            d.metadata["derived_path"] = d.metadata.get("path")
+            doc.metadata["derived_path"] = doc.metadata.get("path")
 
         docs.extend(derived_docs)
     
     if not docs:
         return 0
     
-    
+    for doc in docs:
+        source_uri = doc.metadata["source_uri"]
+        domain_key = infer_domain_key_from_source_uri(source_uri)
+        doc.metadata["domain_key"] = domain_key
+        doc.metadata["target_collection"] = map_domain_to_collection(domain_key)
+                                                               
     splits = split_docs(docs, settings.chunk_size, settings.chunk_overlap)
 
-    embeddings = build_ollama_embeddings(settings.embedding_model)
+    embeddings = build_fastembed_embeddings(settings.embedding_model, settings.chunk_size)
+    
     vs = build_qdrant(settings=settings, embedding_fn=embeddings)
 
 
@@ -195,78 +252,84 @@ def ingest_files(paths: Iterable[str | Path], settings: RagSettings) -> int:
         file_hashes[source_uri] = _sha256_file(path_to_hash)
 
 
-    # Group splits by source_uri so chunk_index is per file
-    by_source: dict[str, list] = {}
+    # Group splits by collection THEN by source_uri so chunk_index is per file
+    by_collection_then_source: dict[str, dict[str, list[Document]]] = {}
 
     for doc in splits:
-        source_uri = doc.metadata["source_uri"]  # from loaders.py
-        by_source.setdefault(source_uri, []).append(doc)
+        collection = doc.metadata.get("target_collection", settings.collection_name)
+        source_uri = doc.metadata["source_uri"]
+
+        by_collection_then_source.setdefault(collection, {})
+        by_collection_then_source[collection].setdefault(source_uri, [])
+        by_collection_then_source[collection][source_uri].append(doc)
 
     
     total = 0
 
     with SessionLocal() as db:
-        for source_uri, chunk_docs in by_source.items():
-            content_hash = file_hashes[source_uri]
+        for collection_name, sources_map in by_collection_then_source.items():
 
-            # 1) Upsert source & check unchanged
-            src_row, unchanged = upsert_source(
-                db,
-                source_uri=source_uri,
-                content_hash=content_hash,
-                collection_name=settings.collection_name,
-                namespace=settings.namespace,
-                chunk_size=settings.chunk_size,
-                chunk_overlap=settings.chunk_overlap,
+            vs = build_qdrant(
+                settings=settings,
+                embedding_fn=embeddings,
+                collection_name_override=collection_name,
             )
 
+            for source_uri, chunk_docs in sources_map.items():
+                content_hash = file_hashes[source_uri]
 
-            # nothing changed, do not touch qdrant
-            if unchanged:
-                continue 
+                src_row, unchanged = upsert_source(
+                    db,
+                    source_uri=source_uri,
+                    content_hash=content_hash,
+                    collection_name=collection_name,   # IMPORTANT: store per-domain collection
+                    namespace=settings.namespace,
+                    chunk_size=settings.chunk_size,
+                    chunk_overlap=settings.chunk_overlap,
+                )
 
-            # 2) Build chunk rows (stable point ids)
-            chunks_payload: list[dict] = []
-            ids: list[str] = []
+                if unchanged:
+                    continue
 
-            for idx, doc in enumerate(chunk_docs):
-                chunk_hash = _sha256_text(doc.page_content)
-                point_id = _make_point_id(source_uri, content_hash, idx, chunk_hash)
+                # stable ids per file
+                chunks_payload: list[dict] = []
+                ids: list[str] = []
 
-                # metadata for qdrant payload
-                doc.metadata.update({
-                    "source_uri": source_uri,
-                    "content_hash": content_hash,
-                    "chunk_index": idx,
-                    "chunk_hash": chunk_hash,
-                    "pg_source_id": src_row.id,
-                })
+                for idx, doc in enumerate(chunk_docs):
+                    chunk_hash = _sha256_text(doc.page_content)
+                    point_id = _make_point_id(source_uri, content_hash, idx, chunk_hash)
 
-                chunks_payload.append({
-                    "chunk_index": idx,
-                    "chunk_hash": chunk_hash,
-                    "qdrant_point_id": point_id,
-                })
-                ids.append(point_id)
+                    doc.metadata.update({
+                        "source_uri": source_uri,
+                        "content_hash": content_hash,
+                        "chunk_index": idx,
+                        "chunk_hash": chunk_hash,
+                        "pg_source_id": src_row.id,
+                        "collection_name": collection_name,  
+                    })
 
-            # 3) Replace chunks in Postgres
-            chunk_rows = replace_chunks(db, source_id=src_row.id, chunks=chunks_payload)
+                    chunks_payload.append({
+                        "chunk_index": idx,
+                        "chunk_hash": chunk_hash,
+                        "qdrant_point_id": point_id,
+                    })
 
-            # attach pg_chunk_id for traceability/debugging
-            for doc, row in zip(chunk_docs, chunk_rows):
-                doc.metadata["pg_chunk_id"] = row.id
+                    ids.append(point_id)
 
-            # 4) Qdrant index update (index follows Postgres)
-            try:
-                delete_source(vs, source_uri)
-                upsert_documents(vs, chunk_docs, ids)
-                db.commit()
-                
-            except Exception:
-                db.rollback()
-                raise
+                chunk_rows = replace_chunks(db, source_id=src_row.id, chunks=chunks_payload)
 
-            total += len(chunk_docs)
+                for doc, row in zip(chunk_docs, chunk_rows):
+                    doc.metadata["pg_chunk_id"] = row.id
+
+                try:
+                    delete_source(vs, source_uri)
+                    upsert_documents(vs, chunk_docs, ids)
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                    raise
+
+                total += len(chunk_docs)
 
     return total
 

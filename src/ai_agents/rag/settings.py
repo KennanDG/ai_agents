@@ -18,8 +18,8 @@ class RagSettings(BaseModel):
     # -------------------------
     # Infrastructure defaults
     # -------------------------
-    ollama_host: str = getattr(settings, "ollama_host", "http://localhost:11434")
-    ollama_url: str = getattr(settings, "ollama_url", getattr(settings, "ollama_host", "http://localhost:11434"))
+    # ollama_host: str = getattr(settings, "ollama_host", "http://localhost:11434")
+    # ollama_url: str = getattr(settings, "ollama_url", getattr(settings, "ollama_host", "http://localhost:11434"))
     qdrant_url: str = getattr(settings, "qdrant_url", "http://localhost:6333")
     groq_api_key: str = getattr(settings, "groq_api_key", os.environ.get("GROQ_API_KEY"))
     groq_api_url: str = getattr(settings, "groq_api_url", os.environ.get("GROQ_API_URL"))

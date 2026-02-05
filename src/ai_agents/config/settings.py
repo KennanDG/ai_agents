@@ -12,8 +12,8 @@ class Settings(BaseSettings):
         )
 
     # Ollama
-    ollama_host: str = Field(default="http://localhost:11434", alias="OLLAMA_HOST")
-    ollama_url: str = Field(default="http://host.docker.internal:11434", alias="OLLAMA_URL")
+    # ollama_host: str = Field(default="http://localhost:11434", alias="OLLAMA_HOST")
+    # ollama_url: str = Field(default="http://host.docker.internal:11434", alias="OLLAMA_URL")
 
 
     # Groq

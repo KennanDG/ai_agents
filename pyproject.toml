@@ -14,7 +14,6 @@ dependencies = [
     "langchain-chroma>=1.1.0",
     "langchain-community>=0.4.1",
     "langchain-groq>=1.1.2",
-    "langchain-ollama>=1.0.1",
     "langchain-qdrant>=1.1.0",
     "ocrmypdf>=16.13.0",
     "openai>=2.16.0",
@@ -24,9 +23,7 @@ dependencies = [
     "pymupdf4llm>=0.2.7",
     "pytesseract>=0.3.13",
     "qdrant-client>=1.16.2",
-    "sentence-transformers>=5.2.0",
     "sqlalchemy>=2.0.45",
-    "torch>=2.9.1",
 ]
 
 [dependency-groups]

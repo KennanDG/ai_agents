@@ -2,7 +2,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 from .settings import RagSettings
-from .embeddings import build_ollama_embeddings, build_fastembed_embeddings
+from .embeddings import build_fastembed_embeddings
 from .vectorstore import build_qdrant
 from .chain import build_rag_chain
 

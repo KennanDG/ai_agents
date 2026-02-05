@@ -3,7 +3,7 @@ from langchain_core.documents import Document
 from langchain_core.runnables import RunnableLambda
 
 from .chain import build_rag_chain
-from .embeddings import build_ollama_embeddings
+from .embeddings import build_fastembed_embeddings
 from .settings import RagSettings
 from .vectorstore import build_qdrant, build_retriever
 from .singletons import get_rag_graph, get_vectorstore
@@ -15,10 +15,11 @@ from .query_translations.cross_encoder import cross_encoder_rerank
 from .query_translations.plan import plan_queries
 
 
+#TODO: Update to include multi-collection retrieval logic
 @traceable(name="rag_answer", tags=["rag", "query-expansion", "rrf-fusion", "cross-encoder-rerank"])
 def answer(question: str, settings: RagSettings) -> str:
     
-    embeddings = build_ollama_embeddings(settings.embedding_model) # Embedding model
+    embeddings = build_fastembed_embeddings(settings.embedding_model, settings.chunk_size) # Embedding model
 
     # initialize the vector database
     vs = get_vectorstore(settings)

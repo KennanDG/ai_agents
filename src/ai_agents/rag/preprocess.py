@@ -1,19 +1,15 @@
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import Iterable, Optional
 import hashlib
 import re
 import subprocess
 import base64
-import json
-import urllib.request
 import mimetypes
 
 
-from langchain_core.documents import Document
+from langsmith import traceable
 from groq import Groq
 
 from ai_agents.config.settings import settings
@@ -94,6 +90,7 @@ def _should_ocr_pdf(extracted_md: str, min_chars: int = 800) -> bool:
     return len(body.strip()) < min_chars
 
 
+@traceable
 def pdf_to_derived_md(
     pdf_path: Path,
     *,
@@ -144,6 +141,7 @@ def pdf_to_derived_md(
     return out_md
 
 
+@traceable
 def ocr_image_text(image_path: Path) -> str:
     """
     OCR for images (Tesseract).
@@ -166,6 +164,7 @@ def ocr_image_text(image_path: Path) -> str:
     return pytesseract.image_to_string(img)
 
 
+@traceable
 def caption_image(image_path: Path, *, caption_model: str) -> str:
     """
     Generate a concise caption for an image using a Groq-hosted vision model
@@ -230,6 +229,7 @@ def caption_image(image_path: Path, *, caption_model: str) -> str:
     return (content or "").strip()
 
 
+@traceable
 def image_to_derived_md(
     image_path: Path,
     *,
