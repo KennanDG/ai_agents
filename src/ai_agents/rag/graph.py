@@ -10,13 +10,15 @@ from langchain_groq import ChatGroq
 from langsmith import traceable
 from langgraph.graph import StateGraph, START, END
 
+from qdrant_client import QdrantClient
+
 from ai_agents.core.retry import retry
 
 from .settings import RagSettings
 from .chain import build_rag_chain
 from .singletons import get_vectorstore
-from .retrieval import parallel_retrieve
-from .prompts import build_grader_prompt
+from .retrieval import parallel_retrieve, dynamic_retrieve, available_base_collections
+from .prompts import build_grader_prompt, build_collection_router_prompt
 
 from .query_translations.rag_fusion import rrf_fuse
 from .query_translations.cross_encoder import cross_encoder_rerank
@@ -58,6 +60,12 @@ class RagGraphState(TypedDict, total=False):
     max_attempts: int
     verification_score: int       # 1 = Pass, 0 = Fail
     verification_reason: str
+    
+    # --- Collection Routing ---
+    selected_collection: str
+    attempted_collections: List[str]
+    preferred_collections: List[str]
+    collection_router_reason: Optional[str]
 
     # --- debugging / control ---
     error: Optional[str]
@@ -156,7 +164,136 @@ def expand_queries_node(state: RagGraphState) -> RagGraphState:
 
 
 # ==========================================
-# NODE 2: Retrieval (Fetch + Fuse + Rerank)
+# NODE 2: Collections Routing
+# ==========================================
+@traceable(name="lg_route_collections", tags=["langgraph", "rag", "collections"])
+def route_collections_node(state: RagGraphState) -> RagGraphState:
+    """
+    Infer the preferred Qdrant collections to search for retrieval using an LLM-based router.
+
+    Purpose:
+        This node dynamically determines which domain-specific vector collections should be
+        queried for a given question. Instead of relying on static heuristics or a single
+        default collection, it uses an LLM to infer intent and rank candidate collections
+        by likelihood of relevance.
+
+        The output of this node is consumed by the retrieval node, which performs robust
+        retrieval with retry and fallback logic across the inferred collection order.
+
+    High-level behavior:
+        1. Discover available base collections from Qdrant for the active namespace.
+        2. If only one (or zero) collections exist, short-circuit and select it directly.
+        3. Otherwise, invoke an LLM router with:
+            - the user question
+            - the list of available collections
+            - the default fallback collection
+            - the maximum number of allowed fallbacks
+        4. Sanitize and validate the LLM output:
+            - remove unknown collections
+            - ensure the default collection is included as a fallback
+            - guarantee at least one valid collection is returned
+        5. Return the ordered collection preferences along with a human-readable reason.
+
+    Design notes:
+        - This node is intentionally non-authoritative: downstream retrieval still applies
+          its own retry, thresholding, and fallback logic.
+        - The router LLM is run with temperature=0 to ensure deterministic routing decisions.
+        - Routing decisions are surfaced in the graph state for observability and debugging.
+
+    Inputs (from state):
+        - question (str):
+            The current user question (may be rewritten by earlier verification steps).
+        - settings (RagSettings):
+            Configuration containing Qdrant connection info, routing limits,
+            model selection, and API credentials.
+
+    Outputs (merged into state):
+        - preferred_collections (List[str]):
+            Ordered list of base collection names to try during retrieval
+            (most likely → least likely).
+        - collection_router_reason (str):
+            Short explanation produced by the router LLM describing its decision.
+
+    Failure & fallback behavior:
+        - If the router returns invalid or empty output, the node falls back to using
+          the default collection (if available) or the first discovered collection.
+        - If only one collection exists, no LLM call is made.
+
+    Side effects:
+        - Makes a lightweight LLM call for routing (no document retrieval).
+        - Emits LangSmith traces for routing decisions.
+    """
+    
+    question = state["question"]
+    settings = state["settings"]
+
+    # Discover available base collections
+    available = available_base_collections(qdrant_url=settings.qdrant_url, namespace=settings.namespace)
+
+    # If only one exists, just use it
+    if len(available) <= 1:
+        return {
+            "preferred_collections": available or [settings.preferred_collections],
+            "collection_router_reason": "Only one (or zero) collections available.",
+        }
+
+    router_prompt = build_collection_router_prompt()
+
+    prompt_input = {
+        "available": available,
+        "question": question,
+        "default_collection": settings.collection_name,
+        "max_fallbacks": settings.max_collection_fallbacks,
+    }
+
+    llm = ChatGroq(
+        model=settings.query_model,  
+        api_key=settings.groq_api_key,
+        temperature=0.0,
+    ).bind(response_format={"type": "json_object"})
+
+    parser = JsonOutputParser()
+
+    chain = router_prompt | llm | parser
+
+    def _invoke():
+        return chain.invoke(
+        {
+            "available": available,
+            "question": question,
+            "default_collection": settings.collection_name,
+            "max_fallbacks": settings.max_collection_fallbacks,
+        }
+    )
+
+    result = retry(
+        _invoke, 
+        attempts=int(getattr(settings, "retrieve_attempts", 2))
+    )
+
+    raw = result.get("preferred_collections", []) or []
+    reason = result.get("reason", "")
+
+    # sanitize + enforce constraints
+    ordered = [collection for collection in raw if collection in available]
+
+    if settings.collection_name in available and settings.collection_name not in ordered:
+        ordered.append(settings.collection_name)
+
+    if not ordered:
+        ordered = [settings.collection_name] if settings.collection_name in available else available[:1]
+
+    return {
+        "preferred_collections": ordered,
+        "collection_router_reason": reason,
+    }
+
+
+
+
+
+# ==========================================
+# NODE 3: Retrieval (Fetch + Fuse + Rerank)
 # ==========================================
 @traceable(name="lg_retrieve", tags=["langgraph", "rag", "retrieve"])
 def retrieve_node(state: RagGraphState) -> RagGraphState:
@@ -189,42 +326,51 @@ def retrieve_node(state: RagGraphState) -> RagGraphState:
     if not queries: 
         queries = [question]
 
-    # --- singleton objects ---
-    vs = get_vectorstore(settings)
-    retriever = vs.as_retriever(search_kwargs={"k": settings.k_per_query})
+    # # --- singleton objects ---
+    # vs = get_vectorstore(settings)
+    # retriever = vs.as_retriever(search_kwargs={"k": settings.k_per_query})
 
 
-    # 1) PARALLEL retrieval
-    results_by_query = retry(
-        lambda: parallel_retrieve(
-            retriever=retriever, 
-            queries=queries, 
-            max_workers=8
-        ),
-        attempts=getattr(settings, "retrieve_attempts", 2),
-    )
+    # # 1) PARALLEL retrieval
+    # results_by_query = retry(
+    #     lambda: parallel_retrieve(
+    #         retriever=retriever, 
+    #         queries=queries, 
+    #         max_workers=8
+    #     ),
+    #     attempts=getattr(settings, "retrieve_attempts", 2),
+    # )
 
-    # 2) RAG-Fusion (RRF)
-    fused_docs = retry(
-        lambda: rrf_fuse(
-            results_by_query=results_by_query, 
-            k=settings.candidate_k, 
-            rrf_k=settings.rrf_k
-        ),
-        attempts=getattr(settings, "retrieve_attempts", 2),
-    )
+    # # 2) RAG-Fusion (RRF)
+    # fused_docs = retry(
+    #     lambda: rrf_fuse(
+    #         results_by_query=results_by_query, 
+    #         k=settings.candidate_k, 
+    #         rrf_k=settings.rrf_k
+    #     ),
+    #     attempts=getattr(settings, "retrieve_attempts", 2),
+    # )
 
-    # 3) Cross-encoder rerank down to final k
-    final_docs = retry(
-        lambda: cross_encoder_rerank(
-            question=question,
-            docs=fused_docs,
-            model_name=settings.rerank_model,
-            top_k=settings.k,
-            max_chars=512,
-            device=settings.rerank_device,
-        ),
-        attempts=getattr(settings, "retrieve_attempts", 2),
+    # # 3) Cross-encoder rerank down to final k
+    # final_docs = retry(
+    #     lambda: cross_encoder_rerank(
+    #         question=question,
+    #         docs=fused_docs,
+    #         model_name=settings.rerank_model,
+    #         top_k=settings.k,
+    #         max_chars=512,
+    #         device=settings.rerank_device,
+    #     ),
+    #     attempts=getattr(settings, "retrieve_attempts", 2),
+    # )
+
+
+    # Dynamic collection routing + fallback retrieval
+    final_docs, selected_collection, attempted_collections = dynamic_retrieve(
+        question=question,
+        queries=queries,
+        settings=settings,
+        preferred_collections=state.get("preferred_collections"),
     )
 
     # Debug print (same as your current flow)
@@ -241,13 +387,15 @@ def retrieve_node(state: RagGraphState) -> RagGraphState:
     return {
         "queries": queries,
         "retrieved_docs": final_docs,
+        "selected_collection": selected_collection,
+        "attempted_collections": attempted_collections,
     }
 
 
 
 
 # ==========================================
-# NODE 3: Generation
+# NODE 4: Generation
 # ==========================================
 @traceable(name="lg_generate", tags=["langgraph", "rag", "generate"])
 def generate_node(state: RagGraphState) -> RagGraphState:
@@ -282,7 +430,7 @@ def generate_node(state: RagGraphState) -> RagGraphState:
 
 
 # ==========================================
-# NODE 4: Verification
+# NODE 5: Verification
 # ==========================================
 @traceable(name="lg_verify", tags=["langgraph", "verify"])
 def verify_answer_node(state: RagGraphState) -> RagGraphState:
@@ -383,7 +531,7 @@ def verify_answer_node(state: RagGraphState) -> RagGraphState:
 
 
 # ==========================================
-# NODE 5: Finalize (Optional)
+# NODE 6: Finalize (Optional)
 # ==========================================
 @traceable(name="lg_finalize", tags=["langgraph", "finalize"])
 def finalize_node(state: RagGraphState) -> RagGraphState:
@@ -418,6 +566,12 @@ def finalize_node(state: RagGraphState) -> RagGraphState:
                 "score": state.get("verification_score", 0),
                 "reason": state.get("verification_reason", ""),
             },
+            "retrieval": {
+                "preferred_collections": state.get("preferred_collections", []),
+                "router_reason": state.get("collection_router_reason"),
+                "selected_collection": state.get("selected_collection"),
+                "attempted_collections": state.get("attempted_collections", []),
+            },
             "attempt": int(state.get("attempt", 0)),
             "max_attempts": int(state.get("max_attempts", 0)),
             "error": state.get("error"),
@@ -433,7 +587,7 @@ def finalize_node(state: RagGraphState) -> RagGraphState:
 # CONDITIONAL EDGES
 # ==========================================
 
-def route_query_expansion(state: RagGraphState) -> Literal["expand_queries", "retrieve"]:
+def route_query_expansion(state: RagGraphState) -> Literal["expand_queries", "route_collections"]:
     """Route: decide whether to run the query expansion node.
 
     Notes:
@@ -442,7 +596,7 @@ def route_query_expansion(state: RagGraphState) -> Literal["expand_queries", "re
           whether expansion actually happens.
 
     Returns:
-        "expand_queries" if expansion is enabled, else "retrieve".
+        "expand_queries" if expansion is enabled, else "route_collections".
     """
 
     settings = state["settings"]
@@ -452,7 +606,7 @@ def route_query_expansion(state: RagGraphState) -> Literal["expand_queries", "re
         if len(state["question"]) >= getattr(settings, "min_question_chars_for_expansion", 25):
             return "expand_queries"
             
-    return "retrieve"
+    return "route_collections"
 
 
 
@@ -502,6 +656,7 @@ def build_rag_graph():
     # Add Nodes
     graph.add_node("init", init_state_node)
     graph.add_node("expand_queries", expand_queries_node)
+    graph.add_node("route_collections", route_collections_node)
     graph.add_node("retrieve", retrieve_node)
     graph.add_node("generate", generate_node)
     graph.add_node("verify", verify_answer_node)
@@ -515,12 +670,13 @@ def build_rag_graph():
         route_query_expansion,
         {
             "expand_queries": "expand_queries",
-            "retrieve": "retrieve"
+            "route_collections": "route_collections"
         }
     )
 
     # 2. Linear flow
-    graph.add_edge("expand_queries", "retrieve")
+    graph.add_edge("expand_queries", "route_collections")
+    graph.add_edge("route_collections", "retrieve")
     graph.add_edge("retrieve", "generate")
     graph.add_edge("generate", "verify")
 

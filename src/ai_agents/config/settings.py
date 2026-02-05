@@ -2,6 +2,7 @@ import os
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import List
 
 
 class Settings(BaseSettings):
@@ -46,9 +47,16 @@ class Settings(BaseSettings):
     candidate_k: int = Field(default=30, alias="CANDIDATE_K")   # docs kept after RRF before rerank
     k_per_query: int = Field(default=8, alias="K_PER_QUERY")    # docs retrieved per expanded query
     rrf_k: int = Field(default=60, alias="RRF_K")               # RRF constant
+    min_docs_for_success: int = Field(default=2, alias="MIN_DOCS_FOR_SUCCESS")
+    max_collection_fallbacks: int = Field(default=3, alias="MAX_COLLECTION_FALLBACKS")
+    retrieve_workers: int = Field(default=8, alias="RETRIEVE_WORKERS")
+    preferred_collections: List[str] = Field(default=["rag-engineering", "rag-robotics", "rag-cs"], alias="PREFERRED_COLLECTIONS")
+    
+    
     n_query_expansions: int = Field(default=2, alias="N_QUERY_EXPANSIONS")
     enable_query_expansion: bool = Field(default=True, alias="ENABLE_QUERY_EXPANSION")
     min_question_chars_for_expansion: int = Field(default=25, alias="MIN_QUESTION_CHARS_FOR_EXPANSION")
+
 
     # Generation
     max_rag_attempts: int = Field(default=2, alias="MAX_RAG_ATTEMPTS")

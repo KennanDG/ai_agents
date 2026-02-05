@@ -39,6 +39,32 @@ RERANK_PROMPT = ChatPromptTemplate.from_messages(
 
 
 
+COLLECTION_ROUTER_TEMPLATE = """
+You are a router for a RAG system. Choose the best Qdrant collections to search.
+
+Return JSON with:
+- preferred_collections: an ordered list of up to {max_fallbacks} collection base names
+- reason: short explanation
+
+Rules:
+- Only choose from the allowed list.
+- Always include "{default_collection}" somewhere in the list as a fallback.
+- Order from most likely to least likely.
+
+Allowed collections:
+{available}
+
+Question:
+{question}
+"""
+
+@traceable
+def build_collection_router_prompt() -> ChatPromptTemplate:
+    """Build the prompt used for collection routing."""
+    return ChatPromptTemplate.from_template(COLLECTION_ROUTER_TEMPLATE)
+
+
+
 
 # =========================
 # VERIFICATION PROMPTS

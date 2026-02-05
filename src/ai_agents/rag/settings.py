@@ -1,6 +1,7 @@
 import os
 from pydantic import BaseModel
 from ai_agents.config.settings import settings
+from typing import List
 
 
 class RagSettings(BaseModel):
@@ -43,6 +44,11 @@ class RagSettings(BaseModel):
     candidate_k: int = int(getattr(settings, "candidate_k", 100))
     k_per_query: int = int(getattr(settings, "k_per_query", 10))
     rrf_k: int = int(getattr(settings, "rrf_k", 60))
+    min_docs_for_success: int = int(getattr(settings, "min_docs_for_success", 2))
+    max_collection_fallbacks: int = int(getattr(settings, "max_collection_fallbacks", 3))
+    retrieve_workers: int = int(getattr(settings, "retrieve_workers", 8))
+    preferred_collections: List[str] = getattr(settings, "preferred_collections", ["rag-engineering", "rag-robotics", "rag-cs"])
+
 
     # Query expansion
     enable_query_expansion: bool = bool(getattr(settings, "enable_query_expansion", True))
