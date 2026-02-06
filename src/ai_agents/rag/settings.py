@@ -32,6 +32,7 @@ class RagSettings(BaseModel):
     chat_model: str = getattr(settings, "chat_model", "llama-3.1-8b-instant")
     query_model: str = getattr(settings, "query_model", getattr(settings, "chat_model", "llama-3.1-8b-instant"))
     verify_model: str = getattr(settings, "verify_model", getattr(settings, "chat_model", "llama-3.1-8b-instant"))
+    verify_docs_model: str = getattr(settings, "verify_docs_model", getattr(settings, "verify_model", "llama-3.1-8b-instant"))
     caption_model: str = getattr(settings, "caption_model", "meta-llama/llama-4-scout-17b-16e-instruct")
     rerank_model: str = getattr(settings, "rerank_model", "BAAI/bge-reranker-base")
     rerank_device: str = getattr(settings, "rerank_device", "cpu") 
@@ -48,6 +49,8 @@ class RagSettings(BaseModel):
     max_collection_fallbacks: int = int(getattr(settings, "max_collection_fallbacks", 3))
     retrieve_workers: int = int(getattr(settings, "retrieve_workers", 8))
     preferred_collections: List[str] = getattr(settings, "preferred_collections", ["rag-engineering", "rag-robotics", "rag-cs"])
+    enable_parallel_collection_retrieval: bool = bool(getattr(settings, "enable_parallel_collection_retrieval", True))
+    parallel_collection_workers: int = int(getattr(settings, "parallel_collection_workers", 3))
 
 
     # Query expansion
@@ -61,6 +64,7 @@ class RagSettings(BaseModel):
     retrieve_attempts: int = int(getattr(settings, "retrieve_attempts", 2))
     generate_attempts: int = int(getattr(settings, "generate_attempts", 2))
     verify_attempts: int = int(getattr(settings, "verify_attempts", 2))
+    verify_docs_attempts: int = int(getattr(settings, "verify_docs_attempts", 2))
 
     # max number of verification failures allowed before we stop retrying
     max_rag_attempts: int = int(getattr(settings, "max_rag_attempts", 2))
@@ -70,6 +74,7 @@ class RagSettings(BaseModel):
     # Verification prompt context shaping
     # -------------------------
     verify_max_chars: int = int(getattr(settings, "verify_max_chars", 6000))
+    verify_docs_max_chars: int = int(getattr(settings, "verify_docs_max_chars", 6000))
 
 
     # -------------------------

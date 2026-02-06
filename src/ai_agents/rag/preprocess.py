@@ -17,7 +17,7 @@ from ..tools.definitions.pdf_to_markdown import pdf_to_markdown, PdfToMarkdownRe
 
 TEXT_EXTS = {".md", ".txt"}
 PDF_EXTS = {".pdf"}
-IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+IMAGE_EXTS = {".png", ".jpg", ".jpeg"}
 
 DERIVED_SOURCE_URI_KEY = "rag_source_uri"  # stored inside derived md for override
 

@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     query_model: str = Field(default="llama-3.1-8b-instant", alias="QUERY_MODEL")         # Query translation   "qwen2.5:3b-instruct"
     caption_model: str = Field(default="meta-llama/llama-4-scout-17b-16e-instruct", alias="CAPTION_MODEL")                # VLM
     verify_model: str = Field(default="llama-3.1-8b-instant", alias="VERIFY_MODEL")
+    verify_docs_model: str = Field(default="llama-3.1-8b-instant", alias="VERIFY_DOCS_MODEL")
     groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
     groq_api_url: str | None = Field(default="https://api.groq.com/openai/v1", alias="GROQ_API_URL")
     
@@ -51,7 +52,8 @@ class Settings(BaseSettings):
     max_collection_fallbacks: int = Field(default=3, alias="MAX_COLLECTION_FALLBACKS")
     retrieve_workers: int = Field(default=8, alias="RETRIEVE_WORKERS")
     preferred_collections: List[str] = Field(default=["rag-engineering", "rag-robotics", "rag-cs"], alias="PREFERRED_COLLECTIONS")
-    
+    enable_parallel_collection_retrieval: bool = Field(default=True, alias="ENABLE_PARALLEL_COLLECTION_RETRIEVAL")
+    parallel_collection_workers: int = Field(default=3, alias="PARALLEL_COLLECTION_WORKERS")
     
     n_query_expansions: int = Field(default=2, alias="N_QUERY_EXPANSIONS")
     enable_query_expansion: bool = Field(default=True, alias="ENABLE_QUERY_EXPANSION")
@@ -64,6 +66,8 @@ class Settings(BaseSettings):
     generate_attempts: int = Field(default=2, alias="GENERATE_ATTEMPTS")
     verify_attempts: int = Field(default=2, alias="VERIFY_ATTEMPTS")
     verify_max_chars: int = Field(default=6_000, alias="VERIFY_MAX_CHARS")
+    verify_docs_attempts: int = Field(default=2, alias="VERIFY_DOCS_ATTEMPTS")
+    verify_docs_max_chars: int = Field(default=6_000, alias="VERIFY_DOCS_MAX_CHARS")
 
 
 

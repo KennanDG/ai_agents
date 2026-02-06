@@ -45,6 +45,117 @@ def parallel_retrieve(
 
 
 
+@traceable(name="retrieve_collection", tags=["rag", "retrieve", "single_collection"])
+def retrieve_collection(
+    *,
+    question: str,
+    queries: List[str],
+    settings: RagSettings,
+    base_collection: str,
+) -> List[Document]:
+    """Retrieve docs from a single base collection.
+
+    Pipeline:
+      1) parallel_retrieve over queries
+      2) rrf_fuse
+      3) cross_encoder_rerank -> top_k=settings.k
+    """
+    min_docs = int(getattr(settings, "min_docs_for_success", 2))
+
+    retriever = get_retriever(settings, collection_name_override=base_collection)
+
+    results_by_query = retry(
+        lambda: parallel_retrieve(
+            retriever=retriever,
+            queries=queries,
+            max_workers=int(getattr(settings, "retrieve_workers", 8)),
+        ),
+        attempts=int(getattr(settings, "retrieve_attempts", 2)),
+    )
+
+    # quick signal check (pre-fusion)
+    flat = [d for bucket in results_by_query for d in (bucket or [])]
+    if len(flat) < min_docs:
+        return []
+
+    fused_docs = retry(
+        lambda: rrf_fuse(
+            results_by_query=results_by_query,
+            k=settings.candidate_k,
+            rrf_k=settings.rrf_k,
+        ),
+        attempts=int(getattr(settings, "retrieve_attempts", 2)),
+    )
+
+    final_docs = retry(
+        lambda: cross_encoder_rerank(
+            question=question,
+            docs=fused_docs,
+            model_name=settings.rerank_model,
+            top_k=settings.k,
+            max_chars=512,
+            device=getattr(settings, "rerank_device", None),
+        ),
+        attempts=int(getattr(settings, "retrieve_attempts", 2)),
+    )
+
+    if len(final_docs) < min_docs:
+        return []
+
+    return final_docs
+
+
+
+@traceable(name="parallel_retrieve_collections", tags=["rag", "retrieve", "collections", "parallel"])
+def parallel_retrieve_collections(
+    *,
+    question: str,
+    queries: List[str],
+    settings: RagSettings,
+    collections: List[str],
+    max_workers: int = 3,
+) -> List[Tuple[str, List[Document]]]:
+    """Retrieve from multiple collections in parallel.
+
+    Returns list of (collection_name, docs). Order is completion-order.
+    Caller should re-order / select using the router order if desired.
+    """
+    if not collections:
+        return []
+
+    out: List[Tuple[str, List[Document]]] = []
+
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(collections))) as ex:
+        futures = {
+            ex.submit(
+                retrieve_collection,
+                question=question,
+                queries=queries,
+                settings=settings,
+                base_collection=c,
+            ): c
+            for c in collections
+        }
+
+        for future in as_completed(futures):
+            collection = futures[future]
+            
+            try:
+                docs = future.result()
+            except Exception:
+                docs = []
+
+            out.append((collection, docs))
+
+    return out
+
+
+
+
+
+
+
+
 
 # -----------------------------------------------------------------------------
 # Collection discovery + routing
@@ -103,34 +214,9 @@ def route_collections(
     if preferred:
         ordered = _keep_existing(preferred)
     else:
-        q = question.lower()
+        # Fallback heuristic if no router output provided
+        ordered = [default_collection] if default_collection in available else list(available)
 
-        # Adjust these to match *your* domains
-        #TODO: Add signals for other collections
-        engineering_signals = (
-            "kubernetes", "terraform", "aws", "docker",
-            "langgraph", "langchain", "qdrant",
-            "python", "react", "kotlin", "c++", "java",
-            "sql", "postgres", "api", "llm", "rag",
-        )
-        personal_signals = (
-            "trip", "vacation", "hotel", "flight",
-            "restaurant", "itinerary", "gift", "instagram",
-        )
-
-        ordered = []
-
-        if any(signal in q for signal in engineering_signals):
-            ordered.append("rag-engineering")
-
-        if any(signal in q for signal in personal_signals):
-            ordered.append("rag-personal")
-
-        ordered.append(default_collection)
-        ordered = _keep_existing(ordered)
-
-    if default_collection in available and default_collection not in ordered:
-        ordered.append(default_collection)
 
     if not ordered:
         ordered = sorted(available)
