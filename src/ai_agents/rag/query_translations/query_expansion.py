@@ -1,17 +1,22 @@
 from __future__ import annotations
 from typing import List
 
-from langchain_ollama import ChatOllama
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_groq import ChatGroq
 from langsmith import traceable
 import json
+
+from ai_agents.config.settings import settings
 from ai_agents.rag.prompts import QUERY_EXPANSION_PROMPT
 
 
 @traceable
 def expand_queries(question: str, chat_model: str, n: int = 5) -> List[str]:
     
-    llm = ChatOllama(model=chat_model, temperature=0.3)
+    llm = ChatGroq(
+        model=chat_model,
+        api_key=settings.groq_api_key,
+        temperature=0.3,
+    )
 
     msg = QUERY_EXPANSION_PROMPT.format_messages(
         question=question,

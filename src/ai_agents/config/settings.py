@@ -2,6 +2,7 @@ import os
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import List
 
 
 class Settings(BaseSettings):
@@ -12,21 +13,29 @@ class Settings(BaseSettings):
         )
 
     # Ollama
-    ollama_host: str = Field(default="http://localhost:11434", alias="OLLAMA_HOST")
-    ollama_url: str = Field(default="http://host.docker.internal:11434", alias="OLLAMA_URL")
-    chat_model: str = Field(default="llama3.1:8b", alias="CHAT_MODEL")                   # Main LLM
-    embedding_model: str = Field(default="nomic-embed-text", alias="EMBEDDING_MODEL")    # Doc embedding
-    query_model: str = Field(default="llama3.1:8b", alias="QUERY_MODEL")         # Query translation   "qwen2.5:3b-instruct"
-    caption_model: str = Field(default="moondream:1.8b", alias="CAPTION_MODEL")                # VLM
-    verify_model: str = chat_model
+    # ollama_host: str = Field(default="http://localhost:11434", alias="OLLAMA_HOST")
+    # ollama_url: str = Field(default="http://host.docker.internal:11434", alias="OLLAMA_URL")
 
-    # Cross-encoder reranker (sentence-transformers)
-    rerank_model: str = Field(default="BAAI/bge-reranker-base", alias="RERANK_MODEL")
-    rerank_device: str = Field(default="cuda", alias="RERANK_DEVICE")
+
+    # Groq
+    chat_model: str = Field(default="llama-3.1-8b-instant", alias="CHAT_MODEL")                   # Main LLM
+    query_model: str = Field(default="llama-3.1-8b-instant", alias="QUERY_MODEL")         # Query translation   "qwen2.5:3b-instruct"
+    caption_model: str = Field(default="meta-llama/llama-4-scout-17b-16e-instruct", alias="CAPTION_MODEL")                # VLM
+    verify_model: str = Field(default="llama-3.1-8b-instant", alias="VERIFY_MODEL")
+    verify_docs_model: str = Field(default="llama-3.1-8b-instant", alias="VERIFY_DOCS_MODEL")
+    groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
+    groq_api_url: str | None = Field(default="https://api.groq.com/openai/v1", alias="GROQ_API_URL")
+    
 
     # Qdrant
     qdrant_url: str = Field(default="http://localhost:6333", alias="QDRANT_URL")
     qdrant_collection: str = Field(default="rag-default", alias="QDRANT_COLLECTION")
+
+    # FastEmbed
+    embedding_model: str = Field(default="nomic-ai/nomic-embed-text-v1.5", alias="EMBEDDING_MODEL")    # Doc embedding
+    rerank_model: str = Field(default="BAAI/bge-reranker-base", alias="RERANK_MODEL")
+    rerank_device: str = Field(default="cpu", alias="RERANK_DEVICE") 
+
 
     # DB
     database_url: str = Field(
@@ -39,9 +48,17 @@ class Settings(BaseSettings):
     candidate_k: int = Field(default=30, alias="CANDIDATE_K")   # docs kept after RRF before rerank
     k_per_query: int = Field(default=8, alias="K_PER_QUERY")    # docs retrieved per expanded query
     rrf_k: int = Field(default=60, alias="RRF_K")               # RRF constant
+    min_docs_for_success: int = Field(default=2, alias="MIN_DOCS_FOR_SUCCESS")
+    max_collection_fallbacks: int = Field(default=3, alias="MAX_COLLECTION_FALLBACKS")
+    retrieve_workers: int = Field(default=8, alias="RETRIEVE_WORKERS")
+    preferred_collections: List[str] = Field(default=["rag-engineering", "rag-robotics", "rag-cs"], alias="PREFERRED_COLLECTIONS")
+    enable_parallel_collection_retrieval: bool = Field(default=True, alias="ENABLE_PARALLEL_COLLECTION_RETRIEVAL")
+    parallel_collection_workers: int = Field(default=3, alias="PARALLEL_COLLECTION_WORKERS")
+    
     n_query_expansions: int = Field(default=2, alias="N_QUERY_EXPANSIONS")
     enable_query_expansion: bool = Field(default=True, alias="ENABLE_QUERY_EXPANSION")
     min_question_chars_for_expansion: int = Field(default=25, alias="MIN_QUESTION_CHARS_FOR_EXPANSION")
+
 
     # Generation
     max_rag_attempts: int = Field(default=2, alias="MAX_RAG_ATTEMPTS")
@@ -49,6 +66,8 @@ class Settings(BaseSettings):
     generate_attempts: int = Field(default=2, alias="GENERATE_ATTEMPTS")
     verify_attempts: int = Field(default=2, alias="VERIFY_ATTEMPTS")
     verify_max_chars: int = Field(default=6_000, alias="VERIFY_MAX_CHARS")
+    verify_docs_attempts: int = Field(default=2, alias="VERIFY_DOCS_ATTEMPTS")
+    verify_docs_max_chars: int = Field(default=6_000, alias="VERIFY_DOCS_MAX_CHARS")
 
 
 

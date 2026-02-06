@@ -39,6 +39,57 @@ RERANK_PROMPT = ChatPromptTemplate.from_messages(
 
 
 
+COLLECTION_ROUTER_TEMPLATE = """You are a router for a RAG system. Choose the best Qdrant collections to search.
+
+Return JSON with:
+- preferred_collections: an ordered list of up to {max_fallbacks} collection base names
+- reason: short explanation
+
+Rules:
+- Only choose from the allowed list.
+- Always include "{default_collection}" as the last element in the list as a fallback.
+- Order from most likely to least likely.
+
+Allowed collections:
+{available}
+
+Question:
+{question}
+"""
+
+@traceable
+def build_collection_router_prompt() -> ChatPromptTemplate:
+    """Build the prompt used for collection routing."""
+    return ChatPromptTemplate.from_template(COLLECTION_ROUTER_TEMPLATE)
+
+
+
+DOCUMENTS_GRADER_TEMPLATE = """You are grading whether retrieved documents are good context to answer the question.
+
+Return ONLY valid JSON:
+{{
+  "score": 0 or 1,
+  "reason": "short explanation"
+}}
+
+Rules:
+- score=1 if the documents are clearly relevant and contain enough information to answer.
+- score=0 if documents are irrelevant, too thin, or totally mismatched to the question.
+
+Question:
+{question}
+
+Documents (snippets):
+{context}
+"""
+
+@traceable
+def build_docs_grader_prompt() -> ChatPromptTemplate:
+    """Build the prompt used for collection routing."""
+    return ChatPromptTemplate.from_template(DOCUMENTS_GRADER_TEMPLATE)
+
+
+
 
 # =========================
 # VERIFICATION PROMPTS
@@ -48,27 +99,34 @@ GRADER_TEMPLATE = """You are a strict verifier for a Retrieval-Augmented Generat
 
 Your job: decide if the ANSWER is acceptable given the CONTEXT.
 
-You must grade using these rules:
+Key idea:
+- FAIL only for MATERIAL problems (material hallucinations or not answering the question).
+- Do NOT fail for minor paraphrasing, reasonable high-level synthesis, or generic glue text.
 
-PASS (score=1) only if ALL are true:
-1) The answer is directly supported by the context (no hallucinations).
-2) The answer addresses the user's question.
-3) The context contains enough information to answer the question with real substance.
-   - The answer should include specific facts/details grounded in the context.
-   - If the context does not mention the key entities/requirements needed to answer, it is NOT sufficient.
+Definitions:
+- "Supported" means the claim is explicitly stated OR is a direct, minimal paraphrase of the context.
+- "Material hallucination" means the answer introduces specific facts, entities, steps, numbers, or mechanisms
+  that are not in the context AND they matter to the correctness of the answer.
+
+Scoring:
+PASS (score=1) if ALL are true:
+1) The answer addresses the user's question (even at a high level if the question is broad).
+2) The answer contains NO material hallucinations.
+3) Most of the substantive content is supported by the context.
 
 FAIL (score=0) if ANY are true:
-A) The answer includes claims not found in the context.
-B) The answer is irrelevant or does not actually answer the question.
-C) The answer indicates missing context or uncertainty due to missing context, e.g.:
-   - "There is no mention of ..."
-   - "Not provided in the context"
-   - "I don't have enough information"
-   - "Cannot be determined from the provided documents"
-   In these cases: the retrieval did not supply enough context, so FAIL.
+A) The answer contains a material hallucination.
+B) The answer is mostly irrelevant or does not answer the question.
+C) The answer is primarily "cannot be determined / not provided" with little to no grounded help.
 
-On FAIL (score=0), you must also produce a rewritten version of the ORIGINAL QUESTION
-to help the retrieval system fetch different documents on the next attempt.
+Notes:
+- If the context is somewhat thin but the answer is still grounded and helpful, you may PASS.
+  In that case, mention in the reason that retrieval could be improved, but do not fail.
+- Do not penalize the answer for minor framing language (e.g., "one approach is...") as long as it
+  does not introduce material new facts.
+
+On FAIL (score=0), also produce a rewritten version of the ORIGINAL_QUESTION to help retrieval.
+
 
 Rewriting rules:
 - Keep the user's intent the same.
@@ -113,10 +171,21 @@ def build_grader_prompt() -> ChatPromptTemplate:
 # GENERATION PROMPTS
 # =========================
 
-RAG_TEMPLATE = """Answer the question based ONLY on the following context:
+RAG_TEMPLATE = """You are an expert assistant capable of extracting precise information from documents.
+
+Your goal is to answer the user's question using ONLY the provided context snippets below.
+
+Guidelines:
+1. Grounding: Answer strictly based on the provided context. Do not use outside knowledge.
+2. Uncertainty: If the context does not contain enough information to answer the question fully, state what is missing or say "The provided context does not contain information about..."
+3. Tone: Be professional, direct, and concise. Avoid conversational filler; but maintain warm, friendly tone.
+4. Completeness: Address all parts of the user's question if supported by the context.
+
+Context:
 {context}
 
-Question: {question}
+Question:
+{question}
 """
 
 @traceable

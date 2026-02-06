@@ -1,6 +1,7 @@
 import os
 from pydantic import BaseModel
 from ai_agents.config.settings import settings
+from typing import List
 
 
 class RagSettings(BaseModel):
@@ -18,19 +19,24 @@ class RagSettings(BaseModel):
     # -------------------------
     # Infrastructure defaults
     # -------------------------
-    ollama_host: str = getattr(settings, "ollama_host", "http://localhost:11434")
-    ollama_url: str = getattr(settings, "ollama_url", getattr(settings, "ollama_host", "http://localhost:11434"))
+    # ollama_host: str = getattr(settings, "ollama_host", "http://localhost:11434")
+    # ollama_url: str = getattr(settings, "ollama_url", getattr(settings, "ollama_host", "http://localhost:11434"))
     qdrant_url: str = getattr(settings, "qdrant_url", "http://localhost:6333")
+    groq_api_key: str = getattr(settings, "groq_api_key", os.environ.get("GROQ_API_KEY"))
+    groq_api_url: str = getattr(settings, "groq_api_url", os.environ.get("GROQ_API_URL"))
 
     # -------------------------
     # Model selection
     # -------------------------
-    embedding_model: str = getattr(settings, "embedding_model", "nomic-embed-text")
-    chat_model: str = getattr(settings, "chat_model", "llama3.1:8b")
-    query_model: str = getattr(settings, "query_model", getattr(settings, "chat_model", "llama3.1:8b"))
+    embedding_model: str = getattr(settings, "embedding_model", "nomic-ai/nomic-embed-text-v1.5")
+    chat_model: str = getattr(settings, "chat_model", "llama-3.1-8b-instant")
+    query_model: str = getattr(settings, "query_model", getattr(settings, "chat_model", "llama-3.1-8b-instant"))
+    verify_model: str = getattr(settings, "verify_model", getattr(settings, "chat_model", "llama-3.1-8b-instant"))
+    verify_docs_model: str = getattr(settings, "verify_docs_model", getattr(settings, "verify_model", "llama-3.1-8b-instant"))
+    caption_model: str = getattr(settings, "caption_model", "meta-llama/llama-4-scout-17b-16e-instruct")
     rerank_model: str = getattr(settings, "rerank_model", "BAAI/bge-reranker-base")
-    rerank_device: str = getattr(settings, "rerank_device", "cpu")
-    verify_model: str = getattr(settings, "verify_model", getattr(settings, "chat_model", "llama3.1:8b"))
+    rerank_device: str = getattr(settings, "rerank_device", "cpu") 
+    
 
     # -------------------------
     # Retrieval configuration
@@ -39,6 +45,13 @@ class RagSettings(BaseModel):
     candidate_k: int = int(getattr(settings, "candidate_k", 100))
     k_per_query: int = int(getattr(settings, "k_per_query", 10))
     rrf_k: int = int(getattr(settings, "rrf_k", 60))
+    min_docs_for_success: int = int(getattr(settings, "min_docs_for_success", 2))
+    max_collection_fallbacks: int = int(getattr(settings, "max_collection_fallbacks", 3))
+    retrieve_workers: int = int(getattr(settings, "retrieve_workers", 8))
+    preferred_collections: List[str] = getattr(settings, "preferred_collections", ["rag-engineering", "rag-robotics", "rag-cs"])
+    enable_parallel_collection_retrieval: bool = bool(getattr(settings, "enable_parallel_collection_retrieval", True))
+    parallel_collection_workers: int = int(getattr(settings, "parallel_collection_workers", 3))
+
 
     # Query expansion
     enable_query_expansion: bool = bool(getattr(settings, "enable_query_expansion", True))
@@ -51,6 +64,7 @@ class RagSettings(BaseModel):
     retrieve_attempts: int = int(getattr(settings, "retrieve_attempts", 2))
     generate_attempts: int = int(getattr(settings, "generate_attempts", 2))
     verify_attempts: int = int(getattr(settings, "verify_attempts", 2))
+    verify_docs_attempts: int = int(getattr(settings, "verify_docs_attempts", 2))
 
     # max number of verification failures allowed before we stop retrying
     max_rag_attempts: int = int(getattr(settings, "max_rag_attempts", 2))
@@ -60,12 +74,13 @@ class RagSettings(BaseModel):
     # Verification prompt context shaping
     # -------------------------
     verify_max_chars: int = int(getattr(settings, "verify_max_chars", 6000))
+    verify_docs_max_chars: int = int(getattr(settings, "verify_docs_max_chars", 6000))
 
 
     # -------------------------
     # Chunking
     # -------------------------
-    chunk_size: int = 500
+    chunk_size: int = 512
     chunk_overlap: int = 50
     collection_name: str = "rag-default"
     namespace: str = "default"

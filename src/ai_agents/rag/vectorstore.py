@@ -16,14 +16,21 @@ NOMIC_EMBED_TEXT = 768
 MXBAI_EMBED_LARGE_V1 = 1024
 MISTRAL_EMBED = 1024
 
-def build_qdrant(settings: RagSettings, embedding_fn):
+def build_qdrant(
+    settings: RagSettings,
+    embedding_fn,
+    *,
+    collection_name_override: Optional[str] = None,
+):
 
     client = QdrantClient(url=settings.qdrant_url)
-    collection_name = f"{settings.collection_name}-{settings.namespace}"
+
+    base_collection = collection_name_override or settings.collection_name
+    collection_name = f"{base_collection}-{settings.namespace}"
 
     # Create collection if it doesn't exist
     if not client.collection_exists(collection_name):
-        # IMPORTANT: vector size must match your embedding model.
+        # IMPORTANT: vector size must match the embedding model.
         client.create_collection(
             collection_name=collection_name,
             vectors_config=VectorParams(

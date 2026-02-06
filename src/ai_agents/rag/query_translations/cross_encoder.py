@@ -3,14 +3,14 @@ from typing import List, Tuple
 
 from langchain_core.documents import Document
 from langsmith import traceable
-from sentence_transformers import CrossEncoder
+from fastembed.rerank.cross_encoder import TextCrossEncoder
 
-_MODEL_CACHE: dict[tuple[str, str], CrossEncoder] = {}
+_MODEL_CACHE: dict[tuple[str, str], TextCrossEncoder] = {}
 
-def _get_model(model_name: str, device: str) -> CrossEncoder:
+def _get_model(model_name: str, device: str) -> TextCrossEncoder:
     key = (model_name, device)
     if key not in _MODEL_CACHE:
-        _MODEL_CACHE[key] = CrossEncoder(model_name, device=device)
+        _MODEL_CACHE[key] = TextCrossEncoder(model_name=model_name)
     return _MODEL_CACHE[key]
 
 @traceable
@@ -20,21 +20,23 @@ def cross_encoder_rerank(
     model_name: str,
     top_k: int,
     max_chars: int = 512,
-    device: str = "cuda"
+    device: str = None # Not used currently, only used for sentencetransformers module
 ) -> List[Document]:
     """
-    Uses a CrossEncoder model to score the relevance of each document returned
-    By the RAG Fusion. 
+    Re-rank documents using FastEmbed's cross-encoder reranker.
 
-    Returns a list of docs orderd by highest score to lowest.
+    - `question` is the query text (original or rewritten).
+    - `docs` are candidate chunks after retrieval + RRF fusion.
+    - Returns docs sorted by relevance, top_k only.
+
     """
     if not docs:
         return []
 
     model = _get_model(model_name, device)
+    documents = [(d.page_content or "")[:max_chars] for d in docs]
 
-    pairs = [(question, (d.page_content or "")[:max_chars]) for d in docs]
-    scores = model.predict(pairs)  # higher score means the chunk is more relevant
+    scores = list(model.rerank(question, documents))  # higher score means the chunk is more relevant
 
     scored: List[Tuple[float, Document]] = list(zip(scores, docs))
     scored.sort(key=lambda x: x[0], reverse=True)

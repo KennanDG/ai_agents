@@ -1,24 +1,23 @@
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import Iterable, Optional
 import hashlib
 import re
 import subprocess
 import base64
-import json
-import urllib.request
+import mimetypes
 
 
-from langchain_core.documents import Document
+from langsmith import traceable
+from groq import Groq
 
+from ai_agents.config.settings import settings
 from ..tools.definitions.pdf_to_markdown import pdf_to_markdown, PdfToMarkdownRequest
 
 TEXT_EXTS = {".md", ".txt"}
 PDF_EXTS = {".pdf"}
-IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+IMAGE_EXTS = {".png", ".jpg", ".jpeg"}
 
 DERIVED_SOURCE_URI_KEY = "rag_source_uri"  # stored inside derived md for override
 
@@ -91,6 +90,7 @@ def _should_ocr_pdf(extracted_md: str, min_chars: int = 800) -> bool:
     return len(body.strip()) < min_chars
 
 
+@traceable
 def pdf_to_derived_md(
     pdf_path: Path,
     *,
@@ -105,6 +105,10 @@ def pdf_to_derived_md(
     """
     content_hash = _sha256_file(pdf_path)
     out_md = _derive_md_path(derived_pdf_md_dir, path_rel, content_hash)
+
+    # Skip conversion process if derived artifact already exists
+    if out_md.exists() and out_md.stat().st_size > 0:
+        return out_md
 
     # 1) extract
     res = pdf_to_markdown(PdfToMarkdownRequest(pdf_path=pdf_path, output_md_path=None))
@@ -137,6 +141,7 @@ def pdf_to_derived_md(
     return out_md
 
 
+@traceable
 def ocr_image_text(image_path: Path) -> str:
     """
     OCR for images (Tesseract).
@@ -159,12 +164,39 @@ def ocr_image_text(image_path: Path) -> str:
     return pytesseract.image_to_string(img)
 
 
+@traceable
 def caption_image(image_path: Path, *, caption_model: str) -> str:
     """
-    Caption image doc using an LLM/VLM through Ollama API call
+    Generate a concise caption for an image using a Groq-hosted vision model
+    via the OpenAI-compatible API.
+
+    Args:
+        image_path: Path to the image file.
+        caption_model: Groq vision-capable model name (e.g. "meta-llama/llama-4-scout-17b-16e-instruct").
+
+    Returns:
+        Caption string.
     """
 
-    ollama_url = os.getenv("OLLAMA_HOST", "http://ollama:11434")
+    if not image_path.exists():
+        raise FileNotFoundError(f"Image not found: {image_path}")
+
+    if not settings.groq_api_key:
+        raise ValueError("Missing GROQ_API_KEY (settings.groq_api_key).")
+    
+    
+    # Guess MIME type (falls back to image/png if unknown)
+    mime_type, _ = mimetypes.guess_type(str(image_path))
+    if mime_type is None:
+        mime_type = "image/png"
+
+
+    api_key = settings.groq_api_key
+
+    img_b64 = base64.b64encode(image_path.read_bytes()).decode()
+    data_url = f"data:{mime_type};base64,{img_b64}"
+
+    client = Groq(api_key=api_key)
     
     prompt = (
         "Write a concise caption for this image for use in a RAG knowledge base. "
@@ -172,29 +204,32 @@ def caption_image(image_path: Path, *, caption_model: str) -> str:
         "Return 2-4 sentences. No fluff."
     )
 
-    img_b64 = base64.b64encode(image_path.read_bytes()).decode()
 
-    payload = {
-        "model": caption_model,
-        "prompt": prompt,
-        "images": [img_b64],
-        "stream": False,
-    }
-
-    req = urllib.request.Request(
-        f"{ollama_url}/api/generate",
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
+    res = client.chat.completions.create(
+        model=caption_model,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url", 
+                        "image_url": {
+                            "url": data_url
+                        }
+                    },
+                ],
+            }
+        ],
+        temperature=0.0,
     )
 
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        data = json.loads(resp.read().decode())
+    content = res.choices[0].message.content
 
-    # Ollama returns `response` for non-streaming generate
-    return (data.get("response") or "").strip()
+    return (content or "").strip()
 
 
+@traceable
 def image_to_derived_md(
     image_path: Path,
     *,
@@ -208,6 +243,10 @@ def image_to_derived_md(
     """
     content_hash = _sha256_file(image_path)
     out_md = _derive_md_path(derived_img_md_dir, path_rel, content_hash)
+
+    # Skip conversion process if derived artifact already exists
+    if out_md.exists() and out_md.stat().st_size > 0:
+        return out_md
 
     ocr_text = ocr_image_text(image_path)
     

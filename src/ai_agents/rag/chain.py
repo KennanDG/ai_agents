@@ -1,16 +1,18 @@
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
-from langchain_ollama import ChatOllama
+from langchain_groq import ChatGroq
 from langsmith import traceable
 
+from ai_agents.config.settings import settings
 from .prompts import build_rag_prompt
 
 @traceable
 def build_rag_chain(retriever, chat_model: str):
-    llm = ChatOllama(
+    llm = ChatGroq(
         model=chat_model,
-        temperature=0.0
-        )
+        api_key=settings.groq_api_key,
+        temperature=0.0,
+    )
     prompt = build_rag_prompt()
 
     # Question -> Retrieve Context -> Prompt -> LLM -> String
