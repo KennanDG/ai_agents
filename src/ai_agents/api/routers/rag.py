@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List
+import json
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 
-from ai_agents.api.dependency import build_rag_settings, db_session
+from ai_agents.api.dependency import build_retrieval_settings, build_ingestion_settings, db_session
 from ai_agents.api.schemas import (
     IngestRequest,
     IngestResponse,
@@ -16,7 +17,8 @@ from ai_agents.api.schemas import (
 
 from ai_agents.rag.ingest import ingest_files
 from ai_agents.rag.query import answer_langgraph  
-from ai_agents.db.models import RagSource
+from ai_agents.db.models import RagSource, RagIngestJob
+from ai_agents.jobs.tasks import ingest_job
 from sqlalchemy import select
 
 
@@ -26,11 +28,13 @@ router = APIRouter(prefix="/v1/rag", tags=["rag"])
 @router.post("/query", response_model=RagQueryResponse)
 def rag_query(request: RagQueryRequest) -> RagQueryResponse:
     
-    settings = build_rag_settings(
+    settings = build_retrieval_settings(
+        k=request.k,
         namespace=request.namespace,
         collection_name=request.collection_name,
         preferred_collections=request.preferred_collections,
         enable_query_expansion=request.enable_query_expansion,
+        enable_parallel_collection_retrieval=request.enable_parallel_collection_retrieval
     )
 
     result = answer_langgraph(request.question, settings)
@@ -56,22 +60,51 @@ def rag_query(request: RagQueryRequest) -> RagQueryResponse:
 @router.post("/ingest", response_model=IngestResponse)
 def rag_ingest(request: IngestRequest, background: bool = Query(False)) -> IngestResponse:
     
-    settings = build_rag_settings(namespace=request.namespace)
+    settings = build_ingestion_settings(
+        namespace=request.namespace,
+        collection_name=request.collection_name
+    )
 
-    # If you want non-blocking ingestion, push it to background tasks.
-    # NOTE: BackgroundTasks still runs in-process. For real jobs, swap this to Celery/RQ/SQS.
     if background:
-        # We can’t return the chunk count in this mode without a job store.
-        # So return a “queued” response and add a job system later.
-        from fastapi import BackgroundTasks
+        # Enqueue Celery job
+        async_result = ingest_job.delay(
+            paths=request.paths,
+            namespace=settings.namespace,
+            collection_name=settings.collection_name,
+        )
+        job_id = async_result.id
 
-        tasks = BackgroundTasks()
-        tasks.add_task(ingest_files, request.paths, settings)
+        # Create/record a job row so clients can poll status
+        with db_session() as db:
+
+            db.add(
+                RagIngestJob(
+                    job_id=job_id,
+                    status="QUEUED",
+                    namespace=settings.namespace,
+                    collection_name=settings.collection_name,
+                    paths_json=json.dumps(request.paths),
+                    ingested_chunks=0,
+                    error=None,
+                )
+            )
+
+            db.commit()
+
         return IngestResponse(
             ingested_chunks=0,
-            meta={"queued": True, "paths": request.paths, "namespace": settings.namespace},
+            meta={
+                "queued": True,
+                "job_id": job_id,
+                "paths": request.paths,
+                "namespace": settings.namespace,
+                "collection_name": settings.collection_name,
+                "status_url": f"/v1/rag/ingest/jobs/{job_id}",
+            },
         )
 
+    
+    # in-sync path (dev only)
     try:
         count = ingest_files(request.paths, settings)
     except FileNotFoundError as e:
@@ -83,6 +116,32 @@ def rag_ingest(request: IngestRequest, background: bool = Query(False)) -> Inges
         ingested_chunks=count,
         meta={"paths": request.paths, "namespace": settings.namespace},
     )
+
+
+
+
+
+@router.get("/ingest/jobs/{job_id}")
+def ingest_job_status(job_id: str) -> dict:
+    
+    with db_session() as db:
+        row = db.query(RagIngestJob).filter(RagIngestJob.job_id == job_id).one_or_none()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="job not found")
+
+        return {
+            "job_id": row.job_id,
+            "status": row.status,
+            "namespace": row.namespace,
+            "collection_name": row.collection_name,
+            "ingested_chunks": row.ingested_chunks,
+            "error": row.error,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+        }
+
+
 
 
 
@@ -99,6 +158,7 @@ def list_sources(
 
         if namespace:
             stmt = stmt.where(RagSource.namespace == namespace)
+            
         if collection_name:
             stmt = stmt.where(RagSource.collection_name == collection_name)
 

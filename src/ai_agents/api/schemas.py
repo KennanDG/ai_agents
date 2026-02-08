@@ -12,10 +12,12 @@ class RagQueryRequest(BaseModel):
     question: str = Field(..., min_length=1)
     
     # Configuration overrides
+    k: Optional[int] = None
     namespace: Optional[str] = None
     collection_name: Optional[str] = None
     preferred_collections: Optional[List[str]] = None
     enable_query_expansion: Optional[bool] = None
+    enable_parallel_collection_retrieval: Optional[bool] = None
 
 
 class RagQueryResponse(BaseModel):
@@ -27,6 +29,7 @@ class IngestRequest(BaseModel):
     # Accept files/dirs/globs
     paths: List[str] = Field(..., min_length=1)
     namespace: Optional[str] = None
+    collection_name: Optional[str] = None
 
 
 class IngestResponse(BaseModel):

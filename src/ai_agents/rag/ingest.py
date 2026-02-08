@@ -3,6 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable
 import hashlib
+import uuid
+from dataclasses import dataclass
+
 from langsmith import traceable
 from langchain_core.documents import Document
 from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
@@ -16,7 +19,6 @@ from ai_agents.db.session import SessionLocal
 from ai_agents.rag.repo import upsert_source, replace_chunks
 from sqlalchemy import select
 from ai_agents.db.models import RagSource 
-import uuid
 from ai_agents.config.constants import QDRANT_ID_NAMESPACE
 
 from .preprocess import (
@@ -160,12 +162,22 @@ def _detect_unchanged_sources(
 
 
 
+
+@dataclass
+class IngestFailure:
+    stage: str          # "pdf_to_md" | "image_to_md" 
+    path: str
+    source_uri: str
+    error_type: str
+    message: str
+
+
 def _process_derived_files(
     pdf_paths: list[Path], 
     img_paths: list[Path], 
     unchanged_sources: set[str], 
     settings: RagSettings
-) -> list[Path]:
+) -> tuple[list[Path], list[IngestFailure]]:
     """
     Converts PDFs and Images to Markdown if they are not in the unchanged set.
     """
@@ -175,6 +187,7 @@ def _process_derived_files(
     ocr_pdf_dir = derived_root / "ocr_pdfs"
     
     derived_md_paths: list[Path] = []
+    failures: list[IngestFailure] = []
 
     # Process PDFs
     for path in pdf_paths:
@@ -182,15 +195,30 @@ def _process_derived_files(
         if source_uri in unchanged_sources:
             continue
             
-        derived_md_paths.append(
-            pdf_to_derived_md(
-                path,
+        try:
+            output = pdf_to_derived_md(
+                pdf_path=path,
                 source_uri=source_uri,
                 path_rel=path_rel,
                 derived_pdf_md_dir=pdf_md_dir,
                 ocr_pdf_dir=ocr_pdf_dir,
             )
-        )
+
+            derived_md_paths.append(output)
+
+        except Exception as e:
+            failures.append(
+                IngestFailure(
+                    stage="pdf_to_md",
+                    path=str(path),
+                    source_uri=source_uri,
+                    error_type=type(e).__name__,
+                    message=str(e),
+                )
+            )
+
+            # skip this file, continue ingest
+            continue
 
     # Process Images
     caption_model = getattr(settings, "caption_model", "meta-llama/llama-4-scout-17b-16e-instruct")
@@ -200,17 +228,33 @@ def _process_derived_files(
         if source_uri in unchanged_sources:
             continue
             
-        derived_md_paths.append(
-            image_to_derived_md(
-                path,
+        try:
+            out = image_to_derived_md(
+                image_path=path,
                 source_uri=source_uri,
                 path_rel=path_rel,
                 derived_img_md_dir=img_md_dir,
                 caption_model=caption_model,
             )
-        )
+
+            derived_md_paths.append(out)
+
+        except Exception as e:
+            failures.append(
+                IngestFailure(
+                    stage="image_to_md",
+                    path=str(path),
+                    source_uri=source_uri,
+                    error_type=type(e).__name__,
+                    message=str(e),
+                )
+            )
+
+            # skip this file, continue ingest
+            continue
+
         
-    return derived_md_paths
+    return derived_md_paths, failures
 
 
 
@@ -382,7 +426,10 @@ def ingest_files(paths: Iterable[str | Path], settings: RagSettings) -> int:
     unchanged_sources, _ = _detect_unchanged_sources(all_paths, settings)
     
     # 3. Process Derived Files (OCR/VLM)
-    derived_md_paths = _process_derived_files(pdf_paths, img_paths, unchanged_sources, settings)
+    derived_md_paths, failures = _process_derived_files(pdf_paths, img_paths, unchanged_sources, settings)
+
+    for f in failures:
+        print(f"[ingest] WARN stage={f.stage} source={f.source_uri} err={f.error_type}: {f.message}")
 
     # 4. Load Documents
     docs = _load_documents(text_paths, derived_md_paths, unchanged_sources)

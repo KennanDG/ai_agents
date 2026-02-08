@@ -1,4 +1,4 @@
-from sqlalchemy import String, Integer, DateTime, ForeignKey, UniqueConstraint, func
+from sqlalchemy import String, Integer, DateTime, ForeignKey, UniqueConstraint, func, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.orm import DeclarativeBase
 
@@ -41,3 +41,27 @@ class RagChunk(Base):
     updated_at: Mapped[str] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     source = relationship("RagSource", back_populates="chunks")
+
+
+
+
+class RagIngestJob(Base):
+    __tablename__ = "rag_ingest_jobs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[str] = mapped_column(String, unique=True, nullable=False)  # Celery task id
+
+    status: Mapped[str] = mapped_column(String, nullable=False)  # QUEUED|STARTED|SUCCEEDED|FAILED
+    namespace: Mapped[str] = mapped_column(String, nullable=False)
+    collection_name: Mapped[str] = mapped_column(String, nullable=False)
+
+    # store inputs for debugging/auditing
+    paths_json: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # outputs
+    ingested_chunks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[str] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[str] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+

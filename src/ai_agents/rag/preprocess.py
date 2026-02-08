@@ -92,8 +92,8 @@ def _should_ocr_pdf(extracted_md: str, min_chars: int = 800) -> bool:
 
 @traceable
 def pdf_to_derived_md(
-    pdf_path: Path,
     *,
+    pdf_path: Path,
     source_uri: str,
     path_rel: str,
     derived_pdf_md_dir: Path,
@@ -234,8 +234,8 @@ def caption_image(image_path: Path, *, caption_model: str) -> str:
 
 @traceable
 def image_to_derived_md(
-    image_path: Path,
     *,
+    image_path: Path,
     source_uri: str,
     path_rel: str,
     derived_img_md_dir: Path,
