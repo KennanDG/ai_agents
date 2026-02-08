@@ -211,7 +211,10 @@ def caption_image(image_path: Path, *, caption_model: str) -> str:
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": prompt},
+                    {
+                        "type": "text", 
+                        "text": prompt
+                    },
                     {
                         "type": "image_url", 
                         "image_url": {
@@ -253,7 +256,10 @@ def image_to_derived_md(
     try:
         cap = caption_image(image_path, caption_model=caption_model)
     except Exception as e:
-        raise RuntimeError(f"caption failed for image: {image_path}") from e
+        raise RuntimeError(
+            f"caption failed for image: {image_path} "
+            f"(caption_model={caption_model}, root={type(e).__name__}: {e})"
+        ) from e
 
     md = (
         "---\n"

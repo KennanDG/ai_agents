@@ -22,7 +22,9 @@ def main():
     print("k:", settings.k)
     print("embedding_model dimension", model_dimension)
     print()
+
     n = ingest_files(sys.argv[1:], settings)
+    
     print(f"Ingested {n} chunks into vectorstore")
     print()
     print()
