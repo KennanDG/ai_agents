@@ -20,6 +20,7 @@ resource "aws_lambda_function" "this" {
       RAW_BUCKET        = var.raw_bucket
       DERIVED_BUCKET    = var.derived_bucket
       GROQ_SECRET_ARN   = var.groq_secret_arn
+      QDRANT_SECRET_ARN = var.qdrant_secret_arn
       DB_SECRET_ARN     = var.db_secret_arn
     }
   }

@@ -13,20 +13,20 @@ resource "aws_db_subnet_group" "this" {
 }
 
 resource "aws_db_instance" "this" {
-  identifier             = "${var.name}-pg"
-  engine                 = "postgres"
-  engine_version         = "16.3"
-  instance_class         = "db.t4g.micro"
-  allocated_storage      = 20
-  storage_encrypted      = true
+  identifier        = "${var.name}-pg"
+  engine            = "postgres"
+  engine_version    = "16.3"
+  instance_class    = "db.t4g.micro"
+  allocated_storage = 20
+  storage_encrypted = true
 
   db_subnet_group_name   = aws_db_subnet_group.this.name
   vpc_security_group_ids = [var.db_sg_id]
   publicly_accessible    = false
 
-  username               = local.db.username
-  password               = local.db.password
-  db_name                = local.db.dbname
+  username = local.db.username
+  password = local.db.password
+  db_name  = local.db.dbname
 
-  skip_final_snapshot    = true
+  skip_final_snapshot = true
 }

@@ -7,6 +7,15 @@ resource "aws_secretsmanager_secret_version" "groq" {
   secret_string = jsonencode({ GROQ_API_KEY = var.groq_api_key })
 }
 
+resource "aws_secretsmanager_secret" "qdrant" {
+  name = "${var.name}/qdrant"
+}
+
+resource "aws_secretsmanager_secret_version" "qdrant" {
+  secret_id     = aws_secretsmanager_secret.qdrant.id
+  secret_string = jsonencode({ QDRANT_API_KEY = var.qdrant_api_key })
+}
+
 resource "aws_secretsmanager_secret" "db" {
   name = "${var.name}/db"
 }

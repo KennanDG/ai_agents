@@ -7,3 +7,11 @@ variable "derived_bucket_arn" { type = string }
 
 variable "groq_secret_arn" { type = string }
 variable "db_secret_arn" { type = string }
+
+variable "github_owner" { type = string }
+variable "github_repo" { type = string }
+
+variable "github_branch" {
+  type    = string
+  default = "main"
+}

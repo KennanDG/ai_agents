@@ -1,0 +1,13 @@
+FROM public.ecr.aws/lambda/python:3.11
+
+# Copy app
+WORKDIR ${LAMBDA_TASK_ROOT}
+COPY . .
+
+# Install deps (choose ONE approach: requirements.txt or uv export)
+RUN python -m pip install --upgrade pip \
+ && pip install -r requirements.txt
+
+# Important: set handler to your Mangum handler
+# Adjust module path to where your lambda_handler.py lives
+CMD ["lambda_handler.handler"]

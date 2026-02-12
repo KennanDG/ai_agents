@@ -2,7 +2,7 @@ module "api_gateway" {
   source = "../../modules/api_gateway"
   name   = var.project_name
 
-  lambda_invoke_arn  = module.lambda.lambda_invoke_arn
+  lambda_invoke_arn    = module.lambda.lambda_invoke_arn
   lambda_function_name = module.lambda.lambda_function_name
 }
 
@@ -15,7 +15,7 @@ module "db" {
   private_subnet_ids = module.network.private_subnet_ids
   db_sg_id           = module.network.db_sg_id
 
-  db_secret_arn      = module.secrets.db_secret_arn
+  db_secret_arn = module.secrets.db_secret_arn
 }
 
 
@@ -36,16 +36,16 @@ module "ecs" {
   task_role_arn      = module.iam.ecs_task_role_arn
   execution_role_arn = module.iam.ecs_execution_role_arn
 
-  worker_image_uri   = "${module.ecr.worker_repo_url}:${var.image_tag}"
+  worker_image_uri = "${module.ecr.worker_repo_url}:${var.image_tag}"
 
-  qdrant_url         = var.qdrant_url
-  ingest_queue_url   = module.sqs.ingest_queue_url
+  qdrant_url       = var.qdrant_url
+  ingest_queue_url = module.sqs.ingest_queue_url
 
-  raw_bucket         = module.s3.raw_bucket
-  derived_bucket     = module.s3.derived_bucket
+  raw_bucket     = module.s3.raw_bucket
+  derived_bucket = module.s3.derived_bucket
 
-  groq_secret_arn    = module.secrets.groq_secret_arn
-  db_secret_arn      = module.secrets.db_secret_arn
+  groq_secret_arn = module.secrets.groq_secret_arn
+  db_secret_arn   = module.secrets.db_secret_arn
 }
 
 
@@ -53,12 +53,16 @@ module "iam" {
   source = "../../modules/iam"
   name   = var.project_name
 
-  ingest_queue_arn = module.sqs.ingest_queue_arn
-  raw_bucket_arn   = module.s3.raw_bucket_arn
+  ingest_queue_arn   = module.sqs.ingest_queue_arn
+  raw_bucket_arn     = module.s3.raw_bucket_arn
   derived_bucket_arn = module.s3.derived_bucket_arn
 
   groq_secret_arn = module.secrets.groq_secret_arn
   db_secret_arn   = module.secrets.db_secret_arn
+
+  github_owner  = var.github_owner
+  github_repo   = var.github_repo
+  github_branch = var.github_branch
 }
 
 
@@ -69,18 +73,19 @@ module "lambda" {
   private_subnet_ids = module.network.private_subnet_ids
   lambda_sg_id       = module.network.lambda_sg_id
 
-  lambda_role_arn    = module.iam.lambda_role_arn
+  lambda_role_arn = module.iam.lambda_role_arn
 
-  image_uri          = "${module.ecr.api_repo_url}:${var.image_tag}"
+  image_uri = "${module.ecr.api_repo_url}:${var.image_tag}"
 
-  qdrant_url         = var.qdrant_url
-  ingest_queue_url   = module.sqs.ingest_queue_url
+  qdrant_url       = var.qdrant_url
+  ingest_queue_url = module.sqs.ingest_queue_url
 
-  raw_bucket         = module.s3.raw_bucket
-  derived_bucket     = module.s3.derived_bucket
+  raw_bucket     = module.s3.raw_bucket
+  derived_bucket = module.s3.derived_bucket
 
-  groq_secret_arn    = module.secrets.groq_secret_arn
-  db_secret_arn      = module.secrets.db_secret_arn
+  groq_secret_arn   = module.secrets.groq_secret_arn
+  qdrant_secret_arn = module.secrects.qdrant_secret_arn
+  db_secret_arn     = module.secrets.db_secret_arn
 }
 
 
@@ -102,7 +107,8 @@ module "secrets" {
   source = "../../modules/secrets"
   name   = var.project_name
 
-  groq_api_key = var.groq_api_key
+  groq_api_key   = var.groq_api_key
+  qdrant_api_key = var.qdrant_api_key
 
   db_username = var.db_username
   db_password = var.db_password

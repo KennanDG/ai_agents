@@ -4,9 +4,9 @@ data "aws_caller_identity" "this" {}
 data "aws_iam_policy_document" "lambda_assume" {
   statement {
     actions = ["sts:AssumeRole"]
-    principals { 
-        type = "Service" 
-        identifiers = ["lambda.amazonaws.com"] 
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
     }
   }
 }
@@ -18,17 +18,17 @@ resource "aws_iam_role" "lambda" {
 
 resource "aws_iam_role_policy_attachment" "lambda_basic" {
   role       = aws_iam_role.lambda.name
-  policy_arn  = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
 resource "aws_iam_role_policy_attachment" "lambda_vpc" {
-  role      = aws_iam_role.lambda.name
+  role       = aws_iam_role.lambda.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
 }
 
 data "aws_iam_policy_document" "lambda_inline" {
   statement {
-    actions = ["secretsmanager:GetSecretValue"]
+    actions   = ["secretsmanager:GetSecretValue"]
     resources = [var.groq_secret_arn, var.db_secret_arn]
   }
 
@@ -39,9 +39,9 @@ data "aws_iam_policy_document" "lambda_inline" {
 
   statement {
     actions = [
-        "s3:GetObject", 
-        "s3:PutObject", 
-        "s3:ListBucket"
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:ListBucket"
     ]
     resources = [
       var.raw_bucket_arn,
@@ -58,7 +58,7 @@ resource "aws_iam_policy" "lambda_app" {
 }
 
 resource "aws_iam_role_policy_attachment" "lambda_app" {
-  role      = aws_iam_role.lambda.name
+  role       = aws_iam_role.lambda.name
   policy_arn = aws_iam_policy.lambda_app.arn
 }
 
@@ -68,9 +68,9 @@ resource "aws_iam_role_policy_attachment" "lambda_app" {
 data "aws_iam_policy_document" "ecs_exec_assume" {
   statement {
     actions = ["sts:AssumeRole"]
-    principals { 
-        type = "Service" 
-        identifiers = ["ecs-tasks.amazonaws.com"] 
+    principals {
+      type        = "Service"
+      identifiers = ["ecs-tasks.amazonaws.com"]
     }
   }
 }
@@ -81,7 +81,7 @@ resource "aws_iam_role" "ecs_execution" {
 }
 
 resource "aws_iam_role_policy_attachment" "ecs_exec" {
-  role      = aws_iam_role.ecs_execution.name
+  role       = aws_iam_role.ecs_execution.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
@@ -95,8 +95,8 @@ data "aws_iam_policy_document" "ecs_task_inline" {
   statement {
     actions = ["secretsmanager:GetSecretValue"]
     resources = [
-        var.groq_secret_arn, 
-        var.db_secret_arn
+      var.groq_secret_arn,
+      var.db_secret_arn
     ]
   }
 
@@ -127,6 +127,6 @@ resource "aws_iam_policy" "ecs_task" {
 }
 
 resource "aws_iam_role_policy_attachment" "ecs_task_attach" {
-  role      = aws_iam_role.ecs_task.name
+  role       = aws_iam_role.ecs_task.name
   policy_arn = aws_iam_policy.ecs_task.arn
 }

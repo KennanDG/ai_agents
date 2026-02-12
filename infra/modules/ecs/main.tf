@@ -2,7 +2,7 @@ resource "aws_ecs_cluster" "this" {
   name = "${var.name}-cluster"
 }
 
-resource "aws_cloudwatch_log_group" "worker" {
+resource "aws_cloudwatch_log_group" "cloudwatch_worker" {
   name              = "/ecs/${var.name}-worker"
   retention_in_days = 14
 }
@@ -11,8 +11,8 @@ resource "aws_ecs_task_definition" "worker" {
   family                   = "${var.name}-worker"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 512
-  memory                   = 1024
+  cpu                      = 1024
+  memory                   = 2048
 
   execution_role_arn = var.execution_role_arn
   task_role_arn      = var.task_role_arn
