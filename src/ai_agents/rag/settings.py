@@ -58,7 +58,7 @@ class RagSettings(BaseModel):
     n_query_expansions: int = int(getattr(settings, "n_query_expansions", 2))
     min_question_chars_for_expansion: int = int(getattr(settings, "min_question_chars_for_expansion", 25))
 
-    # -------------------------
+    # ---------------------s----
     # Retry & safety controls
     # -------------------------
     retrieve_attempts: int = int(getattr(settings, "retrieve_attempts", 2))

@@ -1,0 +1,81 @@
+name: deploy
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "**/*.py"
+      - "Dockerfile*"
+      - "pyproject.toml"
+      - "requirements.txt"
+      - "infra/**"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_VAR_groq_api_key: ${{ secrets.GROQ_API_KEY }}
+      TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+      TF_VAR_qdrant_url: ${{ secrets.QDRANT_URL }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: us-east-1
+
+      - name: Terraform init (dev)
+        run: terraform -chdir=infra/envs/dev init
+
+      - name: Terraform apply (ensure infra exists)
+        run: terraform -chdir=infra/envs/dev apply -auto-approve
+
+      - name: Export Terraform outputs
+        run: |
+          terraform -chdir=infra/envs/dev output -json > tf_out.json
+          cat tf_out.json
+
+          echo "API_REPO=$(jq -r '.api_repo_url.value' tf_out.json)" >> $GITHUB_ENV
+          echo "WORKER_REPO=$(jq -r '.worker_repo_url.value' tf_out.json)" >> $GITHUB_ENV
+          echo "LAMBDA_NAME=$(jq -r '.lambda_function_name.value' tf_out.json)" >> $GITHUB_ENV
+          echo "ECS_CLUSTER=$(jq -r '.ecs_cluster_name.value' tf_out.json)" >> $GITHUB_ENV
+          echo "ECS_SERVICE=$(jq -r '.ecs_service_name.value' tf_out.json)" >> $GITHUB_ENV
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push images
+        run: |
+          TAG=${GITHUB_SHA::7}
+          echo "TAG=$TAG" >> $GITHUB_ENV
+
+          docker build -t "$API_REPO:$TAG" -f Dockerfile .
+          docker push "$API_REPO:$TAG"
+
+          docker build -t "$WORKER_REPO:$TAG" -f Dockerfile .
+          docker push "$WORKER_REPO:$TAG"
+
+      - name: Update Lambda to new image
+        run: |
+          aws lambda update-function-code \
+            --function-name "$LAMBDA_NAME" \
+            --image-uri "$API_REPO:$TAG"
+
+      - name: Force ECS deployment
+        run: |
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --force-new-deployment

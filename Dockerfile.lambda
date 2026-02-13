@@ -1,0 +1,26 @@
+FROM public.ecr.aws/lambda/python:3.11
+
+WORKDIR ${LAMBDA_TASK_ROOT}
+
+# 1) Dependency manifests first (cache-friendly)
+COPY pyproject.toml uv.lock ./
+
+# 2) Install a pinned uv (deterministic tooling)
+RUN python -m pip install --upgrade pip && pip install "uv==0.5.24"
+
+# 3) Export deterministic requirements from uv.lock (no re-resolve)
+RUN uv export \
+    --format requirements.txt \
+    --frozen \
+    --no-dev \
+    -o requirements.txt
+
+# 4) Install dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 5) Copy source code
+COPY src/ai_agents ${LAMBDA_TASK_ROOT}/ai_agents
+
+# 6) Lambda handler
+CMD ["ai_agents.api.lambda_handler.handler"]
+

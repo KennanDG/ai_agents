@@ -92,8 +92,8 @@ def _should_ocr_pdf(extracted_md: str, min_chars: int = 800) -> bool:
 
 @traceable
 def pdf_to_derived_md(
-    pdf_path: Path,
     *,
+    pdf_path: Path,
     source_uri: str,
     path_rel: str,
     derived_pdf_md_dir: Path,
@@ -211,7 +211,10 @@ def caption_image(image_path: Path, *, caption_model: str) -> str:
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": prompt},
+                    {
+                        "type": "text", 
+                        "text": prompt
+                    },
                     {
                         "type": "image_url", 
                         "image_url": {
@@ -231,8 +234,8 @@ def caption_image(image_path: Path, *, caption_model: str) -> str:
 
 @traceable
 def image_to_derived_md(
-    image_path: Path,
     *,
+    image_path: Path,
     source_uri: str,
     path_rel: str,
     derived_img_md_dir: Path,
@@ -253,7 +256,10 @@ def image_to_derived_md(
     try:
         cap = caption_image(image_path, caption_model=caption_model)
     except Exception as e:
-        raise RuntimeError(f"caption failed for image: {image_path}") from e
+        raise RuntimeError(
+            f"caption failed for image: {image_path} "
+            f"(caption_model={caption_model}, root={type(e).__name__}: {e})"
+        ) from e
 
     md = (
         "---\n"

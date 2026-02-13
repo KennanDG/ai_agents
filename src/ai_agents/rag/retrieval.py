@@ -132,9 +132,9 @@ def parallel_retrieve_collections(
                 question=question,
                 queries=queries,
                 settings=settings,
-                base_collection=c,
-            ): c
-            for c in collections
+                base_collection=collection,
+            ): collection
+            for collection in collections
         }
 
         for future in as_completed(futures):
