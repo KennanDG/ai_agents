@@ -84,7 +84,7 @@ module "lambda" {
   derived_bucket = module.s3.derived_bucket
 
   groq_secret_arn   = module.secrets.groq_secret_arn
-  qdrant_secret_arn = module.secrects.qdrant_secret_arn
+  qdrant_secret_arn = module.secrets.qdrant_secret_arn
   db_secret_arn     = module.secrets.db_secret_arn
 }
 

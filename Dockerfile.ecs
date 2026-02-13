@@ -1,0 +1,28 @@
+FROM python:3.11-slim
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+  tesseract-ocr \
+  ocrmypdf \
+  ghostscript \
+  poppler-utils \
+  && rm -rf /var/lib/apt/lists/*
+
+
+# Same as Lambda build only we add the worker dependency group
+COPY pyproject.toml uv.lock ./
+
+RUN python -m pip install --upgrade pip && pip install "uv==0.5.24"
+
+RUN uv export \
+    --format requirements.txt \
+    --frozen \
+    --no-dev \
+    --extra worker \
+    -o requirements.txt
+
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY src/ai_agents /app/ai_agents
+
+CMD ["celery", "-A", "ai_agents.jobs.celery", "worker", "--loglevel=INFO"]
