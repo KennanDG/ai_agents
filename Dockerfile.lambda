@@ -1,4 +1,4 @@
-FROM public.ecr.aws/lambda/python:3.11
+FROM public.ecr.aws/lambda/python:3.12
 
 WORKDIR ${LAMBDA_TASK_ROOT}
 
@@ -10,10 +10,14 @@ RUN python -m pip install --upgrade pip && pip install "uv==0.5.24"
 
 # 3) Export deterministic requirements from uv.lock (no re-resolve)
 RUN uv export \
-    --format requirements.txt \
+    --format requirements-txt \
     --frozen \
     --no-dev \
+    --no-install-project \
     -o requirements.txt
+
+
+ENV PIP_ONLY_BINARY=:all:
 
 # 4) Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt

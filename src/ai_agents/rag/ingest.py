@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import boto3
+from urllib.parse import urlparse
 from pathlib import Path
 from typing import Iterable
 import hashlib
@@ -15,6 +18,7 @@ from .loaders import load_text_files, _repo_relative
 from .settings import RagSettings
 from .splitter import split_docs
 from .vectorstore import build_qdrant, delete_source, upsert_documents
+from .dynamodb import upsert_source_if_changed
 from ai_agents.db.session import SessionLocal
 from ai_agents.rag.repo import upsert_source, replace_chunks
 from sqlalchemy import select
@@ -26,6 +30,61 @@ from .preprocess import (
     pdf_to_derived_md, image_to_derived_md,
     parse_frontmatter_for_source_uri, parse_frontmatter_key
 )
+
+# ---------------- s3 helper functions ----------------
+s3 = boto3.client("s3")
+
+RAW_BUCKET = os.environ.get("RAW_BUCKET", "")
+DERIVED_BUCKET = os.environ.get("DERIVED_BUCKET", "")
+
+def parse_s3_uri(uri: str) -> tuple[str, str]:
+    # s3://bucket/key
+    u = urlparse(uri)
+
+    if u.scheme != "s3":
+        raise ValueError(f"Not an s3 uri: {uri}")
+    
+    bucket = u.netloc
+    key = u.path.lstrip("/")
+
+    return bucket, key
+
+
+def list_s3_keys(bucket: str, prefix: str) -> list[str]:
+    keys = []
+    paginator = s3.get_paginator("list_objects_v2")
+
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []) or []:
+            keys.append(obj["Key"])
+
+    return keys
+
+
+def head_content_fingerprint(bucket: str, key: str) -> str:
+    res = s3.head_object(Bucket=bucket, Key=key)
+    etag = (res.get("ETag") or "").strip('"')
+    size = int(res.get("ContentLength") or 0)
+    version = res.get("VersionId")  
+    lm = res.get("LastModified")
+
+    # stable idempotency token:
+    return f"etag:{etag}|size:{size}|lm:{lm}|ver:{version or ''}"
+
+
+def download_to_tmp(bucket: str, key: str) -> str:
+    local_path = f"/tmp/{key.replace('/', '_')}"
+    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+    s3.download_file(bucket, key, local_path)
+
+    return local_path
+
+
+def upload_text(bucket: str, key: str, text: str) -> None:
+    s3.put_object(Bucket=bucket, Key=key, Body=text.encode("utf-8"), ContentType="text/markdown")
+
+
+
 
 
 # ---------------- Create IDs for document embeddings ----------------

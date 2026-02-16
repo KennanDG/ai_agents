@@ -76,7 +76,7 @@ module "lambda" {
 
   lambda_role_arn = module.iam.lambda_role_arn
 
-  image_uri = "${module.ecr.api_repo_url}:${var.image_tag}"
+  image_uri = "${module.ecr.api_repo_url}@sha256:db13900d6fa16e5088b22ddf15a2149b4e584516e1950d44d2f2e9f38c28af45" # :${var.image_tag}
 
   qdrant_url       = var.qdrant_url
   ingest_queue_url = module.sqs.ingest_queue_url
