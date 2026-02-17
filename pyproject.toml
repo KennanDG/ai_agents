@@ -6,9 +6,9 @@ readme = "README.md"
 requires-python = ">=3.10,<3.14"
 
 dependencies = [
-    "alembic>=1.17.2",
-    "boto3>=1.42.44",
     "celery[sqs]>=5.6.2",
+    "kombu>=5.6.2",
+    "boto3>=1.42.44",
     "fastapi>=0.128.2",
     "fastembed>=0.7.4",
     "langchain>=1.2.0",
@@ -17,18 +17,14 @@ dependencies = [
     "langchain-qdrant>=1.1.0",
     "mangum>=0.21.0",
     "openai>=2.16.0",
-    "psycopg[binary]>=3.3.2",
     "pydantic-settings>=2.12.0",
     "qdrant-client>=1.16.2",
-    "sqlalchemy>=2.0.45",
     "uvicorn>=0.40.0",
 ]
 
 
 [project.optional-dependencies]
 worker = [
-    "celery[sqs]>=5.6.2",
-    "kombu>=5.6.2",
     "ocrmypdf>=16.0",
     "pytesseract>=0.3.10",
     "pymupdf4llm>=0.2.7",
@@ -44,6 +40,9 @@ chroma = [
 
 [dependency-groups]
 dev = [
+    "alembic>=1.17.2",
+    "psycopg[binary]>=3.3.2",
+    "sqlalchemy>=2.0.45",
     "mypy>=1.19.1",
     "pytest>=9.0.2",
     "ruff>=0.14.10",

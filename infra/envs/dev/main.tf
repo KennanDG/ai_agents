@@ -43,7 +43,7 @@ module "ecs" {
   task_role_arn      = module.iam.ecs_task_role_arn
   execution_role_arn = module.iam.ecs_execution_role_arn
 
-  worker_image_uri = "${module.ecr.worker_repo_url}:${var.image_tag}"
+  worker_image_uri = "${module.ecr.worker_repo_url}@sha256:c54ec4763b0edd8b5ee6a763fc61e344e3b7e98ef9040028cab2da0664e32125"
 
   qdrant_url       = var.qdrant_url
   ingest_queue_url = module.sqs.ingest_queue_url
@@ -89,7 +89,7 @@ module "lambda" {
 
   lambda_role_arn = module.iam.lambda_role_arn
 
-  image_uri = "${module.ecr.api_repo_url}@sha256:db13900d6fa16e5088b22ddf15a2149b4e584516e1950d44d2f2e9f38c28af45" # :${var.image_tag}
+  image_uri = "${module.ecr.api_repo_url}@sha256:50f70f5fec953bb40380f983503a8cb57079366f1c66a0b0c07c5cfe13495576" # :${var.image_tag}
 
   qdrant_url       = var.qdrant_url
   ingest_queue_url = module.sqs.ingest_queue_url

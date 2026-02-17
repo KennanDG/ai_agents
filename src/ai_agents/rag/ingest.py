@@ -19,7 +19,7 @@ from .settings import RagSettings
 from .splitter import split_docs
 from .vectorstore import build_qdrant, delete_source, upsert_documents
 from .dynamodb import upsert_source_if_changed
-from ai_agents.db.session import SessionLocal
+# from ai_agents.db.session import SessionLocal
 from ai_agents.rag.repo import upsert_source, replace_chunks
 from sqlalchemy import select
 from ai_agents.db.models import RagSource 
@@ -206,46 +206,51 @@ def _categorize_paths(paths: Iterable[str | Path]) -> tuple[list[Path], list[Pat
 
 
 
-def _detect_unchanged_sources(
-    paths: list[Path], 
-    settings: RagSettings
-) -> tuple[set[str], dict[str, str]]:
-    """
-    Computes file hashes and checks the DB to identify sources that haven't changed.
-    Returns a set of unchanged source URIs and a dict of current candidate hashes.
-    """
-    candidate_hashes: dict[str, str] = {}
+
+#############################################
+################ Dev version ################
+#############################################
+
+# def _detect_unchanged_sources(
+#     paths: list[Path], 
+#     settings: RagSettings
+# ) -> tuple[set[str], dict[str, str]]:
+#     """
+#     Computes file hashes and checks the DB to identify sources that haven't changed.
+#     Returns a set of unchanged source URIs and a dict of current candidate hashes.
+#     """
+#     candidate_hashes: dict[str, str] = {}
     
-    for p in paths:
-        _, source_uri = _get_rel_and_source(p)
-        candidate_hashes[source_uri] = _sha256_file(p)
+#     for p in paths:
+#         _, source_uri = _get_rel_and_source(p)
+#         candidate_hashes[source_uri] = _sha256_file(p)
 
-    unchanged_sources: set[str] = set()
+#     unchanged_sources: set[str] = set()
 
-    with SessionLocal() as db:
-        existing = db.scalars(
-            select(RagSource).where(RagSource.source_uri.in_(list(candidate_hashes.keys())))
-        ).all()
+#     with SessionLocal() as db:
+#         existing = db.scalars(
+#             select(RagSource).where(RagSource.source_uri.in_(list(candidate_hashes.keys())))
+#         ).all()
         
-        existing_by_uri = {rag_source.source_uri: rag_source for rag_source in existing}
+#         existing_by_uri = {rag_source.source_uri: rag_source for rag_source in existing}
 
-        for source_uri, content_hash in candidate_hashes.items():
-            src = existing_by_uri.get(source_uri)
-            if not src:
-                continue
+#         for source_uri, content_hash in candidate_hashes.items():
+#             src = existing_by_uri.get(source_uri)
+#             if not src:
+#                 continue
 
-            expected_collection = map_domain_to_collection(infer_domain_key_from_source_uri(source_uri))
+#             expected_collection = map_domain_to_collection(infer_domain_key_from_source_uri(source_uri))
 
-            if (
-                src.content_hash == content_hash
-                and src.collection_name == expected_collection
-                and src.namespace == settings.namespace
-                and src.chunk_size == settings.chunk_size
-                and src.chunk_overlap == settings.chunk_overlap
-            ):
-                unchanged_sources.add(source_uri)
+#             if (
+#                 src.content_hash == content_hash
+#                 and src.collection_name == expected_collection
+#                 and src.namespace == settings.namespace
+#                 and src.chunk_size == settings.chunk_size
+#                 and src.chunk_overlap == settings.chunk_overlap
+#             ):
+#                 unchanged_sources.add(source_uri)
                 
-    return unchanged_sources, candidate_hashes
+#     return unchanged_sources, candidate_hashes
 
 
 

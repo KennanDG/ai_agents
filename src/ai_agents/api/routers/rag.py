@@ -5,7 +5,7 @@ import json
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 
-from ai_agents.api.dependency import build_retrieval_settings, build_ingestion_settings, db_session
+from ai_agents.api.dependency import build_retrieval_settings, build_ingestion_settings
 from ai_agents.api.schemas import (
     IngestRequest,
     IngestResponse,

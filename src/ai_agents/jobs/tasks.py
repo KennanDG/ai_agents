@@ -8,7 +8,7 @@ from celery.utils.log import get_task_logger
 from ai_agents.jobs.celery import celery_app
 from ai_agents.rag.ingest import ingest_files
 from ai_agents.rag.dynamodb import update_job
-from ai_agents.api.dependency import db_session, build_ingestion_settings
+from ai_agents.api.dependency import build_ingestion_settings
 from ai_agents.db.models import RagIngestJob
 
 logger = get_task_logger(__name__)

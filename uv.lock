@@ -13,21 +13,19 @@ name = "ai-agents"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "alembic" },
     { name = "boto3" },
     { name = "celery", extra = ["sqs"] },
     { name = "fastapi" },
     { name = "fastembed" },
+    { name = "kombu" },
     { name = "langchain" },
     { name = "langchain-community" },
     { name = "langchain-groq" },
     { name = "langchain-qdrant" },
     { name = "mangum" },
     { name = "openai" },
-    { name = "psycopg", extra = ["binary"] },
     { name = "pydantic-settings" },
     { name = "qdrant-client" },
-    { name = "sqlalchemy" },
     { name = "uvicorn" },
 ]
 
@@ -37,9 +35,7 @@ chroma = [
     { name = "langchain-chroma" },
 ]
 worker = [
-    { name = "celery", extra = ["sqs"] },
     { name = "ghostscript" },
-    { name = "kombu" },
     { name = "ocrmypdf", version = "16.13.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "ocrmypdf", version = "17.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pillow" },
@@ -49,22 +45,23 @@ worker = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "alembic" },
     { name = "mypy" },
+    { name = "psycopg", extra = ["binary"] },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "sqlalchemy" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "alembic", specifier = ">=1.17.2" },
     { name = "boto3", specifier = ">=1.42.44" },
     { name = "celery", extras = ["sqs"], specifier = ">=5.6.2" },
-    { name = "celery", extras = ["sqs"], marker = "extra == 'worker'", specifier = ">=5.6.2" },
     { name = "chromadb", marker = "extra == 'chroma'", specifier = ">=1.3.7" },
     { name = "fastapi", specifier = ">=0.128.2" },
     { name = "fastembed", specifier = ">=0.7.4" },
     { name = "ghostscript", marker = "extra == 'worker'", specifier = ">=0.8.1" },
-    { name = "kombu", marker = "extra == 'worker'", specifier = ">=5.6.2" },
+    { name = "kombu", specifier = ">=5.6.2" },
     { name = "langchain", specifier = ">=1.2.0" },
     { name = "langchain-chroma", marker = "extra == 'chroma'", specifier = ">=1.1.0" },
     { name = "langchain-community", specifier = ">=0.4.1" },
@@ -74,21 +71,22 @@ requires-dist = [
     { name = "ocrmypdf", marker = "extra == 'worker'", specifier = ">=16.0" },
     { name = "openai", specifier = ">=2.16.0" },
     { name = "pillow", marker = "extra == 'worker'", specifier = ">=11.0.0,<12.0.0" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.2" },
     { name = "pydantic-settings", specifier = ">=2.12.0" },
     { name = "pymupdf4llm", marker = "extra == 'worker'", specifier = ">=0.2.7" },
     { name = "pytesseract", marker = "extra == 'worker'", specifier = ">=0.3.10" },
     { name = "qdrant-client", specifier = ">=1.16.2" },
-    { name = "sqlalchemy", specifier = ">=2.0.45" },
     { name = "uvicorn", specifier = ">=0.40.0" },
 ]
 provides-extras = ["worker", "chroma"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "alembic", specifier = ">=1.17.2" },
     { name = "mypy", specifier = ">=1.19.1" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.2" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "ruff", specifier = ">=0.14.10" },
+    { name = "sqlalchemy", specifier = ">=2.0.45" },
 ]
 
 [[package]]
