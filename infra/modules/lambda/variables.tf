@@ -1,6 +1,6 @@
 variable "name" { type = string }
 
-variable "private_subnet_ids" { type = list(string) }
+# variable "private_subnet_ids" { type = list(string) }
 variable "lambda_sg_id" { type = string }
 
 variable "lambda_role_arn" { type = string }
@@ -14,4 +14,7 @@ variable "derived_bucket" { type = string }
 
 variable "groq_secret_arn" { type = string }
 variable "qdrant_secret_arn" { type = string }
-variable "db_secret_arn" { type = string }
+# variable "db_secret_arn" { type = string }
+
+variable "sources_table_name" { type = string }
+variable "jobs_table_name" { type = string }

@@ -8,10 +8,10 @@ resource "aws_lambda_function" "this" {
   timeout     = 30
   memory_size = 1024
 
-  vpc_config {
-    subnet_ids         = var.private_subnet_ids
-    security_group_ids = [var.lambda_sg_id]
-  }
+  # vpc_config {
+  #   subnet_ids         = var.private_subnet_ids
+  #   security_group_ids = [var.lambda_sg_id]
+  # }
 
   environment {
     variables = {
@@ -21,7 +21,9 @@ resource "aws_lambda_function" "this" {
       DERIVED_BUCKET    = var.derived_bucket
       GROQ_SECRET_ARN   = var.groq_secret_arn
       QDRANT_SECRET_ARN = var.qdrant_secret_arn
-      DB_SECRET_ARN     = var.db_secret_arn
+      # DB_SECRET_ARN     = var.db_secret_arn
+      SOURCES_TABLE = var.sources_table_name
+      JOBS_TABLE    = var.jobs_table_name
     }
   }
 }

@@ -38,7 +38,7 @@ class IngestResponse(BaseModel):
 
 
 class SourceRow(BaseModel):
-    id: int
+    # id: int
     source_uri: str
     content_hash: str
     collection_name: str

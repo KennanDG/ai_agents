@@ -56,15 +56,15 @@ output "derived_bucket" {
 
 
 # --- DB (useful for debugging; keep secrets in Secrets Manager) ---
-output "db_host" {
-  value       = module.db.db_host
-  description = "RDS endpoint hostname"
-}
+# output "db_host" {
+#   value       = module.db.db_host
+#   description = "RDS endpoint hostname"
+# }
 
-output "db_port" {
-  value       = module.db.db_port
-  description = "RDS port"
-}
+# output "db_port" {
+#   value       = module.db.db_port
+#   description = "RDS port"
+# }
 
 
 

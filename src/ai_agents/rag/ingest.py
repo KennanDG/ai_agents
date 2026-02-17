@@ -86,6 +86,34 @@ def upload_text(bucket: str, key: str, text: str) -> None:
 
 
 
+# ---------------- dynamodb helper functions ----------------
+ddb = boto3.resource("dynamodb")
+
+SOURCES_TABLE = os.environ.get("SOURCES_TABLE", "rag_sources")
+
+
+def _sources_table():
+    return ddb.Table(SOURCES_TABLE)
+
+def _ddb_source_pk(namespace: str) -> str:
+    return f"NS#{namespace}"
+
+def _ddb_source_sk(source_uri: str) -> str:
+    return f"SRC#{source_uri}"
+
+def _get_source_item(namespace: str, source_uri: str) -> dict | None:
+    table = _sources_table()
+
+    res = table.get_item(Key={
+        "pk": _ddb_source_pk(namespace), 
+        "sk": _ddb_source_sk(source_uri)
+    })
+
+    return res.get("Item")
+
+
+
+
 
 # ---------------- Create IDs for document embeddings ----------------
 def _sha256_text(s: str) -> str:
@@ -218,6 +246,46 @@ def _detect_unchanged_sources(
                 unchanged_sources.add(source_uri)
                 
     return unchanged_sources, candidate_hashes
+
+
+
+# Production version
+def _detect_unchanged_sources_dynamodb(
+    paths: list[Path],
+    settings: RagSettings
+) -> tuple[set[str], dict[str, str]]:
+    """
+    Computes file hashes and checks DynamoDB to identify sources that haven't changed.
+    Returns a set of unchanged source URIs and a dict of current candidate hashes.
+    """
+    candidate_hashes: dict[str, str] = {}
+    unchanged_sources: set[str] = set()
+
+    for p in paths:
+        _, source_uri = _get_rel_and_source(p)
+        candidate_hashes[source_uri] = _sha256_file(p)
+
+    for source_uri, content_hash in candidate_hashes.items():
+        item = _get_source_item(settings.namespace, source_uri)
+
+        if not item:
+            continue
+
+        expected_collection = map_domain_to_collection(
+            infer_domain_key_from_source_uri(source_uri)
+        )
+
+        if (
+            item.get("content_hash") == content_hash
+            and item.get("collection_name") == expected_collection
+            and item.get("namespace") == settings.namespace
+            and int(item.get("chunk_size", 0)) == int(settings.chunk_size)
+            and int(item.get("chunk_overlap", 0)) == int(settings.chunk_overlap)
+        ):
+            unchanged_sources.add(source_uri)
+
+    return unchanged_sources, candidate_hashes
+
 
 
 
@@ -403,72 +471,126 @@ def _group_and_upsert_docs(
 
     # 5. Upsert Loop
     total = 0
+
     # Initialize VS once to ensure connection/tables, though loop re-inits for collections
     vs = build_qdrant(settings=settings, embedding_fn=embeddings)
 
-    with SessionLocal() as db:
-        for collection_name, sources_map in by_collection_then_source.items():
-            
-            # Re-init VS for specific collection override
-            vs = build_qdrant(
-                settings=settings,
-                embedding_fn=embeddings,
-                collection_name_override=collection_name,
+    for collection_name, sources_map in by_collection_then_source.items():
+
+        vs = build_qdrant(
+            settings=settings,
+            embedding_fn=embeddings,
+            collection_name_override=collection_name,
+        )
+
+        for source_uri, chunk_docs in sources_map.items():
+            content_hash = file_hashes[source_uri]
+
+            # DynamoDB: decides if unchanged; also records metadata if changed/new
+            unchanged = upsert_source_if_changed(
+                namespace=settings.namespace,
+                source_uri=source_uri,
+                content_hash=content_hash,
+                collection_name=collection_name,
+                chunk_size=settings.chunk_size,
+                chunk_overlap=settings.chunk_overlap,
             )
 
-            for source_uri, chunk_docs in sources_map.items():
-                content_hash = file_hashes[source_uri]
+            if unchanged:
+                continue
 
-                src_row, unchanged = upsert_source(
-                    db,
-                    source_uri=source_uri,
-                    content_hash=content_hash,
-                    collection_name=collection_name,
-                    namespace=settings.namespace,
-                    chunk_size=settings.chunk_size,
-                    chunk_overlap=settings.chunk_overlap,
-                )
+            ids: list[str] = []
 
-                if unchanged:
-                    continue
+            for idx, doc in enumerate(chunk_docs):
+                chunk_hash = _sha256_text(doc.page_content)
+                point_id = _make_point_id(source_uri, content_hash, idx, chunk_hash)
 
-                chunks_payload = []
-                ids = []
+                doc.metadata.update({
+                    "source_uri": source_uri,
+                    "content_hash": content_hash,
+                    "chunk_index": idx,
+                    "chunk_hash": chunk_hash,
+                    "collection_name": collection_name,
+                })
 
-                for idx, doc in enumerate(chunk_docs):
-                    chunk_hash = _sha256_text(doc.page_content)
-                    point_id = _make_point_id(source_uri, content_hash, idx, chunk_hash)
+                ids.append(point_id)
 
-                    doc.metadata.update({
-                        "source_uri": source_uri,
-                        "content_hash": content_hash,
-                        "chunk_index": idx,
-                        "chunk_hash": chunk_hash,
-                        "pg_source_id": src_row.id,
-                        "collection_name": collection_name,  
-                    })
+            # Qdrant: replace all chunks for this source
+            delete_source(vs, source_uri)
+            upsert_documents(vs, chunk_docs, ids)
 
-                    chunks_payload.append({
-                        "chunk_index": idx,
-                        "chunk_hash": chunk_hash,
-                        "qdrant_point_id": point_id,
-                    })
-                    ids.append(point_id)
+            total += len(chunk_docs)
 
-                chunk_rows = replace_chunks(db, source_id=src_row.id, chunks=chunks_payload)
 
-                for doc, row in zip(chunk_docs, chunk_rows):
-                    doc.metadata["pg_chunk_id"] = row.id
+    #############################################
+    ################ Dev version ################
+    #############################################
 
-                try:
-                    delete_source(vs, source_uri)
-                    upsert_documents(vs, chunk_docs, ids)
-                    db.commit()
-                except Exception:
-                    db.rollback()
-                    raise
+    # with SessionLocal() as db:
+    #     for collection_name, sources_map in by_collection_then_source.items():
+            
+    #         # Re-init VS for specific collection override
+    #         vs = build_qdrant(
+    #             settings=settings,
+    #             embedding_fn=embeddings,
+    #             collection_name_override=collection_name,
+    #         )
 
-                total += len(chunk_docs)
+    #         for source_uri, chunk_docs in sources_map.items():
+    #             content_hash = file_hashes[source_uri]
+
+    #             src_row, unchanged = upsert_source(
+    #                 db,
+    #                 source_uri=source_uri,
+    #                 content_hash=content_hash,
+    #                 collection_name=collection_name,
+    #                 namespace=settings.namespace,
+    #                 chunk_size=settings.chunk_size,
+    #                 chunk_overlap=settings.chunk_overlap,
+    #             )
+
+    #             if unchanged:
+    #                 continue
+
+    #             chunks_payload = []
+    #             ids = []
+
+    #             for idx, doc in enumerate(chunk_docs):
+    #                 chunk_hash = _sha256_text(doc.page_content)
+    #                 point_id = _make_point_id(source_uri, content_hash, idx, chunk_hash)
+
+    #                 doc.metadata.update({
+    #                     "source_uri": source_uri,
+    #                     "content_hash": content_hash,
+    #                     "chunk_index": idx,
+    #                     "chunk_hash": chunk_hash,
+    #                     "pg_source_id": src_row.id,
+    #                     "collection_name": collection_name,  
+    #                 })
+
+    #                 chunks_payload.append({
+    #                     "chunk_index": idx,
+    #                     "chunk_hash": chunk_hash,
+    #                     "qdrant_point_id": point_id,
+    #                 })
+    #                 ids.append(point_id)
+
+    #             chunk_rows = replace_chunks(db, source_id=src_row.id, chunks=chunks_payload)
+
+    #             for doc, row in zip(chunk_docs, chunk_rows):
+    #                 doc.metadata["pg_chunk_id"] = row.id
+
+    #             try:
+    #                 delete_source(vs, source_uri)
+    #                 upsert_documents(vs, chunk_docs, ids)
+    #                 db.commit()
+    #             except Exception:
+    #                 db.rollback()
+    #                 raise
+
+    #             total += len(chunk_docs)
+    
+
     
     return total
 
@@ -482,7 +604,10 @@ def ingest_files(paths: Iterable[str | Path], settings: RagSettings) -> int:
     all_paths = text_paths + pdf_paths + img_paths
     
     # 2. Detect Changes
-    unchanged_sources, _ = _detect_unchanged_sources(all_paths, settings)
+    unchanged_sources, _ = _detect_unchanged_sources_dynamodb(all_paths, settings)
+
+    # Dev version
+    # unchanged_sources, _ = _detect_unchanged_sources(all_paths, settings) 
     
     # 3. Process Derived Files (OCR/VLM)
     derived_md_paths, failures = _process_derived_files(pdf_paths, img_paths, unchanged_sources, settings)

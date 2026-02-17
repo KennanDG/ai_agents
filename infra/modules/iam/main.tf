@@ -21,16 +21,16 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-resource "aws_iam_role_policy_attachment" "lambda_vpc" {
-  role       = aws_iam_role.lambda.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
-}
+# resource "aws_iam_role_policy_attachment" "lambda_vpc" {
+#   role       = aws_iam_role.lambda.name
+#   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+# }
 
 data "aws_iam_policy_document" "lambda_inline" {
-  statement {
-    actions   = ["secretsmanager:GetSecretValue"]
-    resources = [var.groq_secret_arn, var.db_secret_arn]
-  }
+  # statement {
+  #   actions   = ["secretsmanager:GetSecretValue"]
+  #   resources = [var.groq_secret_arn, var.db_secret_arn]
+  # }
 
   statement {
     actions   = ["sqs:SendMessage"]
@@ -50,6 +50,22 @@ data "aws_iam_policy_document" "lambda_inline" {
       "${var.derived_bucket_arn}/*",
     ]
   }
+
+
+  statement {
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:Query",
+      "dynamodb:Scan"
+    ]
+    resources = [
+      var.sources_table_arn,
+      var.jobs_table_arn
+    ]
+  }
+
 }
 
 resource "aws_iam_policy" "lambda_app" {
@@ -96,7 +112,7 @@ data "aws_iam_policy_document" "ecs_task_inline" {
     actions = ["secretsmanager:GetSecretValue"]
     resources = [
       var.groq_secret_arn,
-      var.db_secret_arn
+      # var.db_secret_arn
     ]
   }
 
@@ -117,6 +133,21 @@ data "aws_iam_policy_document" "ecs_task_inline" {
       "${var.raw_bucket_arn}/*",
       var.derived_bucket_arn,
       "${var.derived_bucket_arn}/*",
+    ]
+  }
+
+
+  statement {
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:Query",
+      "dynamodb:Scan"
+    ]
+    resources = [
+      var.sources_table_arn,
+      var.jobs_table_arn
     ]
   }
 }

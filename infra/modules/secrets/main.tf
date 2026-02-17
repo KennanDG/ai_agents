@@ -16,17 +16,17 @@ resource "aws_secretsmanager_secret_version" "qdrant" {
   secret_string = jsonencode({ QDRANT_API_KEY = var.qdrant_api_key })
 }
 
-resource "aws_secretsmanager_secret" "db" {
-  name = "${var.name}/db"
-}
+# resource "aws_secretsmanager_secret" "db" {
+#   name = "${var.name}/db"
+# }
 
 
-resource "aws_secretsmanager_secret_version" "db" {
-  secret_id = aws_secretsmanager_secret.db.id
-  secret_string = jsonencode({
-    username = var.db_username
-    password = var.db_password
-    dbname   = var.db_name
-  })
-}
+# resource "aws_secretsmanager_secret_version" "db" {
+#   secret_id = aws_secretsmanager_secret.db.id
+#   secret_string = jsonencode({
+#     username = var.db_username
+#     password = var.db_password
+#     dbname   = var.db_name
+#   })
+# }
 

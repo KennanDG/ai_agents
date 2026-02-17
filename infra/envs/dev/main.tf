@@ -7,15 +7,21 @@ module "api_gateway" {
 }
 
 
-module "db" {
-  source = "../../modules/db"
+# module "db" {
+#   source = "../../modules/db"
+#   name   = var.project_name
+
+#   vpc_id             = module.network.vpc_id
+#   private_subnet_ids = module.network.private_subnet_ids
+#   db_sg_id           = module.network.db_sg_id
+
+#   db_secret_arn = module.secrets.db_secret_arn
+# }
+
+
+module "dynamodb" {
+  source = "../../modules/dynamodb"
   name   = var.project_name
-
-  vpc_id             = module.network.vpc_id
-  private_subnet_ids = module.network.private_subnet_ids
-  db_sg_id           = module.network.db_sg_id
-
-  db_secret_arn = module.secrets.db_secret_arn
 }
 
 
@@ -30,9 +36,9 @@ module "ecs" {
   name   = var.project_name
   region = var.aws_region
 
-  vpc_id             = module.network.vpc_id
-  private_subnet_ids = module.network.private_subnet_ids
-  worker_sg_id       = module.network.worker_sg_id
+  vpc_id            = module.network.vpc_id
+  public_subnet_ids = module.network.public_subnet_ids
+  worker_sg_id      = module.network.worker_sg_id
 
   task_role_arn      = module.iam.ecs_task_role_arn
   execution_role_arn = module.iam.ecs_execution_role_arn
@@ -46,7 +52,10 @@ module "ecs" {
   derived_bucket = module.s3.derived_bucket
 
   groq_secret_arn = module.secrets.groq_secret_arn
-  db_secret_arn   = module.secrets.db_secret_arn
+  # db_secret_arn   = module.secrets.db_secret_arn
+
+  sources_table_name = module.dynamodb.sources_table_name
+  jobs_table_name    = module.dynamodb.jobs_table_name
 }
 
 
@@ -59,7 +68,11 @@ module "iam" {
   derived_bucket_arn = module.s3.derived_bucket_arn
 
   groq_secret_arn = module.secrets.groq_secret_arn
-  db_secret_arn   = module.secrets.db_secret_arn
+  # db_secret_arn   = module.secrets.db_secret_arn
+
+  sources_table_arn = module.dynamodb.sources_table_arn
+  jobs_table_arn    = module.dynamodb.jobs_table_arn
+
 
   github_owner  = var.github_owner
   github_repo   = var.github_repo
@@ -71,8 +84,8 @@ module "lambda" {
   source = "../../modules/lambda"
   name   = var.project_name
 
-  private_subnet_ids = module.network.private_subnet_ids
-  lambda_sg_id       = module.network.lambda_sg_id
+  # private_subnet_ids = module.network.private_subnet_ids
+  lambda_sg_id = module.network.lambda_sg_id
 
   lambda_role_arn = module.iam.lambda_role_arn
 
@@ -86,7 +99,10 @@ module "lambda" {
 
   groq_secret_arn   = module.secrets.groq_secret_arn
   qdrant_secret_arn = module.secrets.qdrant_secret_arn
-  db_secret_arn     = module.secrets.db_secret_arn
+  # db_secret_arn     = module.secrets.db_secret_arn
+
+  sources_table_name = module.dynamodb.sources_table_name
+  jobs_table_name    = module.dynamodb.jobs_table_name
 }
 
 
@@ -111,9 +127,6 @@ module "secrets" {
   groq_api_key   = var.groq_api_key
   qdrant_api_key = var.qdrant_api_key
 
-  db_username = var.db_username
-  db_password = var.db_password
-  db_name     = var.db_name
 }
 
 

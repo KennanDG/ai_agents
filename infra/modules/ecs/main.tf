@@ -31,7 +31,9 @@ resource "aws_ecs_task_definition" "worker" {
         { name = "RAW_BUCKET", value = var.raw_bucket },
         { name = "DERIVED_BUCKET", value = var.derived_bucket },
         { name = "GROQ_SECRET_ARN", value = var.groq_secret_arn },
-        { name = "DB_SECRET_ARN", value = var.db_secret_arn }
+        # { name = "DB_SECRET_ARN", value = var.db_secret_arn }
+        { name = "SOURCES_TABLE", value = var.sources_table_name },
+        { name = "JOBS_TABLE", value = var.jobs_table_name }
       ]
 
       logConfiguration = {
@@ -54,7 +56,7 @@ resource "aws_ecs_service" "worker" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets         = var.private_subnet_ids
+    subnets         = var.public_subnet_ids
     security_groups = [var.worker_sg_id]
   }
 }
