@@ -49,6 +49,11 @@ def ingest_job(
     try:
         count = ingest_files(paths, settings)
 
+        if int(count or 0) == 0:
+            msg = "Ingest produced 0 chunks. No documents were loaded/split, or all sources were skipped as unchanged."
+            update_job(job_id=job_id, status="FAILED", ingested_chunks=0, error=msg)
+            raise RuntimeError(msg)
+
         update_job(job_id=job_id, status="SUCCEEDED", ingested_chunks=count)
 
         # with db_session() as db:

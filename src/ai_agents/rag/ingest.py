@@ -303,9 +303,23 @@ def _get_rel_and_source(p: Path) -> tuple[str, str]:
 
 
 
-def _categorize_paths(paths: Iterable[str | Path]) -> tuple[list[Path], list[Path], list[Path]]:
-    """Expands inputs and filters them into text, pdf, and image paths."""
-    input_paths = expand_inputs(paths)
+def _categorize_paths(
+        paths: Iterable[str | Path],
+        expand: bool = False
+    ) -> tuple[list[Path], list[Path], list[Path]]:
+    """ 
+    Filters inputs into text, pdf, and image paths.
+
+    (Dev) If expand is set to True, it expands inputs according 
+    to local file directory setup
+    """
+
+    if expand:
+        input_paths = expand_inputs(paths)
+    else:
+        input_paths = [Path(p) for p in paths]
+
+
     # Filter by allowed extensions
     valid_exts = {".md", ".txt", ".pdf", ".png", ".jpg", ".jpeg"}
     input_paths = [p for p in input_paths if p.suffix.lower() in valid_exts]
@@ -315,6 +329,9 @@ def _categorize_paths(paths: Iterable[str | Path]) -> tuple[list[Path], list[Pat
     img_paths = [p for p in input_paths if is_image(p)]
 
     return text_paths, pdf_paths, img_paths
+
+
+
 
 
 
@@ -425,7 +442,9 @@ def _process_derived_files(
     pdf_paths: list[Path], 
     img_paths: list[Path], 
     unchanged_sources: set[str], 
-    settings: RagSettings
+    settings: RagSettings,
+    source_uri_by_local_abs: dict[str, str] | None = None,
+    rel_by_local_abs: dict[str, str] | None = None,
 ) -> tuple[list[Path], list[IngestFailure]]:
     """
     Converts PDFs and Images to Markdown if they are not in the unchanged set.
@@ -440,7 +459,20 @@ def _process_derived_files(
 
     # Process PDFs
     for path in pdf_paths:
-        path_rel, source_uri = _get_rel_and_source(path)
+        
+        # Prod
+        if source_uri_by_local_abs and rel_by_local_abs:
+            abs_path = str(path.resolve())
+            path_rel = rel_by_local_abs.get(abs_path, _get_rel_and_source(path)[0])  
+            source_uri = source_uri_by_local_abs.get(abs_path, _get_rel_and_source(path)[1])
+              
+
+        # Dev
+        else:
+            path_rel, source_uri = _get_rel_and_source(path)  
+
+
+
         if source_uri in unchanged_sources:
             continue
             
@@ -452,6 +484,12 @@ def _process_derived_files(
                 derived_pdf_md_dir=pdf_md_dir,
                 ocr_pdf_dir=ocr_pdf_dir,
             )
+
+            # Upload derived markdown to S3
+            if DERIVED_BUCKET:
+                md_text = Path(output).read_text(encoding="utf-8")
+                derived_key = Path(path_rel).with_suffix(".md").as_posix()
+                upload_text(DERIVED_BUCKET, derived_key, md_text)
 
             derived_md_paths.append(output)
 
@@ -469,11 +507,26 @@ def _process_derived_files(
             # skip this file, continue ingest
             continue
 
-    # Process Images
+    
+    
+    # VLM
     caption_model = getattr(settings, "caption_model", "meta-llama/llama-4-scout-17b-16e-instruct")
-
+    
+    # Process Images
     for path in img_paths:
-        path_rel, source_uri = _get_rel_and_source(path)
+        
+        # Prod
+        if source_uri_by_local_abs and rel_by_local_abs:
+            abs_path = str(path.resolve())
+            path_rel = rel_by_local_abs.get(abs_path, _get_rel_and_source(path)[0])  
+            source_uri = source_uri_by_local_abs.get(abs_path, _get_rel_and_source(path)[1])
+              
+
+        # Dev
+        else:
+            path_rel, source_uri = _get_rel_and_source(path)  
+
+
         if source_uri in unchanged_sources:
             continue
             
@@ -485,6 +538,14 @@ def _process_derived_files(
                 derived_img_md_dir=img_md_dir,
                 caption_model=caption_model,
             )
+
+
+            # Upload derived markdown to S3
+            if DERIVED_BUCKET:
+                md_text = Path(out).read_text(encoding="utf-8")
+                derived_key = Path(path_rel).with_suffix(".md").as_posix()
+                upload_text(DERIVED_BUCKET, derived_key, md_text)
+
 
             derived_md_paths.append(out)
 
@@ -518,12 +579,15 @@ def _load_documents(
     Applies metadata overrides (source_uri, original_path) for derived files.
     """
     changed_text_paths = []
+
     for p in text_paths:
         _, source_uri = _get_rel_and_source(p)
+        
         if source_uri not in unchanged_sources:
             changed_text_paths.append(p)
 
     docs = []
+
     if changed_text_paths:
         docs.extend(load_text_files(changed_text_paths))
 
@@ -534,16 +598,20 @@ def _load_documents(
         for doc in derived_docs:
             md_text = doc.page_content
             override = parse_frontmatter_for_source_uri(md_text)
-            orig_rel = parse_frontmatter_key(md_text, "original_rel")
+
+            ######### Dev only #########
+            # orig_rel = parse_frontmatter_key(md_text, "original_rel")   ######### Dev only #########
 
             if override:
                 doc.metadata["source_uri"] = override
             
-            if orig_rel:
-                # Store original absolute path for hashing. 
-                # Assumes the script runs relative to the repo root usually.
-                base_path = Path(__file__).resolve().parents[3] 
-                doc.metadata["original_path"] = str((base_path / orig_rel).resolve())
+
+            ######### Dev only #########
+            # if orig_rel:
+            #     # Store original absolute path for hashing. 
+            #     # Assumes the script runs relative to the repo root.
+            #     base_path = Path(__file__).resolve().parents[3] 
+            #     doc.metadata["original_path"] = str((base_path / orig_rel).resolve())
 
             doc.metadata["derived_path"] = doc.metadata.get("path")
 
@@ -557,7 +625,8 @@ def _load_documents(
 def _group_and_upsert_docs(
     docs: list[Document], 
     settings: RagSettings, 
-    embeddings: FastEmbedEmbeddings
+    embeddings: FastEmbedEmbeddings,
+    dev: bool = False
 ) -> int:
     """
     Assigns domain keys, splits docs, groups by collection/source, 
@@ -574,14 +643,18 @@ def _group_and_upsert_docs(
     splits = split_docs(docs, settings.chunk_size, settings.chunk_overlap)
     
     # 3. Compute/Verify file hashes for the loaded docs
-    # Note: We re-hash here to ensure we use the 'original_path' for derived docs
     file_hashes = {}
 
-    for doc in docs:
+    if dev:
+        for doc in docs:
+            source_uri = doc.metadata["source_uri"]
+            original_path = doc.metadata.get("original_path")
+            path_to_hash = Path(original_path) if original_path else Path(doc.metadata["path"])
+            file_hashes[source_uri] = _sha256_file(path_to_hash)
+    else:
         source_uri = doc.metadata["source_uri"]
-        original_path = doc.metadata.get("original_path")
-        path_to_hash = Path(original_path) if original_path else Path(doc.metadata["path"])
-        file_hashes[source_uri] = _sha256_file(path_to_hash)
+        local_path = Path(doc.metadata["path"])
+        file_hashes[source_uri] = _content_hash_for_source(source_uri, local_path=local_path)
 
     # 4. Group by Collection -> Source
     by_collection_then_source: dict[str, dict[str, list[Document]]] = {}
@@ -728,7 +801,7 @@ def _group_and_upsert_docs(
 # @traceable
 # def ingest_files(paths: Iterable[str | Path], settings: RagSettings) -> int:
 #     # 1. Categorize Inputs
-#     text_paths, pdf_paths, img_paths = _categorize_paths(paths)
+#     text_paths, pdf_paths, img_paths = _categorize_paths(paths, expand=True)
 #     all_paths = text_paths + pdf_paths + img_paths
     
 #     # 2. Detect Changes
@@ -751,7 +824,7 @@ def _group_and_upsert_docs(
 #     # 5. Embed and Upsert
 #     embeddings = build_fastembed_embeddings(settings.embedding_model, settings.chunk_size)
     
-#     return _group_and_upsert_docs(docs, settings, embeddings)
+#     return _group_and_upsert_docs(docs, settings, embeddings, True)
 
 
 
@@ -766,14 +839,22 @@ def ingest_files(paths: Iterable[str | Path], settings: RagSettings) -> int:
     local_inputs, source_uri_by_local_abs, rel_by_local_abs = _resolve_inputs_to_local(paths)
 
     # 1) Categorize Inputs (only local Paths now)
-    text_paths, pdf_paths, img_paths = _categorize_paths(local_inputs)
+    text_paths, pdf_paths, img_paths = _categorize_paths(local_inputs, expand=False)
     all_paths = text_paths + pdf_paths + img_paths
 
     # 2) Detect Changes (hash local bytes)
     unchanged_sources, _ = _detect_unchanged_sources_dynamodb(all_paths, settings, source_uri_by_local_abs)
 
     # 3) Process Derived Files (OCR/VLM)
-    derived_md_paths, failures = _process_derived_files(pdf_paths, img_paths, unchanged_sources, settings)
+    derived_md_paths, failures = _process_derived_files(
+        pdf_paths=pdf_paths, 
+        img_paths=img_paths, 
+        unchanged_sources=unchanged_sources, 
+        settings=settings,
+        source_uri_by_local_abs=source_uri_by_local_abs,
+        rel_by_local_abs=rel_by_local_abs
+    )
+
     for f in failures:
         print(f"[ingest] WARN stage={f.stage} source={f.source_uri} err={f.error_type}: {f.message}")
 
@@ -794,7 +875,7 @@ def ingest_files(paths: Iterable[str | Path], settings: RagSettings) -> int:
 
     # 5) Embed and Upsert
     embeddings = build_fastembed_embeddings(settings.embedding_model, settings.chunk_size)
-    return _group_and_upsert_docs(docs, settings, embeddings)
+    return _group_and_upsert_docs(docs, settings, embeddings, False)
 
 
 
