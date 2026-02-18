@@ -5,7 +5,7 @@ import json
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 
-from ai_agents.api.dependency import build_retrieval_settings, build_ingestion_settings, db_session
+from ai_agents.api.dependency import build_retrieval_settings, build_ingestion_settings
 from ai_agents.api.schemas import (
     IngestRequest,
     IngestResponse,
@@ -16,7 +16,8 @@ from ai_agents.api.schemas import (
 )
 
 from ai_agents.rag.ingest import ingest_files
-from ai_agents.rag.query import answer_langgraph  
+from ai_agents.rag.query import answer_langgraph
+from ai_agents.rag.dynamodb import create_job, get_job, list_sources
 from ai_agents.db.models import RagSource, RagIngestJob
 from ai_agents.jobs.tasks import ingest_job
 from sqlalchemy import select
@@ -72,24 +73,32 @@ def rag_ingest(request: IngestRequest, background: bool = Query(False)) -> Inges
             namespace=settings.namespace,
             collection_name=settings.collection_name,
         )
+
         job_id = async_result.id
 
-        # Create/record a job row so clients can poll status
-        with db_session() as db:
+        create_job(
+            job_id=job_id,
+            namespace=settings.namespace,
+            collection_name=settings.collection_name,
+            paths=request.paths,
+        )
 
-            db.add(
-                RagIngestJob(
-                    job_id=job_id,
-                    status="QUEUED",
-                    namespace=settings.namespace,
-                    collection_name=settings.collection_name,
-                    paths_json=json.dumps(request.paths),
-                    ingested_chunks=0,
-                    error=None,
-                )
-            )
+        # # Create/record a job row so clients can poll status
+        # with db_session() as db:
 
-            db.commit()
+        #     db.add(
+        #         RagIngestJob(
+        #             job_id=job_id,
+        #             status="QUEUED",
+        #             namespace=settings.namespace,
+        #             collection_name=settings.collection_name,
+        #             paths_json=json.dumps(request.paths),
+        #             ingested_chunks=0,
+        #             error=None,
+        #         )
+        #     )
+
+        #     db.commit()
 
         return IngestResponse(
             ingested_chunks=0,
@@ -123,23 +132,28 @@ def rag_ingest(request: IngestRequest, background: bool = Query(False)) -> Inges
 
 @router.get("/ingest/jobs/{job_id}")
 def ingest_job_status(job_id: str) -> dict:
-    
-    with db_session() as db:
-        row = db.query(RagIngestJob).filter(RagIngestJob.job_id == job_id).one_or_none()
-        
-        if not row:
-            raise HTTPException(status_code=404, detail="job not found")
 
-        return {
-            "job_id": row.job_id,
-            "status": row.status,
-            "namespace": row.namespace,
-            "collection_name": row.collection_name,
-            "ingested_chunks": row.ingested_chunks,
-            "error": row.error,
-            "created_at": row.created_at,
-            "updated_at": row.updated_at,
-        }
+    row = get_job(job_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="job not found")
+    return row
+    
+    # with db_session() as db:
+    #     row = db.query(RagIngestJob).filter(RagIngestJob.job_id == job_id).one_or_none()
+        
+    #     if not row:
+    #         raise HTTPException(status_code=404, detail="job not found")
+
+    #     return {
+    #         "job_id": row.job_id,
+    #         "status": row.status,
+    #         "namespace": row.namespace,
+    #         "collection_name": row.collection_name,
+    #         "ingested_chunks": row.ingested_chunks,
+    #         "error": row.error,
+    #         "created_at": row.created_at,
+    #         "updated_at": row.updated_at,
+    #     }
 
 
 
@@ -153,30 +167,53 @@ def list_sources(
     limit: int = 200,
     offset: int = 0,
 ) -> SourcesListResponse:
-    with db_session() as db:
-        stmt = select(RagSource)
-
-        if namespace:
-            stmt = stmt.where(RagSource.namespace == namespace)
-            
-        if collection_name:
-            stmt = stmt.where(RagSource.collection_name == collection_name)
-
-        stmt = stmt.order_by(RagSource.updated_at.desc()).limit(limit).offset(offset)
-
-        rows: List[RagSource] = list(db.scalars(stmt).all())
+    ns = namespace or "default"  # or enforce required
+    
+    items = list_sources(
+        namespace=ns, 
+        collection_name=collection_name, 
+        limit=limit, 
+        offset=offset
+    )
 
     return SourcesListResponse(
-        sources=[
-            SourceRow(
-                id=row.id,
-                source_uri=row.source_uri,
-                content_hash=row.content_hash,
-                collection_name=row.collection_name,
-                namespace=row.namespace,
-                chunk_size=row.chunk_size,
-                chunk_overlap=row.chunk_overlap,
-            )
-            for row in rows
-        ]
+    sources=[
+        SourceRow(
+        # id=0, 
+        source_uri=item["source_uri"],
+        content_hash=item["content_hash"],
+        collection_name=item["collection_name"],
+        namespace=item["namespace"],
+        chunk_size=int(item["chunk_size"]),
+        chunk_overlap=int(item["chunk_overlap"]),
+        )
+        for item in items
+    ]
     )
+    # with db_session() as db:
+    #     stmt = select(RagSource)
+
+    #     if namespace:
+    #         stmt = stmt.where(RagSource.namespace == namespace)
+            
+    #     if collection_name:
+    #         stmt = stmt.where(RagSource.collection_name == collection_name)
+
+    #     stmt = stmt.order_by(RagSource.updated_at.desc()).limit(limit).offset(offset)
+
+    #     rows: List[RagSource] = list(db.scalars(stmt).all())
+
+    # return SourcesListResponse(
+    #     sources=[
+    #         SourceRow(
+    #             id=row.id,
+    #             source_uri=row.source_uri,
+    #             content_hash=row.content_hash,
+    #             collection_name=row.collection_name,
+    #             namespace=row.namespace,
+    #             chunk_size=row.chunk_size,
+    #             chunk_overlap=row.chunk_overlap,
+    #         )
+    #         for row in rows
+    #     ]
+    # )

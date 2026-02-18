@@ -4,8 +4,29 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List
 
+from .secrets import get_secret_json
+
 
 class Settings(BaseSettings):
+
+    def resolved_groq_api_key(self) -> str | None:
+        if self.groq_api_key:
+            return self.groq_api_key
+        
+        if self.groq_secret_arn:
+            return get_secret_json(self.groq_secret_arn).get("GROQ_API_KEY")
+        
+        return None
+
+
+    def resolved_qdrant_api_key(self) -> str | None:
+        if self.qdrant_api_key:
+            return self.qdrant_api_key
+        
+        if self.qdrant_secret_arn:
+            return get_secret_json(self.qdrant_secret_arn).get("QDRANT_API_KEY")
+        
+        return None
     
     model_config = SettingsConfigDict(
         env_file=os.getenv("ENV_FILE", ".env"),
@@ -25,10 +46,13 @@ class Settings(BaseSettings):
     verify_docs_model: str = Field(default="llama-3.1-8b-instant", alias="VERIFY_DOCS_MODEL")
     groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
     groq_api_url: str | None = Field(default="https://api.groq.com/openai/v1", alias="GROQ_API_URL")
+    groq_secret_arn: str | None = Field(default=None, alias="GROQ_SECRET_ARN")
     
 
     # Qdrant
     qdrant_url: str = Field(default="http://localhost:6333", alias="QDRANT_URL")
+    qdrant_api_key: str | None = Field(default=None, alias="QDRANT_API_KEY")
+    qdrant_secret_arn: str | None = Field(default=None, alias="QDRANT_SECRET_ARN")
     qdrant_collection: str = Field(default="rag-default", alias="QDRANT_COLLECTION")
 
     # FastEmbed

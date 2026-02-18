@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from typing import Iterator, Optional, List
 
 from ai_agents.rag.settings import RagSettings
-from ai_agents.db.session import SessionLocal
+# from ai_agents.db.session import SessionLocal
 
 
 def build_retrieval_settings(
@@ -56,11 +56,13 @@ def build_ingestion_settings(
     if collection_name is not None:
         settings.collection_name = collection_name
 
+    return settings
 
-@contextmanager
-def db_session() -> Iterator:
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+
+# @contextmanager
+# def db_session() -> Iterator:
+#     db = SessionLocal()
+#     try:
+#         yield db
+#     finally:
+#         db.close()

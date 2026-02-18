@@ -67,18 +67,18 @@ variable "qdrant_api_key" {
   sensitive = true
 }
 
-variable "db_username" {
-  type    = string
-  default = "ai_agents"
-}
+# variable "db_username" {
+#   type    = string
+#   default = "ai_agents"
+# }
 
-variable "db_password" {
-  type      = string
-  sensitive = true
-}
+# variable "db_password" {
+#   type      = string
+#   sensitive = true
+# }
 
-variable "db_name" {
-  type    = string
-  default = "ai_agents"
-}
+# variable "db_name" {
+#   type    = string
+#   default = "ai_agents"
+# }
 

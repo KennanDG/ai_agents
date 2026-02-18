@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 from typing import List, Optional
+import os
 
-from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, Filter, FieldCondition, MatchValue
 
 from .settings import RagSettings
+from ai_agents.config.secrets import get_secret_json
 
 
 # Vector dimension sizes
@@ -22,8 +23,16 @@ def build_qdrant(
     *,
     collection_name_override: Optional[str] = None,
 ):
+    
+    qdrant_api_key = os.getenv("QDRANT_API_KEY")
 
-    client = QdrantClient(url=settings.qdrant_url)
+    if not qdrant_api_key and os.getenv("QDRANT_SECRET_ARN"):
+        qdrant_api_key = get_secret_json(os.environ["QDRANT_SECRET_ARN"])["QDRANT_API_KEY"]
+
+    client = QdrantClient(
+        url=settings.qdrant_url,
+        api_key=qdrant_api_key
+        )
 
     base_collection = collection_name_override or settings.collection_name
     collection_name = f"{base_collection}-{settings.namespace}"
@@ -46,17 +55,21 @@ def build_qdrant(
     )
 
 
+
 def delete_source(vs: QdrantVectorStore, source_uri: str):
     client = vs.client
     collection = vs.collection_name
     flt = Filter(
         must=[FieldCondition(key="source_uri", match=MatchValue(value=source_uri))]
     )
+    
     client.delete(collection_name=collection, points_selector=flt)
+
 
 
 def build_retriever(vs: QdrantVectorStore, k: int):
     return vs.as_retriever(search_kwargs={"k": k})
+
 
 
 def upsert_documents(vs: QdrantVectorStore, docs, ids: list[str]):

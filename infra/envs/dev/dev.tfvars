@@ -16,9 +16,9 @@ qdrant_api_key = "REDACTED"
 groq_url     = "https://api.groq.com/openai/v1"
 groq_api_key = "REDACTED"
 
-db_username = "ai_agents"
-db_name     = "ai_agents"
-db_password = "REDACTED"
+# db_username = "ai_agents"
+# db_name     = "ai_agents"
+# db_password = "REDACTED"
 
 
 

@@ -101,7 +101,8 @@ indexes/
 
 # Terraform
 **/.terraform/*
-**/.terraform.lock.hcl.terraform*   # optional; usually not needed
+**/.terraform.lock.hcl  
+infra/envs/dev/.terraform.lock.hcl
 
 *.tfstate
 *.tfstate.*

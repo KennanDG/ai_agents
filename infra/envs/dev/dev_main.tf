@@ -7,15 +7,21 @@ module "api_gateway" {
 }
 
 
-module "db" {
-  source = "../../modules/db"
+# module "db" {
+#   source = "../../modules/db"
+#   name   = var.project_name
+
+#   vpc_id             = module.network.vpc_id
+#   private_subnet_ids = module.network.private_subnet_ids
+#   db_sg_id           = module.network.db_sg_id
+
+#   db_secret_arn = module.secrets.db_secret_arn
+# }
+
+
+module "dynamodb" {
+  source = "../../modules/dynamodb"
   name   = var.project_name
-
-  vpc_id             = module.network.vpc_id
-  private_subnet_ids = module.network.private_subnet_ids
-  db_sg_id           = module.network.db_sg_id
-
-  db_secret_arn = module.secrets.db_secret_arn
 }
 
 
@@ -30,14 +36,14 @@ module "ecs" {
   name   = var.project_name
   region = var.aws_region
 
-  vpc_id             = module.network.vpc_id
-  private_subnet_ids = module.network.private_subnet_ids
-  worker_sg_id       = module.network.worker_sg_id
+  vpc_id            = module.network.vpc_id
+  public_subnet_ids = module.network.public_subnet_ids
+  worker_sg_id      = module.network.worker_sg_id
 
   task_role_arn      = module.iam.ecs_task_role_arn
   execution_role_arn = module.iam.ecs_execution_role_arn
 
-  worker_image_uri = "${module.ecr.worker_repo_url}:${var.image_tag}"
+  worker_image_uri = "${module.ecr.worker_repo_url}@sha256:0f08f51f18019b0ffb81d8584b4a1a5968aa8b2c4bdfb2c74aa32e6a57a78021"
 
   qdrant_url       = var.qdrant_url
   ingest_queue_url = module.sqs.ingest_queue_url
@@ -45,8 +51,12 @@ module "ecs" {
   raw_bucket     = module.s3.raw_bucket
   derived_bucket = module.s3.derived_bucket
 
-  groq_secret_arn = module.secrets.groq_secret_arn
-  db_secret_arn   = module.secrets.db_secret_arn
+  groq_secret_arn   = module.secrets.groq_secret_arn
+  qdrant_secret_arn = module.secrets.qdrant_secret_arn
+  # db_secret_arn   = module.secrets.db_secret_arn
+
+  sources_table_name = module.dynamodb.sources_table_name
+  jobs_table_name    = module.dynamodb.jobs_table_name
 }
 
 
@@ -58,8 +68,13 @@ module "iam" {
   raw_bucket_arn     = module.s3.raw_bucket_arn
   derived_bucket_arn = module.s3.derived_bucket_arn
 
-  groq_secret_arn = module.secrets.groq_secret_arn
-  db_secret_arn   = module.secrets.db_secret_arn
+  groq_secret_arn   = module.secrets.groq_secret_arn
+  qdrant_secret_arn = module.secrets.qdrant_secret_arn
+  # db_secret_arn   = module.secrets.db_secret_arn
+
+  sources_table_arn = module.dynamodb.sources_table_arn
+  jobs_table_arn    = module.dynamodb.jobs_table_arn
+
 
   github_owner  = var.github_owner
   github_repo   = var.github_repo
@@ -71,12 +86,12 @@ module "lambda" {
   source = "../../modules/lambda"
   name   = var.project_name
 
-  private_subnet_ids = module.network.private_subnet_ids
-  lambda_sg_id       = module.network.lambda_sg_id
+  # private_subnet_ids = module.network.private_subnet_ids
+  lambda_sg_id = module.network.lambda_sg_id
 
   lambda_role_arn = module.iam.lambda_role_arn
 
-  image_uri = "${module.ecr.api_repo_url}:${var.image_tag}"
+  image_uri = "${module.ecr.api_repo_url}@sha256:a408f1ea4364215307f4d610f32165712f03f1957915f0658658b2d0d22a19fe" # :${var.image_tag}
 
   qdrant_url       = var.qdrant_url
   ingest_queue_url = module.sqs.ingest_queue_url
@@ -86,7 +101,10 @@ module "lambda" {
 
   groq_secret_arn   = module.secrets.groq_secret_arn
   qdrant_secret_arn = module.secrets.qdrant_secret_arn
-  db_secret_arn     = module.secrets.db_secret_arn
+  # db_secret_arn     = module.secrets.db_secret_arn
+
+  sources_table_name = module.dynamodb.sources_table_name
+  jobs_table_name    = module.dynamodb.jobs_table_name
 }
 
 
@@ -111,9 +129,6 @@ module "secrets" {
   groq_api_key   = var.groq_api_key
   qdrant_api_key = var.qdrant_api_key
 
-  db_username = var.db_username
-  db_password = var.db_password
-  db_name     = var.db_name
 }
 
 

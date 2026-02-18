@@ -47,7 +47,9 @@ data "aws_iam_policy_document" "github_deploy_policy" {
       "ecr:InitiateLayerUpload",
       "ecr:UploadLayerPart",
       "ecr:CompleteLayerUpload",
-      "ecr:PutImage"
+      "ecr:PutImage",
+      "ecr:DescribeRepositories",
+      "ecr:ListImages"
     ]
     resources = ["*"]
   }
