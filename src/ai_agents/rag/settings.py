@@ -1,6 +1,7 @@
 import os
 from pydantic import BaseModel
 from ai_agents.config.settings import settings
+from ai_agents.config.secrets import get_secret_json
 from typing import List
 
 
@@ -22,8 +23,12 @@ class RagSettings(BaseModel):
     # ollama_host: str = getattr(settings, "ollama_host", "http://localhost:11434")
     # ollama_url: str = getattr(settings, "ollama_url", getattr(settings, "ollama_host", "http://localhost:11434"))
     qdrant_url: str = getattr(settings, "qdrant_url", "http://localhost:6333")
-    groq_api_key: str = getattr(settings, "groq_api_key", os.environ.get("GROQ_API_KEY"))
     groq_api_url: str = getattr(settings, "groq_api_url", os.environ.get("GROQ_API_URL"))
+
+    qdrant_api_key: str | None = settings.resolved_qdrant_api_key()
+    groq_api_key: str | None = settings.resolved_groq_api_key()
+
+
 
     # -------------------------
     # Model selection

@@ -43,7 +43,7 @@ module "ecs" {
   task_role_arn      = module.iam.ecs_task_role_arn
   execution_role_arn = module.iam.ecs_execution_role_arn
 
-  worker_image_uri = "${module.ecr.worker_repo_url}@sha256:c54ec4763b0edd8b5ee6a763fc61e344e3b7e98ef9040028cab2da0664e32125"
+  worker_image_uri = "${module.ecr.worker_repo_url}@sha256:1af0918c0336b5f6c8f138a287157fe824bf80f18d87ee06071ec5add1b72d01"
 
   qdrant_url       = var.qdrant_url
   ingest_queue_url = module.sqs.ingest_queue_url
@@ -51,7 +51,8 @@ module "ecs" {
   raw_bucket     = module.s3.raw_bucket
   derived_bucket = module.s3.derived_bucket
 
-  groq_secret_arn = module.secrets.groq_secret_arn
+  groq_secret_arn   = module.secrets.groq_secret_arn
+  qdrant_secret_arn = module.secrets.qdrant_secret_arn
   # db_secret_arn   = module.secrets.db_secret_arn
 
   sources_table_name = module.dynamodb.sources_table_name
@@ -67,7 +68,8 @@ module "iam" {
   raw_bucket_arn     = module.s3.raw_bucket_arn
   derived_bucket_arn = module.s3.derived_bucket_arn
 
-  groq_secret_arn = module.secrets.groq_secret_arn
+  groq_secret_arn   = module.secrets.groq_secret_arn
+  qdrant_secret_arn = module.secrets.qdrant_secret_arn
   # db_secret_arn   = module.secrets.db_secret_arn
 
   sources_table_arn = module.dynamodb.sources_table_arn
@@ -89,7 +91,7 @@ module "lambda" {
 
   lambda_role_arn = module.iam.lambda_role_arn
 
-  image_uri = "${module.ecr.api_repo_url}@sha256:50f70f5fec953bb40380f983503a8cb57079366f1c66a0b0c07c5cfe13495576" # :${var.image_tag}
+  image_uri = "${module.ecr.api_repo_url}@sha256:90c1d8566b54dd4cb014ff99f2a4be926c4a089c9375583d02bf409acc704cc6" # :${var.image_tag}
 
   qdrant_url       = var.qdrant_url
   ingest_queue_url = module.sqs.ingest_queue_url

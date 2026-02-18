@@ -56,6 +56,8 @@ def build_ingestion_settings(
     if collection_name is not None:
         settings.collection_name = collection_name
 
+    return settings
+
 
 # @contextmanager
 # def db_session() -> Iterator:

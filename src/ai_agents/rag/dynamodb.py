@@ -149,22 +149,23 @@ def update_job(
     error: Optional[str] = None,
 ) -> None:
     tbl = jobs_table()
-    expression = "SET #s = :s, updated_at = :u"
-    names = {"#s": "status"}
-    vals: Dict[str, Any] = {":s": status, ":u": _now_iso()}
+    UpdateExpression = "SET #st = :st, #err = :err"
+    ExpressionAttributeNames = {"#st": "status", "#err": "error"}
+    ExpressionAttributeValues: Dict[str, Any] = {":st": status, ":err": error}
 
     if ingested_chunks is not None:
-        expression += ", ingested_chunks = :c"
-        vals[":c"] = int(ingested_chunks)
-    if error is not None:
-        expression += ", error = :e"
-        vals[":e"] = error
+        UpdateExpression += ", ingested_chunks = :c"
+        ExpressionAttributeValues[":c"] = int(ingested_chunks)
+
+    # if error is not None:
+    #     UpdateExpression += ", error = :e"
+    #     vals[":e"] = error
 
     tbl.update_item(
         Key={"pk": job_pk(job_id)},
-        UpdateExpression=expression,
-        ExpressionAttributeNames=names,
-        ExpressionAttributeValues=vals,
+        UpdateExpression=UpdateExpression,
+        ExpressionAttributeNames=ExpressionAttributeNames,
+        ExpressionAttributeValues=ExpressionAttributeValues,
     )
 
 

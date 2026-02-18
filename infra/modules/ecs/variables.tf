@@ -18,6 +18,7 @@ variable "raw_bucket" { type = string }
 variable "derived_bucket" { type = string }
 
 variable "groq_secret_arn" { type = string }
+variable "qdrant_secret_arn" { type = string }
 # variable "db_secret_arn" { type = string }
 
 variable "sources_table_name" { type = string }

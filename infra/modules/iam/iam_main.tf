@@ -27,14 +27,47 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
 # }
 
 data "aws_iam_policy_document" "lambda_inline" {
+  statement {
+    actions = [
+      "secretsmanager:GetSecretValue",
+      "secretsmanager:DescribeSecret",
+      "secretsmanager:GetResourcePolicy",
+      "secretsmanager:ListSecrets",
+    ]
+    resources = [
+      var.groq_secret_arn,
+      var.qdrant_secret_arn
+    ]
+  }
+
   # statement {
-  #   actions   = ["secretsmanager:GetSecretValue"]
-  #   resources = [var.groq_secret_arn, var.db_secret_arn]
+  #   actions   = [
+  #     "sqs:SendMessage",
+  #     "sqs:DeleteMessage",
+  #     "sqs:GetQueueAttributes",
+  #     "sqs:ChangeMessageVisibility",
+  #     "sqs:GetQueueURL"
+  #   ]
+  #   resources = [var.ingest_queue_arn]
   # }
 
   statement {
-    actions   = ["sqs:SendMessage"]
-    resources = [var.ingest_queue_arn]
+    actions = [
+      "sqs:ListQueues",
+      "sqs:CreateQueue",
+      "sqs:TagQueue",
+      "sqs:DeleteQueue",
+      "sqs:PurgeQueue",
+      "sqs:ListQueueTags",
+      "sqs:SendMessage",
+      "sqs:ReceiveMessage",
+      "sqs:DeleteMessage",
+      "sqs:GetQueueAttributes",
+      "sqs:SetQueueAttributes",
+      "sqs:ChangeMessageVisibility",
+      "sqs:GetQueueURL"
+    ]
+    resources = ["*"]
   }
 
   statement {
@@ -89,6 +122,26 @@ data "aws_iam_policy_document" "ecs_exec_assume" {
       identifiers = ["ecs-tasks.amazonaws.com"]
     }
   }
+
+}
+
+
+data "aws_iam_policy_document" "ecs_exec_secrets" {
+  statement {
+    actions = [
+      "secretsmanager:GetSecretValue",
+      "secretsmanager:DescribeSecret"
+    ]
+    resources = [
+      var.groq_secret_arn,
+      var.qdrant_secret_arn
+    ]
+  }
+}
+
+resource "aws_iam_policy" "ecs_exec_secrets" {
+  name   = "${var.name}-ecs-exec-secrets"
+  policy = data.aws_iam_policy_document.ecs_exec_secrets.json
 }
 
 resource "aws_iam_role" "ecs_execution" {
@@ -101,6 +154,12 @@ resource "aws_iam_role_policy_attachment" "ecs_exec" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
+resource "aws_iam_role_policy_attachment" "ecs_exec_secrets" {
+  role       = aws_iam_role.ecs_execution.name
+  policy_arn = aws_iam_policy.ecs_exec_secrets.arn
+}
+
+
 # ---- ECS Task Role (your worker permissions) ----
 resource "aws_iam_role" "ecs_task" {
   name               = "${var.name}-ecs-task-role"
@@ -109,25 +168,55 @@ resource "aws_iam_role" "ecs_task" {
 
 data "aws_iam_policy_document" "ecs_task_inline" {
   statement {
-    actions = ["secretsmanager:GetSecretValue"]
+    actions = [
+      "secretsmanager:GetSecretValue",
+      "secretsmanager:DescribeSecret",
+      "secretsmanager:GetResourcePolicy",
+      "secretsmanager:ListSecrets"
+    ]
     resources = [
       var.groq_secret_arn,
-      # var.db_secret_arn
+      var.qdrant_secret_arn
     ]
+  }
+
+  # statement {
+  #   actions   = [
+  #     "sqs:SendMessage",
+  #     "sqs:DeleteMessage",
+  #     "sqs:GetQueueAttributes",
+  #     "sqs:ChangeMessageVisibility",
+  #     "sqs:GetQueueURL"
+  #   ]
+  #   resources = [var.ingest_queue_arn]
+  # }
+
+  statement {
+    actions = [
+      "sqs:ListQueues",
+      "sqs:CreateQueue",
+      "sqs:TagQueue",
+      "sqs:DeleteQueue",
+      "sqs:PurgeQueue",
+      "sqs:ListQueueTags",
+      "sqs:SendMessage",
+      "sqs:ReceiveMessage",
+      "sqs:DeleteMessage",
+      "sqs:GetQueueAttributes",
+      "sqs:SetQueueAttributes",
+      "sqs:ChangeMessageVisibility",
+      "sqs:GetQueueURL"
+    ]
+    resources = ["*"]
   }
 
   statement {
     actions = [
-      "sqs:ReceiveMessage",
-      "sqs:DeleteMessage",
-      "sqs:GetQueueAttributes",
-      "sqs:ChangeMessageVisibility"
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:ListBucket"
     ]
-    resources = [var.ingest_queue_arn]
-  }
 
-  statement {
-    actions = ["s3:GetObject", "s3:PutObject", "s3:ListBucket"]
     resources = [
       var.raw_bucket_arn,
       "${var.raw_bucket_arn}/*",

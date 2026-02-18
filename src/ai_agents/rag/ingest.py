@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import boto3
 from urllib.parse import urlparse
 from pathlib import Path
@@ -20,9 +21,9 @@ from .splitter import split_docs
 from .vectorstore import build_qdrant, delete_source, upsert_documents
 from .dynamodb import upsert_source_if_changed
 # from ai_agents.db.session import SessionLocal
-from ai_agents.rag.repo import upsert_source, replace_chunks
-from sqlalchemy import select
-from ai_agents.db.models import RagSource 
+# from ai_agents.rag.repo import upsert_source, replace_chunks
+# from sqlalchemy import select
+# from ai_agents.db.models import RagSource 
 from ai_agents.config.constants import QDRANT_ID_NAMESPACE
 
 from .preprocess import (
@@ -48,6 +49,117 @@ def parse_s3_uri(uri: str) -> tuple[str, str]:
     key = u.path.lstrip("/")
 
     return bucket, key
+
+
+
+def _normalize_s3_uri(uri: str) -> str:
+    """
+    Accepts both:
+      - s3://bucket/key
+      - s3:/bucket/key  (incorrect)
+    Returns canonical s3://bucket/key
+    """
+    uri = uri.strip()
+
+    if uri.startswith("s3:/") and not uri.startswith("s3://"):
+        return "s3://" + uri[len("s3:/"):].lstrip("/")
+    
+    return uri
+
+
+def _is_s3_uri(x: str) -> bool:
+    x = x.strip()
+    return x.startswith("s3://") or (x.startswith("s3:/") and not x.startswith("s3://"))
+
+
+def _looks_like_prefix(key: str) -> bool:
+    # Treat "folder-like" keys as prefixes
+    return key.endswith("/") or not re.search(r"\.[A-Za-z0-9]{1,6}$", key)
+
+
+def _resolve_inputs_to_local(paths: Iterable[str | Path]) -> tuple[list[Path], dict[str, str], dict[str, str]]:
+    """
+    Resolve any S3 URIs into real local /tmp files so the rest of the pipeline
+    can operate on Path objects.
+
+    Returns:
+      - local_paths: list[Path]
+      - source_uri_by_local_abs: dict[str(abs_local_path)] -> "s3://bucket/key" OR "file:..."
+      - rel_by_local_abs: dict[str(abs_local_path)] -> s3 key OR repo-relative rel path
+    """
+    local_paths: list[Path] = []
+    source_uri_by_local_abs: dict[str, str] = {}
+    rel_by_local_abs: dict[str, str] = {}
+
+    for x in paths:
+        # Path input (local)
+        if isinstance(x, Path):
+            p = x.resolve()
+            abs_p = str(p)
+
+            path_rel, source_uri = _get_rel_and_source(p)
+
+            local_paths.append(p)
+            source_uri_by_local_abs[abs_p] = source_uri
+            rel_by_local_abs[abs_p] = path_rel
+            continue
+
+        s = str(x)
+
+        # Local string path
+        if not _is_s3_uri(s):
+            p = Path(s).resolve()
+            abs_p = str(p)
+
+            path_rel, source_uri = _get_rel_and_source(p)
+
+            local_paths.append(p)
+            source_uri_by_local_abs[abs_p] = source_uri
+            rel_by_local_abs[abs_p] = path_rel
+            continue
+
+        # S3 uri
+        s3_uri = _normalize_s3_uri(s)
+        bucket, key = parse_s3_uri(s3_uri)
+
+        # Expand prefixes into object keys
+        if _looks_like_prefix(key):
+            prefix = key
+            if prefix and not prefix.endswith("/"):
+                prefix += "/"
+
+            for obj_key in list_s3_keys(bucket, prefix):
+                local = Path(download_to_tmp(bucket, obj_key)).resolve()
+                abs_local = str(local)
+
+                local_paths.append(local)
+                source_uri_by_local_abs[abs_local] = f"s3://{bucket}/{obj_key}"
+                rel_by_local_abs[abs_local] = obj_key
+        else:
+            local = Path(download_to_tmp(bucket, key)).resolve()
+            abs_local = str(local)
+
+            local_paths.append(local)
+            source_uri_by_local_abs[abs_local] = s3_uri
+            rel_by_local_abs[abs_local] = key
+
+    return local_paths, source_uri_by_local_abs, rel_by_local_abs
+
+
+
+def _content_hash_for_source(source_uri: str, local_path: Path | None = None) -> str:
+    # S3: use HEAD fingerprint
+    if source_uri.startswith("s3://"):
+        bucket, key = parse_s3_uri(source_uri)
+        fp = head_content_fingerprint(bucket, key)
+        return hashlib.sha256(fp.encode("utf-8")).hexdigest()
+
+    # Local: hash bytes
+    if local_path is None:
+        raise ValueError("local_path required for non-s3 source")
+    
+    return _sha256_file(local_path)
+
 
 
 def list_s3_keys(bucket: str, prefix: str) -> list[str]:
@@ -254,21 +366,26 @@ def _categorize_paths(paths: Iterable[str | Path]) -> tuple[list[Path], list[Pat
 
 
 
-# Production version
+#############################################
+################ Prod version ################
+#############################################
 def _detect_unchanged_sources_dynamodb(
     paths: list[Path],
-    settings: RagSettings
+    settings: RagSettings,
+    source_uri_by_local_abs: dict[str, str]
 ) -> tuple[set[str], dict[str, str]]:
     """
     Computes file hashes and checks DynamoDB to identify sources that haven't changed.
     Returns a set of unchanged source URIs and a dict of current candidate hashes.
     """
+    
     candidate_hashes: dict[str, str] = {}
     unchanged_sources: set[str] = set()
 
     for p in paths:
-        _, source_uri = _get_rel_and_source(p)
-        candidate_hashes[source_uri] = _sha256_file(p)
+        abs_p = str(p.resolve())
+        source_uri = source_uri_by_local_abs.get(abs_p, _get_rel_and_source(p)[1])
+        candidate_hashes[source_uri] = _content_hash_for_source(source_uri, local_path=p)
 
     for source_uri, content_hash in candidate_hashes.items():
         item = _get_source_item(settings.namespace, source_uri)
@@ -602,35 +719,82 @@ def _group_and_upsert_docs(
 
 
 
+
+
+#############################################
+################ Dev version ################
+#############################################
+
+# @traceable
+# def ingest_files(paths: Iterable[str | Path], settings: RagSettings) -> int:
+#     # 1. Categorize Inputs
+#     text_paths, pdf_paths, img_paths = _categorize_paths(paths)
+#     all_paths = text_paths + pdf_paths + img_paths
+    
+#     # 2. Detect Changes
+#     unchanged_sources, _ = _detect_unchanged_sources_dynamodb(all_paths, settings)
+
+#     # Dev version
+#     # unchanged_sources, _ = _detect_unchanged_sources(all_paths, settings) 
+    
+#     # 3. Process Derived Files (OCR/VLM)
+#     derived_md_paths, failures = _process_derived_files(pdf_paths, img_paths, unchanged_sources, settings)
+
+#     for f in failures:
+#         print(f"[ingest] WARN stage={f.stage} source={f.source_uri} err={f.error_type}: {f.message}")
+
+#     # 4. Load Documents
+#     docs = _load_documents(text_paths, derived_md_paths, unchanged_sources)
+#     if not docs:
+#         return 0
+
+#     # 5. Embed and Upsert
+#     embeddings = build_fastembed_embeddings(settings.embedding_model, settings.chunk_size)
+    
+#     return _group_and_upsert_docs(docs, settings, embeddings)
+
+
+
+
+#############################################
+################ Prod version ################
+#############################################
+
 @traceable
 def ingest_files(paths: Iterable[str | Path], settings: RagSettings) -> int:
-    # 1. Categorize Inputs
-    text_paths, pdf_paths, img_paths = _categorize_paths(paths)
+    # 0) Resolve S3 URIs -> local /tmp files (and keep mapping to original source_uri)
+    local_inputs, source_uri_by_local_abs, rel_by_local_abs = _resolve_inputs_to_local(paths)
+
+    # 1) Categorize Inputs (only local Paths now)
+    text_paths, pdf_paths, img_paths = _categorize_paths(local_inputs)
     all_paths = text_paths + pdf_paths + img_paths
-    
-    # 2. Detect Changes
-    unchanged_sources, _ = _detect_unchanged_sources_dynamodb(all_paths, settings)
 
-    # Dev version
-    # unchanged_sources, _ = _detect_unchanged_sources(all_paths, settings) 
-    
-    # 3. Process Derived Files (OCR/VLM)
+    # 2) Detect Changes (hash local bytes)
+    unchanged_sources, _ = _detect_unchanged_sources_dynamodb(all_paths, settings, source_uri_by_local_abs)
+
+    # 3) Process Derived Files (OCR/VLM)
     derived_md_paths, failures = _process_derived_files(pdf_paths, img_paths, unchanged_sources, settings)
-
     for f in failures:
         print(f"[ingest] WARN stage={f.stage} source={f.source_uri} err={f.error_type}: {f.message}")
 
-    # 4. Load Documents
+    # 4) Load Documents (only local Paths)
     docs = _load_documents(text_paths, derived_md_paths, unchanged_sources)
     if not docs:
         return 0
 
-    # 5. Embed and Upsert
+    # 4.5) Override doc metadata to use original S3 source_uri (not file:/tmp/...)
+    for doc in docs:
+        p = doc.metadata.get("path")
+        if not p:
+            continue
+        abs_p = str(Path(p).resolve())
+        if abs_p in source_uri_by_local_abs:
+            doc.metadata["source_uri"] = source_uri_by_local_abs[abs_p]
+            doc.metadata["path_rel"] = rel_by_local_abs.get(abs_p, doc.metadata.get("path_rel"))
+
+    # 5) Embed and Upsert
     embeddings = build_fastembed_embeddings(settings.embedding_model, settings.chunk_size)
-    
     return _group_and_upsert_docs(docs, settings, embeddings)
-
-
 
 
 

@@ -36,6 +36,17 @@ resource "aws_ecs_task_definition" "worker" {
         { name = "JOBS_TABLE", value = var.jobs_table_name }
       ]
 
+      secrets = [
+        {
+          name      = "GROQ_API_KEY"
+          valueFrom = "${var.groq_secret_arn}:GROQ_API_KEY::"
+        },
+        {
+          name      = "QDRANT_API_KEY"
+          valueFrom = "${var.qdrant_secret_arn}:QDRANT_API_KEY::"
+        }
+      ]
+
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -56,8 +67,8 @@ resource "aws_ecs_service" "worker" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets         = var.public_subnet_ids
-    security_groups = [var.worker_sg_id]
+    subnets          = var.public_subnet_ids
+    security_groups  = [var.worker_sg_id]
     assign_public_ip = true
   }
 }
