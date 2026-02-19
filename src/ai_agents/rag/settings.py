@@ -24,9 +24,13 @@ class RagSettings(BaseModel):
     # ollama_url: str = getattr(settings, "ollama_url", getattr(settings, "ollama_host", "http://localhost:11434"))
     qdrant_url: str = getattr(settings, "qdrant_url", "http://localhost:6333")
     groq_api_url: str = getattr(settings, "groq_api_url", os.environ.get("GROQ_API_URL"))
+    langsmith_api_url: str = getattr(settings, "langsmith_api_url", os.environ.get("LANGCHAIN_ENDPOINT"))
+    langchain_project: str = getattr(settings, "langchain_project", os.environ.get("LANGCHAIN_PROJECT"))
+    
 
     qdrant_api_key: str | None = settings.resolved_qdrant_api_key()
     groq_api_key: str | None = settings.resolved_groq_api_key()
+    langchain_api_key: str | None = settings.resolved_langchain_api_key()
 
 
 

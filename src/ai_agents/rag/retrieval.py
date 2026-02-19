@@ -8,6 +8,7 @@ from langsmith import traceable
 from qdrant_client import QdrantClient
 
 from ai_agents.core.retry import retry
+from ai_agents.config.settings import settings as config_settings
 
 from .singletons import get_retriever
 from .settings import RagSettings
@@ -165,7 +166,10 @@ def parallel_retrieve_collections(
 @lru_cache(maxsize=8)
 def _list_qdrant_collections(qdrant_url: str) -> List[str]:
     """Return raw Qdrant collection names."""
-    client = QdrantClient(url=qdrant_url)
+    client = QdrantClient(
+        url=qdrant_url,
+        api_key=config_settings.resolved_qdrant_api_key()
+    )
     cols = client.get_collections().collections
     return [c.name for c in cols]
 

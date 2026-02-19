@@ -27,13 +27,16 @@ resource "aws_ecs_task_definition" "worker" {
 
       environment = [
         { name = "QDRANT_URL", value = var.qdrant_url },
+        { name = "LANGSMITH_URL", value = var.langsmith_url },
         { name = "INGEST_QUEUE_URL", value = var.ingest_queue_url },
         { name = "RAW_BUCKET", value = var.raw_bucket },
         { name = "DERIVED_BUCKET", value = var.derived_bucket },
         { name = "GROQ_SECRET_ARN", value = var.groq_secret_arn },
-        # { name = "DB_SECRET_ARN", value = var.db_secret_arn }
+        { name = "LANGCHAIN_SECRET_ARN", value = var.langchain_secret_arn },
         { name = "SOURCES_TABLE", value = var.sources_table_name },
-        { name = "JOBS_TABLE", value = var.jobs_table_name }
+        { name = "JOBS_TABLE", value = var.jobs_table_name },
+        { name = "LANGCHAIN_PROJECT", value = var.langchain_project },
+        { name = "LANGCHAIN_TRACING_V2", value = tostring(var.langchain_tracing_v2) },
       ]
 
       secrets = [
@@ -44,6 +47,10 @@ resource "aws_ecs_task_definition" "worker" {
         {
           name      = "QDRANT_API_KEY"
           valueFrom = "${var.qdrant_secret_arn}:QDRANT_API_KEY::"
+        },
+        {
+          name      = "LANGCHAIN_API_KEY"
+          valueFrom = "${var.langchain_secret_arn}:LANGCHAIN_API_KEY::"
         }
       ]
 

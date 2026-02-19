@@ -181,7 +181,7 @@ def caption_image(image_path: Path, *, caption_model: str) -> str:
     if not image_path.exists():
         raise FileNotFoundError(f"Image not found: {image_path}")
 
-    if not settings.groq_api_key:
+    if not settings.resolved_groq_api_key():
         raise ValueError("Missing GROQ_API_KEY (settings.groq_api_key).")
     
     
@@ -191,7 +191,7 @@ def caption_image(image_path: Path, *, caption_model: str) -> str:
         mime_type = "image/png"
 
 
-    api_key = settings.groq_api_key
+    api_key = settings.resolved_groq_api_key()
 
     img_b64 = base64.b64encode(image_path.read_bytes()).decode()
     data_url = f"data:{mime_type};base64,{img_b64}"

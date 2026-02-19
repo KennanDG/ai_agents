@@ -14,7 +14,7 @@ def expand_queries(question: str, chat_model: str, n: int = 5) -> List[str]:
     
     llm = ChatGroq(
         model=chat_model,
-        api_key=settings.groq_api_key,
+        api_key=settings.resolved_groq_api_key(),
         temperature=0.3,
     )
 

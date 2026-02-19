@@ -7,6 +7,7 @@ variable "lambda_role_arn" { type = string }
 variable "image_uri" { type = string }
 
 variable "qdrant_url" { type = string }
+variable "langsmith_url" { type = string }
 variable "ingest_queue_url" { type = string }
 
 variable "raw_bucket" { type = string }
@@ -14,7 +15,10 @@ variable "derived_bucket" { type = string }
 
 variable "groq_secret_arn" { type = string }
 variable "qdrant_secret_arn" { type = string }
-# variable "db_secret_arn" { type = string }
+variable "langchain_secret_arn" { type = string }
 
 variable "sources_table_name" { type = string }
 variable "jobs_table_name" { type = string }
+
+variable "langchain_tracing_v2" { type = bool }
+variable "langchain_project" { type = string }

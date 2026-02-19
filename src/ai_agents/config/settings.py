@@ -14,7 +14,8 @@ class Settings(BaseSettings):
             return self.groq_api_key
         
         if self.groq_secret_arn:
-            return get_secret_json(self.groq_secret_arn).get("GROQ_API_KEY")
+            self.groq_api_key = get_secret_json(self.groq_secret_arn).get("GROQ_API_KEY")
+            return self.groq_api_key
         
         return None
 
@@ -24,18 +25,35 @@ class Settings(BaseSettings):
             return self.qdrant_api_key
         
         if self.qdrant_secret_arn:
-            return get_secret_json(self.qdrant_secret_arn).get("QDRANT_API_KEY")
+            self.qdrant_api_key = get_secret_json(self.qdrant_secret_arn).get("QDRANT_API_KEY")
+            return self.qdrant_api_key
         
         return None
+    
+
+    def resolved_langchain_api_key(self) -> str | None:
+        if self.langchain_api_key:
+            return self.langchain_api_key
+        
+        if self.langchain_secret_arn:
+            self.langchain_api_key = get_secret_json(self.langchain_secret_arn).get("LANGCHAIN_API_KEY")
+            return self.langchain_api_key
+        
+        return None
+    
+
     
     model_config = SettingsConfigDict(
         env_file=os.getenv("ENV_FILE", ".env"),
         extra="ignore"
         )
 
-    # Ollama
-    # ollama_host: str = Field(default="http://localhost:11434", alias="OLLAMA_HOST")
-    # ollama_url: str = Field(default="http://host.docker.internal:11434", alias="OLLAMA_URL")
+
+    # LangChain
+    langchain_api_key: str | None = Field(default=None, alias="LANGCHAIN_API_KEY")
+    langsmith_api_url: str | None = Field(default="https://api.smith.langchain.com", alias="LANGCHAIN_ENDPOINT")
+    langchain_secret_arn: str | None = Field(default=None, alias="LANGCHAIN_SECRET_ARN")
+    langchain_project : str = Field(default="ai-agents-dev", alias="LANGCHAIN_PROJECT")
 
 
     # Groq

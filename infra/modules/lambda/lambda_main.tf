@@ -8,22 +8,31 @@ resource "aws_lambda_function" "this" {
   timeout     = 30
   memory_size = 1024
 
-  # vpc_config {
-  #   subnet_ids         = var.private_subnet_ids
-  #   security_group_ids = [var.lambda_sg_id]
-  # }
+  ephemeral_storage {
+    size = 4096 # (4GB)
+  }
 
   environment {
     variables = {
-      QDRANT_URL        = var.qdrant_url
-      INGEST_QUEUE_URL  = var.ingest_queue_url
-      RAW_BUCKET        = var.raw_bucket
-      DERIVED_BUCKET    = var.derived_bucket
-      GROQ_SECRET_ARN   = var.groq_secret_arn
-      QDRANT_SECRET_ARN = var.qdrant_secret_arn
-      # DB_SECRET_ARN     = var.db_secret_arn
-      SOURCES_TABLE = var.sources_table_name
-      JOBS_TABLE    = var.jobs_table_name
+      QDRANT_URL           = var.qdrant_url
+      INGEST_QUEUE_URL     = var.ingest_queue_url
+      LANGCHAIN_ENDPOINT   = var.langsmith_url
+      RAW_BUCKET           = var.raw_bucket
+      DERIVED_BUCKET       = var.derived_bucket
+      GROQ_SECRET_ARN      = var.groq_secret_arn
+      QDRANT_SECRET_ARN    = var.qdrant_secret_arn
+      LANGCHAIN_SECRET_ARN = var.langchain_secret_arn
+      SOURCES_TABLE        = var.sources_table_name
+      JOBS_TABLE           = var.jobs_table_name
+
+      LANGCHAIN_TRACING_V2 = tostring(var.langchain_tracing_v2)
+      LANGCHAIN_PROJECT    = var.langchain_project
+
+      FASTEMBED_CACHE_PATH  = "/tmp/fastembed_cache"
+      HF_HOME               = "/tmp/hf"
+      HUGGINGFACE_HUB_CACHE = "/tmp/hf/hub"
+      TRANSFORMERS_CACHE    = "/tmp/hf/transformers"
+
     }
   }
 }

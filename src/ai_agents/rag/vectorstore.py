@@ -10,6 +10,7 @@ from qdrant_client.models import Distance, VectorParams, Filter, FieldCondition,
 
 from .settings import RagSettings
 from ai_agents.config.secrets import get_secret_json
+from ai_agents.config.settings import settings as config_settings
 
 
 # Vector dimension sizes
@@ -24,15 +25,11 @@ def build_qdrant(
     collection_name_override: Optional[str] = None,
 ):
     
-    qdrant_api_key = os.getenv("QDRANT_API_KEY")
-
-    if not qdrant_api_key and os.getenv("QDRANT_SECRET_ARN"):
-        qdrant_api_key = get_secret_json(os.environ["QDRANT_SECRET_ARN"])["QDRANT_API_KEY"]
 
     client = QdrantClient(
         url=settings.qdrant_url,
-        api_key=qdrant_api_key
-        )
+        api_key=config_settings.resolved_qdrant_api_key()
+    )
 
     base_collection = collection_name_override or settings.collection_name
     collection_name = f"{base_collection}-{settings.namespace}"

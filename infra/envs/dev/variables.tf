@@ -42,6 +42,12 @@ variable "groq_url" {
 }
 
 
+variable "langsmith_url" {
+  type        = string
+  description = "LangSmith API endpoint"
+}
+
+
 variable "github_owner" {
   type        = string
   description = "GitHub account"
@@ -67,18 +73,24 @@ variable "qdrant_api_key" {
   sensitive = true
 }
 
-# variable "db_username" {
-#   type    = string
-#   default = "ai_agents"
-# }
 
-# variable "db_password" {
-#   type      = string
-#   sensitive = true
-# }
+variable "langchain_api_key" {
+  type      = string
+  sensitive = true
+}
 
-# variable "db_name" {
-#   type    = string
-#   default = "ai_agents"
-# }
+
+
+variable "langchain_project" {
+  type        = string
+  description = "LangSmith tracing project"
+  default     = "ai-agents-dev"
+}
+
+
+variable "langchain_tracing_v2" {
+  type    = bool
+  default = true
+}
+
 

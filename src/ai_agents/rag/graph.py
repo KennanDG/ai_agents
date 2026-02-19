@@ -10,8 +10,6 @@ from langchain_groq import ChatGroq
 from langsmith import traceable
 from langgraph.graph import StateGraph, START, END
 
-from qdrant_client import QdrantClient
-
 from ai_agents.core.retry import retry
 
 from .settings import RagSettings
