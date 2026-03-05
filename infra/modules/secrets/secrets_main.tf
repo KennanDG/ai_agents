@@ -25,3 +25,13 @@ resource "aws_secretsmanager_secret_version" "langchain" {
   secret_id     = aws_secretsmanager_secret.langchain.id
   secret_string = jsonencode({ LANGCHAIN_API_KEY = var.langchain_api_key })
 }
+
+
+resource "aws_secretsmanager_secret" "jina" {
+  name = "${var.name}/jina"
+}
+
+resource "aws_secretsmanager_secret_version" "jina" {
+  secret_id     = aws_secretsmanager_secret.jina.id
+  secret_string = jsonencode({ JINA_API_KEY = var.jina_api_key })
+}

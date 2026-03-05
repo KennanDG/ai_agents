@@ -46,6 +46,8 @@ module "ecs" {
   worker_image_uri = "${module.ecr.worker_repo_url}@sha256:0f08f51f18019b0ffb81d8584b4a1a5968aa8b2c4bdfb2c74aa32e6a57a78021"
 
   qdrant_url       = var.qdrant_url
+  groq_url         = var.groq_url
+  jina_url         = var.jina_url
   ingest_queue_url = module.sqs.ingest_queue_url
   langsmith_url    = var.langsmith_url
 
@@ -55,6 +57,7 @@ module "ecs" {
   groq_secret_arn      = module.secrets.groq_secret_arn
   qdrant_secret_arn    = module.secrets.qdrant_secret_arn
   langchain_secret_arn = module.secrets.langchain_secret_arn
+  jina_secret_arn      = module.secrets.jina_secret_arn
 
   sources_table_name = module.dynamodb.sources_table_name
   jobs_table_name    = module.dynamodb.jobs_table_name
@@ -64,7 +67,7 @@ module "ecs" {
 
   api_sg_id     = module.network.api_sg_id
   alb_sg_id     = module.network.alb_sg_id
-  api_image_uri = "${module.ecr.api_repo_url}@sha256:26fe3d1079519f164bb4a7e2bf7d67411d3227d5ac9dfc83b394e8e960ea9190"
+  api_image_uri = "${module.ecr.api_repo_url}@sha256:7e258595ff708324156298aa376f6beca8097910703a607585ddea539373874f"
 }
 
 
@@ -79,6 +82,7 @@ module "iam" {
   groq_secret_arn      = module.secrets.groq_secret_arn
   qdrant_secret_arn    = module.secrets.qdrant_secret_arn
   langchain_secret_arn = module.secrets.langchain_secret_arn
+  jina_secret_arn      = module.secrets.jina_secret_arn
 
   sources_table_arn = module.dynamodb.sources_table_arn
   jobs_table_arn    = module.dynamodb.jobs_table_arn
@@ -141,6 +145,7 @@ module "secrets" {
   groq_api_key      = var.groq_api_key
   qdrant_api_key    = var.qdrant_api_key
   langchain_api_key = var.langchain_api_key
+  jina_api_key      = var.jina_api_key
 
 }
 

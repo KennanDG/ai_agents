@@ -42,6 +42,12 @@ variable "groq_url" {
 }
 
 
+variable "jina_url" {
+  type        = string
+  description = "Base URL for Jina rerank API endpoint"
+}
+
+
 variable "langsmith_url" {
   type        = string
   description = "LangSmith API endpoint"
@@ -75,6 +81,12 @@ variable "qdrant_api_key" {
 
 
 variable "langchain_api_key" {
+  type      = string
+  sensitive = true
+}
+
+
+variable "jina_api_key" {
   type      = string
   sensitive = true
 }

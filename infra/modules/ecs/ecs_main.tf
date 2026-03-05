@@ -47,6 +47,8 @@ resource "aws_ecs_task_definition" "worker" {
 
       environment = [
         { name = "QDRANT_URL", value = var.qdrant_url },
+        { name = "GROQ_URL", value = var.groq_url },
+        { name = "JINA_URL", value = var.jina_url },
         { name = "LANGSMITH_URL", value = var.langsmith_url },
         { name = "INGEST_QUEUE_URL", value = var.ingest_queue_url },
         { name = "RAW_BUCKET", value = var.raw_bucket },
@@ -77,6 +79,10 @@ resource "aws_ecs_task_definition" "worker" {
         {
           name      = "LANGCHAIN_API_KEY"
           valueFrom = "${var.langchain_secret_arn}:LANGCHAIN_API_KEY::"
+        },
+        {
+          name      = "JINA_API_KEY"
+          valueFrom = "${var.jina_secret_arn}:JINA_API_KEY::"
         }
       ]
 
@@ -221,10 +227,7 @@ resource "aws_ecs_task_definition" "api" {
         { containerPort = 8000, hostPort = 8000, protocol = "tcp" }
       ]
 
-      command = [
-        "/bin/sh", "-lc",
-        "python -m ai_agents.scripts.warm_models_2 && uvicorn ai_agents.api.main:app --host 0.0.0.0 --port 8000"
-      ]
+      command = ["uvicorn", "ai_agents.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
       mountPoints = [
         { sourceVolume = "models", containerPath = "/mnt/models", readOnly = false }
@@ -232,6 +235,8 @@ resource "aws_ecs_task_definition" "api" {
 
       environment = [
         { name = "QDRANT_URL", value = var.qdrant_url },
+        { name = "GROQ_URL", value = var.groq_url },
+        { name = "JINA_URL", value = var.jina_url },
         { name = "LANGSMITH_URL", value = var.langsmith_url },
         { name = "INGEST_QUEUE_URL", value = var.ingest_queue_url },
         { name = "RAW_BUCKET", value = var.raw_bucket },
@@ -260,6 +265,10 @@ resource "aws_ecs_task_definition" "api" {
         {
           name      = "LANGCHAIN_API_KEY"
           valueFrom = "${var.langchain_secret_arn}:LANGCHAIN_API_KEY::"
+        },
+        {
+          name      = "JINA_API_KEY"
+          valueFrom = "${var.jina_secret_arn}:JINA_API_KEY::"
         }
       ]
 

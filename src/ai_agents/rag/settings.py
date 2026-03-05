@@ -22,8 +22,9 @@ class RagSettings(BaseModel):
     # -------------------------
     # ollama_host: str = getattr(settings, "ollama_host", "http://localhost:11434")
     # ollama_url: str = getattr(settings, "ollama_url", getattr(settings, "ollama_host", "http://localhost:11434"))
-    qdrant_url: str = getattr(settings, "qdrant_url", "http://localhost:6333")
-    groq_api_url: str = getattr(settings, "groq_api_url", os.environ.get("GROQ_API_URL"))
+    qdrant_url: str = getattr(settings, "qdrant_url", os.environ.get("QDRANT_URL")) # "http://localhost:6333"
+    groq_api_url: str = getattr(settings, "groq_api_url", os.environ.get("GROQ_URL"))
+    jina_api_url: str = getattr(settings, "jina_api_url", os.environ.get("JINA_URL"))
     langsmith_api_url: str = getattr(settings, "langsmith_api_url", os.environ.get("LANGCHAIN_ENDPOINT"))
     langchain_project: str = getattr(settings, "langchain_project", os.environ.get("LANGCHAIN_PROJECT"))
     
@@ -31,6 +32,7 @@ class RagSettings(BaseModel):
     qdrant_api_key: str | None = settings.resolved_qdrant_api_key()
     groq_api_key: str | None = settings.resolved_groq_api_key()
     langchain_api_key: str | None = settings.resolved_langchain_api_key()
+    jina_api_key: str | None = settings.resolved_jina_api_key()
 
 
 
@@ -43,7 +45,7 @@ class RagSettings(BaseModel):
     verify_model: str = getattr(settings, "verify_model", getattr(settings, "chat_model", "llama-3.1-8b-instant"))
     verify_docs_model: str = getattr(settings, "verify_docs_model", getattr(settings, "verify_model", "llama-3.1-8b-instant"))
     caption_model: str = getattr(settings, "caption_model", "meta-llama/llama-4-scout-17b-16e-instruct")
-    rerank_model: str = getattr(settings, "rerank_model", "BAAI/bge-reranker-base")
+    rerank_model: str = getattr(settings, "rerank_model", "jina-reranker-v3")
     rerank_device: str = getattr(settings, "rerank_device", "cpu") 
     
 

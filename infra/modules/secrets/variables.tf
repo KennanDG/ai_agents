@@ -14,3 +14,8 @@ variable "langchain_api_key" {
   type      = string
   sensitive = true
 }
+
+variable "jina_api_key" {
+  type      = string
+  sensitive = true
+}

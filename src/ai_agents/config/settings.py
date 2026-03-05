@@ -42,6 +42,17 @@ class Settings(BaseSettings):
         return None
     
 
+    def resolved_jina_api_key(self) -> str | None:
+        if self.jina_api_key:
+            return self.jina_api_key
+        
+        if self.jina_secret_arn:
+            self.jina_api_key = get_secret_json(self.jina_secret_arn).get("JINA_API_KEY")
+            return self.jina_api_key
+        
+        return None
+    
+
     
     model_config = SettingsConfigDict(
         env_file=os.getenv("ENV_FILE", ".env"),
@@ -57,13 +68,13 @@ class Settings(BaseSettings):
 
 
     # Groq
-    chat_model: str = Field(default="llama-3.1-8b-instant", alias="CHAT_MODEL")                   # Main LLM
-    query_model: str = Field(default="llama-3.1-8b-instant", alias="QUERY_MODEL")         # Query translation   "qwen2.5:3b-instruct"
-    caption_model: str = Field(default="meta-llama/llama-4-scout-17b-16e-instruct", alias="CAPTION_MODEL")                # VLM
+    chat_model: str = Field(default="llama-3.1-8b-instant", alias="CHAT_MODEL")                   
+    query_model: str = Field(default="llama-3.1-8b-instant", alias="QUERY_MODEL")         
+    caption_model: str = Field(default="meta-llama/llama-4-scout-17b-16e-instruct", alias="CAPTION_MODEL")  # VLM
     verify_model: str = Field(default="llama-3.1-8b-instant", alias="VERIFY_MODEL")
     verify_docs_model: str = Field(default="llama-3.1-8b-instant", alias="VERIFY_DOCS_MODEL")
     groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
-    groq_api_url: str | None = Field(default="https://api.groq.com/openai/v1", alias="GROQ_API_URL")
+    groq_api_url: str | None = Field(default="https://api.groq.com/openai/v1", alias="GROQ_URL")
     groq_secret_arn: str | None = Field(default=None, alias="GROQ_SECRET_ARN")
     
 
@@ -75,8 +86,14 @@ class Settings(BaseSettings):
 
     # FastEmbed
     embedding_model: str = Field(default="nomic-ai/nomic-embed-text-v1.5", alias="EMBEDDING_MODEL")    # Doc embedding
-    rerank_model: str = Field(default="BAAI/bge-reranker-base", alias="RERANK_MODEL")
     rerank_device: str = Field(default="cpu", alias="RERANK_DEVICE") 
+
+
+    # Jina AI
+    rerank_model: str = Field(default="jina-reranker-v3", alias="RERANK_MODEL")
+    jina_api_key: str | None = Field(default=None, alias="JINA_API_KEY")
+    jina_api_url: str | None = Field(default="https://api.jina.ai/v1/rerank", alias="JINA_URL")
+    jina_secret_arn: str | None = Field(default=None, alias="JINA_SECRET_ARN")
 
 
     # DB

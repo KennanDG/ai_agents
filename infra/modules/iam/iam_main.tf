@@ -38,7 +38,8 @@ data "aws_iam_policy_document" "lambda_inline" {
     resources = [
       var.groq_secret_arn,
       var.qdrant_secret_arn,
-      var.langchain_secret_arn
+      var.langchain_secret_arn,
+      var.jina_secret_arn
     ]
   }
 
@@ -140,7 +141,8 @@ data "aws_iam_policy_document" "ecs_exec_secrets" {
     resources = [
       var.groq_secret_arn,
       var.qdrant_secret_arn,
-      var.langchain_secret_arn
+      var.langchain_secret_arn,
+      var.jina_secret_arn
     ]
   }
 }
@@ -182,7 +184,9 @@ data "aws_iam_policy_document" "ecs_task_inline" {
     ]
     resources = [
       var.groq_secret_arn,
-      var.qdrant_secret_arn
+      var.qdrant_secret_arn,
+      var.langchain_secret_arn,
+      var.jina_secret_arn
     ]
   }
 
