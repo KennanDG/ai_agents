@@ -1,0 +1,23 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install uv and deps
+COPY pyproject.toml uv.lock ./
+RUN python -m pip install --upgrade pip && pip install "uv==0.5.24"
+
+RUN uv export \
+    --format requirements-txt \
+    --frozen \
+    --no-dev \
+    --no-install-project \
+    -o requirements.txt
+
+RUN pip install --no-cache-dir -r requirements.txt
+
+# App code
+COPY src/ai_agents /app/ai_agents
+
+# Run FastAPI
+EXPOSE 8000
+CMD ["uvicorn", "ai_agents.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

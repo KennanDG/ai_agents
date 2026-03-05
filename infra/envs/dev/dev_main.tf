@@ -1,10 +1,10 @@
-module "api_gateway" {
-  source = "../../modules/api_gateway"
-  name   = var.project_name
+# module "api_gateway" {
+#   source = "../../modules/api_gateway"
+#   name   = var.project_name
 
-  lambda_invoke_arn    = module.lambda.lambda_invoke_arn
-  lambda_function_name = module.lambda.lambda_function_name
-}
+#   lambda_invoke_arn    = module.lambda.lambda_invoke_arn
+#   lambda_function_name = module.lambda.lambda_function_name
+# }
 
 
 # module "db" {
@@ -61,6 +61,10 @@ module "ecs" {
 
   langchain_project    = var.langchain_project
   langchain_tracing_v2 = var.langchain_tracing_v2
+
+  api_sg_id     = module.network.api_sg_id
+  alb_sg_id     = module.network.alb_sg_id
+  api_image_uri = "${module.ecr.api_repo_url}@sha256:26fe3d1079519f164bb4a7e2bf7d67411d3227d5ac9dfc83b394e8e960ea9190"
 }
 
 
@@ -86,34 +90,34 @@ module "iam" {
 }
 
 
-module "lambda" {
-  source = "../../modules/lambda"
-  name   = var.project_name
+# module "lambda" {
+#   source = "../../modules/lambda"
+#   name   = var.project_name
 
-  # private_subnet_ids = module.network.private_subnet_ids
-  lambda_sg_id = module.network.lambda_sg_id
+#   # private_subnet_ids = module.network.private_subnet_ids
+#   lambda_sg_id = module.network.lambda_sg_id
 
-  lambda_role_arn = module.iam.lambda_role_arn
+#   lambda_role_arn = module.iam.lambda_role_arn
 
-  image_uri = "${module.ecr.api_repo_url}@sha256:8c8201c722491d452e2b47e09c37cae1006d8292fb9ccf21c544486450822fc2" # :${var.image_tag}
+#   image_uri = "${module.ecr.api_repo_url}@sha256:8c8201c722491d452e2b47e09c37cae1006d8292fb9ccf21c544486450822fc2" # :${var.image_tag}
 
-  qdrant_url       = var.qdrant_url
-  langsmith_url    = var.langsmith_url
-  ingest_queue_url = module.sqs.ingest_queue_url
+#   qdrant_url       = var.qdrant_url
+#   langsmith_url    = var.langsmith_url
+#   ingest_queue_url = module.sqs.ingest_queue_url
 
-  raw_bucket     = module.s3.raw_bucket
-  derived_bucket = module.s3.derived_bucket
+#   raw_bucket     = module.s3.raw_bucket
+#   derived_bucket = module.s3.derived_bucket
 
-  groq_secret_arn      = module.secrets.groq_secret_arn
-  qdrant_secret_arn    = module.secrets.qdrant_secret_arn
-  langchain_secret_arn = module.secrets.langchain_secret_arn
+#   groq_secret_arn      = module.secrets.groq_secret_arn
+#   qdrant_secret_arn    = module.secrets.qdrant_secret_arn
+#   langchain_secret_arn = module.secrets.langchain_secret_arn
 
-  sources_table_name = module.dynamodb.sources_table_name
-  jobs_table_name    = module.dynamodb.jobs_table_name
+#   sources_table_name = module.dynamodb.sources_table_name
+#   jobs_table_name    = module.dynamodb.jobs_table_name
 
-  langchain_project    = var.langchain_project
-  langchain_tracing_v2 = var.langchain_tracing_v2
-}
+#   langchain_project    = var.langchain_project
+#   langchain_tracing_v2 = var.langchain_tracing_v2
+# }
 
 
 module "network" {

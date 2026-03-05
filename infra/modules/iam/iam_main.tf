@@ -211,7 +211,11 @@ data "aws_iam_policy_document" "ecs_task_inline" {
       "sqs:GetQueueAttributes",
       "sqs:SetQueueAttributes",
       "sqs:ChangeMessageVisibility",
-      "sqs:GetQueueURL"
+      "sqs:GetQueueURL",
+      "ssmmessages:CreateControlChannel",
+      "ssmmessages:CreateDataChannel",
+      "ssmmessages:OpenControlChannel",
+      "ssmmessages:OpenDataChannel"
     ]
     resources = ["*"]
   }

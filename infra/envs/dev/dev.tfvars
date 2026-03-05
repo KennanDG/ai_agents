@@ -21,9 +21,6 @@ langchain_tracing_v2 = true
 langchain_project    = "ai-agents-dev"
 langchain_api_key    = "REDACTED"
 
-# db_username = "ai_agents"
-# db_name     = "ai_agents"
-# db_password = "REDACTED"
 
 
 

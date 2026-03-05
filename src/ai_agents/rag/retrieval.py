@@ -88,7 +88,8 @@ def retrieve_collection(
         attempts=int(getattr(settings, "retrieve_attempts", 2)),
     )
 
-    final_docs = retry(
+    try:
+        final_docs = retry(
         lambda: cross_encoder_rerank(
             question=question,
             docs=fused_docs,
@@ -99,6 +100,9 @@ def retrieve_collection(
         ),
         attempts=int(getattr(settings, "retrieve_attempts", 2)),
     )
+    
+    except Exception as e:
+        final_docs = fused_docs[: settings.k]
 
     if len(final_docs) < min_docs:
         return []
@@ -309,7 +313,8 @@ def dynamic_retrieve(
                 attempts=int(getattr(settings, "retrieve_attempts", 2)),
             )
 
-            final_docs = retry(
+            try:
+                final_docs = retry(
                 lambda: cross_encoder_rerank(
                     question=question,
                     docs=fused_docs,
@@ -320,6 +325,9 @@ def dynamic_retrieve(
                 ),
                 attempts=int(getattr(settings, "retrieve_attempts", 2)),
             )
+            
+            except Exception as e:
+                final_docs = fused_docs[: settings.k]
 
             if len(final_docs) < min_docs:
                 continue

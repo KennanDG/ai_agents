@@ -28,3 +28,8 @@ variable "jobs_table_name" { type = string }
 
 variable "langchain_tracing_v2" { type = bool }
 variable "langchain_project" { type = string }
+
+
+variable "api_sg_id" { type = string }
+variable "alb_sg_id" { type = string }
+variable "api_image_uri" { type = string }
