@@ -20,6 +20,8 @@ dependencies = [
     "pydantic-settings>=2.12.0",
     "qdrant-client>=1.16.2",
     "uvicorn>=0.40.0",
+    "filelock>=3.21.2",
+    "langchain-core>=1.2.12",
 ]
 
 

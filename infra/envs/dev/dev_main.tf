@@ -1,10 +1,10 @@
-module "api_gateway" {
-  source = "../../modules/api_gateway"
-  name   = var.project_name
+# module "api_gateway" {
+#   source = "../../modules/api_gateway"
+#   name   = var.project_name
 
-  lambda_invoke_arn    = module.lambda.lambda_invoke_arn
-  lambda_function_name = module.lambda.lambda_function_name
-}
+#   lambda_invoke_arn    = module.lambda.lambda_invoke_arn
+#   lambda_function_name = module.lambda.lambda_function_name
+# }
 
 
 # module "db" {
@@ -46,17 +46,28 @@ module "ecs" {
   worker_image_uri = "${module.ecr.worker_repo_url}@sha256:0f08f51f18019b0ffb81d8584b4a1a5968aa8b2c4bdfb2c74aa32e6a57a78021"
 
   qdrant_url       = var.qdrant_url
+  groq_url         = var.groq_url
+  jina_url         = var.jina_url
   ingest_queue_url = module.sqs.ingest_queue_url
+  langsmith_url    = var.langsmith_url
 
   raw_bucket     = module.s3.raw_bucket
   derived_bucket = module.s3.derived_bucket
 
-  groq_secret_arn   = module.secrets.groq_secret_arn
-  qdrant_secret_arn = module.secrets.qdrant_secret_arn
-  # db_secret_arn   = module.secrets.db_secret_arn
+  groq_secret_arn      = module.secrets.groq_secret_arn
+  qdrant_secret_arn    = module.secrets.qdrant_secret_arn
+  langchain_secret_arn = module.secrets.langchain_secret_arn
+  jina_secret_arn      = module.secrets.jina_secret_arn
 
   sources_table_name = module.dynamodb.sources_table_name
   jobs_table_name    = module.dynamodb.jobs_table_name
+
+  langchain_project    = var.langchain_project
+  langchain_tracing_v2 = var.langchain_tracing_v2
+
+  api_sg_id     = module.network.api_sg_id
+  alb_sg_id     = module.network.alb_sg_id
+  api_image_uri = "${module.ecr.api_repo_url}@sha256:7e258595ff708324156298aa376f6beca8097910703a607585ddea539373874f"
 }
 
 
@@ -68,9 +79,10 @@ module "iam" {
   raw_bucket_arn     = module.s3.raw_bucket_arn
   derived_bucket_arn = module.s3.derived_bucket_arn
 
-  groq_secret_arn   = module.secrets.groq_secret_arn
-  qdrant_secret_arn = module.secrets.qdrant_secret_arn
-  # db_secret_arn   = module.secrets.db_secret_arn
+  groq_secret_arn      = module.secrets.groq_secret_arn
+  qdrant_secret_arn    = module.secrets.qdrant_secret_arn
+  langchain_secret_arn = module.secrets.langchain_secret_arn
+  jina_secret_arn      = module.secrets.jina_secret_arn
 
   sources_table_arn = module.dynamodb.sources_table_arn
   jobs_table_arn    = module.dynamodb.jobs_table_arn
@@ -82,30 +94,34 @@ module "iam" {
 }
 
 
-module "lambda" {
-  source = "../../modules/lambda"
-  name   = var.project_name
+# module "lambda" {
+#   source = "../../modules/lambda"
+#   name   = var.project_name
 
-  # private_subnet_ids = module.network.private_subnet_ids
-  lambda_sg_id = module.network.lambda_sg_id
+#   # private_subnet_ids = module.network.private_subnet_ids
+#   lambda_sg_id = module.network.lambda_sg_id
 
-  lambda_role_arn = module.iam.lambda_role_arn
+#   lambda_role_arn = module.iam.lambda_role_arn
 
-  image_uri = "${module.ecr.api_repo_url}@sha256:a408f1ea4364215307f4d610f32165712f03f1957915f0658658b2d0d22a19fe" # :${var.image_tag}
+#   image_uri = "${module.ecr.api_repo_url}@sha256:8c8201c722491d452e2b47e09c37cae1006d8292fb9ccf21c544486450822fc2" # :${var.image_tag}
 
-  qdrant_url       = var.qdrant_url
-  ingest_queue_url = module.sqs.ingest_queue_url
+#   qdrant_url       = var.qdrant_url
+#   langsmith_url    = var.langsmith_url
+#   ingest_queue_url = module.sqs.ingest_queue_url
 
-  raw_bucket     = module.s3.raw_bucket
-  derived_bucket = module.s3.derived_bucket
+#   raw_bucket     = module.s3.raw_bucket
+#   derived_bucket = module.s3.derived_bucket
 
-  groq_secret_arn   = module.secrets.groq_secret_arn
-  qdrant_secret_arn = module.secrets.qdrant_secret_arn
-  # db_secret_arn     = module.secrets.db_secret_arn
+#   groq_secret_arn      = module.secrets.groq_secret_arn
+#   qdrant_secret_arn    = module.secrets.qdrant_secret_arn
+#   langchain_secret_arn = module.secrets.langchain_secret_arn
 
-  sources_table_name = module.dynamodb.sources_table_name
-  jobs_table_name    = module.dynamodb.jobs_table_name
-}
+#   sources_table_name = module.dynamodb.sources_table_name
+#   jobs_table_name    = module.dynamodb.jobs_table_name
+
+#   langchain_project    = var.langchain_project
+#   langchain_tracing_v2 = var.langchain_tracing_v2
+# }
 
 
 module "network" {
@@ -126,8 +142,10 @@ module "secrets" {
   source = "../../modules/secrets"
   name   = var.project_name
 
-  groq_api_key   = var.groq_api_key
-  qdrant_api_key = var.qdrant_api_key
+  groq_api_key      = var.groq_api_key
+  qdrant_api_key    = var.qdrant_api_key
+  langchain_api_key = var.langchain_api_key
+  jina_api_key      = var.jina_api_key
 
 }
 

@@ -36,7 +36,7 @@ def rerank_docs(question: str, docs: List[Document], chat_model: str, top_k: int
 
     llm = ChatGroq(
         model=chat_model,
-        api_key=settings.groq_api_key,
+        api_key=settings.resolved_groq_api_key(),
         temperature=0.0,
     )
 

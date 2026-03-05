@@ -33,10 +33,13 @@ data "aws_iam_policy_document" "lambda_inline" {
       "secretsmanager:DescribeSecret",
       "secretsmanager:GetResourcePolicy",
       "secretsmanager:ListSecrets",
+      "kms:Decrypt"
     ]
     resources = [
       var.groq_secret_arn,
-      var.qdrant_secret_arn
+      var.qdrant_secret_arn,
+      var.langchain_secret_arn,
+      var.jina_secret_arn
     ]
   }
 
@@ -130,11 +133,16 @@ data "aws_iam_policy_document" "ecs_exec_secrets" {
   statement {
     actions = [
       "secretsmanager:GetSecretValue",
-      "secretsmanager:DescribeSecret"
+      "secretsmanager:DescribeSecret",
+      "secretsmanager:GetResourcePolicy",
+      "secretsmanager:ListSecrets",
+      "kms:Decrypt"
     ]
     resources = [
       var.groq_secret_arn,
-      var.qdrant_secret_arn
+      var.qdrant_secret_arn,
+      var.langchain_secret_arn,
+      var.jina_secret_arn
     ]
   }
 }
@@ -176,7 +184,9 @@ data "aws_iam_policy_document" "ecs_task_inline" {
     ]
     resources = [
       var.groq_secret_arn,
-      var.qdrant_secret_arn
+      var.qdrant_secret_arn,
+      var.langchain_secret_arn,
+      var.jina_secret_arn
     ]
   }
 
@@ -205,7 +215,11 @@ data "aws_iam_policy_document" "ecs_task_inline" {
       "sqs:GetQueueAttributes",
       "sqs:SetQueueAttributes",
       "sqs:ChangeMessageVisibility",
-      "sqs:GetQueueURL"
+      "sqs:GetQueueURL",
+      "ssmmessages:CreateControlChannel",
+      "ssmmessages:CreateDataChannel",
+      "ssmmessages:OpenControlChannel",
+      "ssmmessages:OpenDataChannel"
     ]
     resources = ["*"]
   }

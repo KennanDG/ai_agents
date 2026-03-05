@@ -1,13 +1,13 @@
 # --- API ---
-output "api_url" {
-  value       = module.api_gateway.api_url
-  description = "HTTP API Gateway base URL"
-}
+# output "api_url" {
+#   value       = module.api_gateway.api_url
+#   description = "HTTP API Gateway base URL"
+# }
 
-output "lambda_function_name" {
-  value       = module.lambda.lambda_function_name
-  description = "Lambda function name (used by deploy workflow)"
-}
+# output "lambda_function_name" {
+#   value       = module.lambda.lambda_function_name
+#   description = "Lambda function name (used by deploy workflow)"
+# }
 
 
 
@@ -35,6 +35,11 @@ output "ecs_service_name" {
   description = "ECS service name for worker"
 }
 
+output "api_base_url" {
+  value       = module.ecs.api_base_url
+  description = "ECS API URL"
+}
+
 
 
 # --- Data plane resources ---
@@ -52,19 +57,6 @@ output "derived_bucket" {
   value       = module.s3.derived_bucket
   description = "S3 bucket for derived artifacts"
 }
-
-
-
-# --- DB (useful for debugging; keep secrets in Secrets Manager) ---
-# output "db_host" {
-#   value       = module.db.db_host
-#   description = "RDS endpoint hostname"
-# }
-
-# output "db_port" {
-#   value       = module.db.db_port
-#   description = "RDS port"
-# }
 
 
 

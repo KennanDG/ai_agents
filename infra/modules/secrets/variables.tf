@@ -10,11 +10,12 @@ variable "qdrant_api_key" {
   sensitive = true
 }
 
-# variable "db_username" { type = string }
-# variable "db_name" { type = string }
+variable "langchain_api_key" {
+  type      = string
+  sensitive = true
+}
 
-# variable "db_password" {
-#   type      = string
-#   sensitive = true
-# }
-
+variable "jina_api_key" {
+  type      = string
+  sensitive = true
+}

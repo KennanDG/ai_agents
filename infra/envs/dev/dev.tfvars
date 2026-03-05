@@ -16,9 +16,14 @@ qdrant_api_key = "REDACTED"
 groq_url     = "https://api.groq.com/openai/v1"
 groq_api_key = "REDACTED"
 
-# db_username = "ai_agents"
-# db_name     = "ai_agents"
-# db_password = "REDACTED"
+jina_url     = "https://api.jina.ai/v1/rerank"
+jina_api_key = "REDACTED"
+
+langsmith_url        = "https://api.smith.langchain.com"
+langchain_tracing_v2 = true
+langchain_project    = "ai-agents-dev"
+langchain_api_key    = "REDACTED"
+
 
 
 

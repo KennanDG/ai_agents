@@ -10,7 +10,7 @@ from .prompts import build_rag_prompt
 def build_rag_chain(retriever, chat_model: str):
     llm = ChatGroq(
         model=chat_model,
-        api_key=settings.groq_api_key,
+        api_key=settings.resolved_groq_api_key(),
         temperature=0.0,
     )
     prompt = build_rag_prompt()

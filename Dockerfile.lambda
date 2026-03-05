@@ -22,9 +22,43 @@ ENV PIP_ONLY_BINARY=:all:
 # 4) Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 5) Copy source code
+
+
+# -------------------------------------------------------------------
+# 5) Bake FastEmbed + HuggingFace caches into the IMAGE (no runtime downloads)
+# -------------------------------------------------------------------
+# Put caches in /opt so they are part of the built image layers.
+ENV FASTEMBED_CACHE_PATH=/opt/fastembed_cache
+ENV HF_HOME=/opt/hf
+ENV HUGGINGFACE_HUB_CACHE=/opt/hf/hub
+ENV TRANSFORMERS_CACHE=/opt/hf/transformers
+
+RUN mkdir -p /opt/fastembed_cache /opt/hf/hub /opt/hf/transformers
+
+# Force-download the embedding + reranker models during build.
+# Keep it minimal to ensure the weights are fetched.
+# RUN python - <<'PY'
+# from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
+
+# # Embedding model used by code
+# emb = FastEmbedEmbeddings(model_name="nomic-ai/nomic-embed-text-v1.5", max_length=512)
+# _ = emb.embed_documents(["warm cache"])
+# print("Embedding model baked into image cache.")
+# PY
+
+
+# RUN python - <<'PY'
+# from fastembed.rerank.cross_encoder import TextCrossEncoder
+
+# # Reranker model used by RagSettings default
+# reranker = TextCrossEncoder(model_name="BAAI/bge-reranker-base")
+# _ = list(reranker.rerank("q", ["doc"]))
+# print("Reranker model baked into image cache.")
+# PY
+
+# 6) Copy source code
 COPY src/ai_agents ${LAMBDA_TASK_ROOT}/ai_agents
 
-# 6) Lambda handler
+# 7) Lambda handler
 CMD ["ai_agents.api.lambda_handler.handler"]
 
