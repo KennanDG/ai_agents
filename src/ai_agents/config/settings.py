@@ -113,7 +113,7 @@ class Settings(BaseSettings):
     retrieve_workers: int = Field(default=8, alias="RETRIEVE_WORKERS")
     preferred_collections: List[str] = Field(default=["rag-engineering", "rag-robotics", "rag-cs"], alias="PREFERRED_COLLECTIONS")
     enable_parallel_collection_retrieval: bool = Field(default=True, alias="ENABLE_PARALLEL_COLLECTION_RETRIEVAL")
-    parallel_collection_workers: int = Field(default=3, alias="PARALLEL_COLLECTION_WORKERS")
+    parallel_collection_workers: int = Field(default=2, alias="PARALLEL_COLLECTION_WORKERS")
     
     n_query_expansions: int = Field(default=2, alias="N_QUERY_EXPANSIONS")
     enable_query_expansion: bool = Field(default=True, alias="ENABLE_QUERY_EXPANSION")

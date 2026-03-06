@@ -5,7 +5,7 @@ import re
 import boto3
 from urllib.parse import urlparse
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, List
 import hashlib
 import uuid
 from dataclasses import dataclass
@@ -246,27 +246,30 @@ def _make_point_id(source_uri: str, content_hash: str, chunk_index: int, chunk_h
 
 def infer_domain_key_from_source_uri(source_uri: str) -> str:
     """
-    Returns a domain key like:
-      - "engineering"
-      - "robotics"
-      - "cs"
-    based on the folder layout under data/corpus/.
+    Returns a domain key like "engineering", "personal", "robotics", etc.
+
+    Supports:
+      - s3://<bucket>/corpus/<domain>/...
     """
-    # expected: "file:data/corpus/<domain>/..."
-    prefix = "file:data/corpus/"
+
+
+    # expected: "s3://<bucket>/corpus/<domain>/..."
+    prefix = "s3://ai-agents-dev-raw/corpus/"
+
     if not source_uri.startswith(prefix):
         return "default"
 
     rel = source_uri[len(prefix):]  # "<domain>/..."
     parts = rel.replace("\\", "/").split("/")
+
+    # Debug
+    print(f"rel: {rel}")
+    print(f"parts: {parts}")
+
     if not parts:
         return "default"
 
     top = parts[0].lower()
-
-    # # If top-level is "cs", also include the next folder if present (ai/aws/java)
-    # if top == "cs" and len(parts) >= 2:
-    #     return f"cs/{parts[1].lower()}"
 
     return top
 
@@ -586,7 +589,7 @@ def _load_documents(
         if source_uri not in unchanged_sources:
             changed_text_paths.append(p)
 
-    docs = []
+    docs: List[Document] = []
 
     if changed_text_paths:
         docs.extend(load_text_files(changed_text_paths))

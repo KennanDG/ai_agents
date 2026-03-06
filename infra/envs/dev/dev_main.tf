@@ -43,7 +43,7 @@ module "ecs" {
   task_role_arn      = module.iam.ecs_task_role_arn
   execution_role_arn = module.iam.ecs_execution_role_arn
 
-  worker_image_uri = "${module.ecr.worker_repo_url}@sha256:3ff28238afcec1c81843319a6bf90f3c9bc49fef2ac648585d6ef1a67aaf3e15"
+  worker_image_uri = "${module.ecr.worker_repo_url}@sha256:2bb3e3594d5d86557dd9d8522abd7d662b5a1141627e24339f8cccc20ed6d2d2"
 
   qdrant_url       = var.qdrant_url
   groq_url         = var.groq_url
@@ -67,7 +67,7 @@ module "ecs" {
 
   api_sg_id     = module.network.api_sg_id
   alb_sg_id     = module.network.alb_sg_id
-  api_image_uri = "${module.ecr.api_repo_url}@sha256:579841bb0548981d86a40d6ce452dedde850f98087294fc1c6d600a81f9aaec0"
+  api_image_uri = "${module.ecr.api_repo_url}@sha256:66cdc01881f2264895e6b655ef13b5a831bb371b858823cdc0f1e00f52f67d8a"
 }
 
 
