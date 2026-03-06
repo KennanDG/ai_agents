@@ -167,7 +167,6 @@ def parallel_retrieve_collections(
 # -----------------------------------------------------------------------------
 
 
-@lru_cache(maxsize=8)
 def _list_qdrant_collections(qdrant_url: str) -> List[str]:
     """Return raw Qdrant collection names."""
     client = QdrantClient(
