@@ -24,14 +24,14 @@ resource "aws_ecs_task_definition" "worker" {
   execution_role_arn = var.execution_role_arn
   task_role_arn      = var.task_role_arn
 
-  volume {
-    name = "models"
+  # volume {
+  #   name = "models"
 
-    efs_volume_configuration {
-      file_system_id = aws_efs_file_system.models.id
-      root_directory = "/"
-    }
-  }
+  #   efs_volume_configuration {
+  #     file_system_id = aws_efs_file_system.models.id
+  #     root_directory = "/"
+  #   }
+  # }
 
   container_definitions = jsonencode([
     {
@@ -41,9 +41,9 @@ resource "aws_ecs_task_definition" "worker" {
 
       command = ["celery", "-A", "ai_agents.jobs.celery", "worker", "--loglevel=INFO"]
 
-      mountPoints = [
-        { sourceVolume = "models", containerPath = "/mnt/models", readOnly = false }
-      ]
+      # mountPoints = [
+      #   { sourceVolume = "models", containerPath = "/mnt/models", readOnly = false }
+      # ]
 
       environment = [
         { name = "QDRANT_URL", value = var.qdrant_url },
@@ -60,11 +60,11 @@ resource "aws_ecs_task_definition" "worker" {
         { name = "LANGCHAIN_PROJECT", value = var.langchain_project },
         { name = "LANGCHAIN_TRACING_V2", value = tostring(var.langchain_tracing_v2) },
 
-        # Persistent cache for FastEmbed
-        { name = "FASTEMBED_CACHE_PATH", value = "/mnt/models/fastembed_cache" },
-        { name = "HF_HOME", value = "/mnt/models/hf" },
-        { name = "HUGGINGFACE_HUB_CACHE", value = "/mnt/models/hf/hub" },
-        { name = "TRANSFORMERS_CACHE", value = "/mnt/models/hf/transformers" },
+        # # Persistent cache for FastEmbed
+        # { name = "FASTEMBED_CACHE_PATH", value = "/mnt/models/fastembed_cache" },
+        # { name = "HF_HOME", value = "/mnt/models/hf" },
+        # { name = "HUGGINGFACE_HUB_CACHE", value = "/mnt/models/hf/hub" },
+        # { name = "TRANSFORMERS_CACHE", value = "/mnt/models/hf/transformers" },
       ]
 
       secrets = [
@@ -126,36 +126,36 @@ resource "aws_cloudwatch_log_group" "cloudwatch_api" {
 }
 
 
-resource "aws_security_group" "efs" {
-  name   = "${var.name}-sg-efs"
-  vpc_id = var.vpc_id
+# resource "aws_security_group" "efs" {
+#   name   = "${var.name}-sg-efs"
+#   vpc_id = var.vpc_id
 
-  ingress {
-    from_port       = 2049
-    to_port         = 2049
-    protocol        = "tcp"
-    security_groups = [var.api_sg_id, var.worker_sg_id]
-  }
+#   ingress {
+#     from_port       = 2049
+#     to_port         = 2049
+#     protocol        = "tcp"
+#     security_groups = [var.api_sg_id, var.worker_sg_id]
+#   }
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-}
+#   egress {
+#     from_port   = 0
+#     to_port     = 0
+#     protocol    = "-1"
+#     cidr_blocks = ["0.0.0.0/0"]
+#   }
+# }
 
-resource "aws_efs_file_system" "models" {
-  creation_token = "${var.name}-models"
-  encrypted      = true
-}
+# resource "aws_efs_file_system" "models" {
+#   creation_token = "${var.name}-models"
+#   encrypted      = true
+# }
 
-resource "aws_efs_mount_target" "models" {
-  count           = length(var.public_subnet_ids)
-  file_system_id  = aws_efs_file_system.models.id
-  subnet_id       = var.public_subnet_ids[count.index]
-  security_groups = [aws_security_group.efs.id]
-}
+# resource "aws_efs_mount_target" "models" {
+#   count           = length(var.public_subnet_ids)
+#   file_system_id  = aws_efs_file_system.models.id
+#   subnet_id       = var.public_subnet_ids[count.index]
+#   security_groups = [aws_security_group.efs.id]
+# }
 
 
 
@@ -208,14 +208,14 @@ resource "aws_ecs_task_definition" "api" {
   execution_role_arn = var.execution_role_arn
   task_role_arn      = var.task_role_arn
 
-  volume {
-    name = "models"
+  # volume {
+  #   name = "models"
 
-    efs_volume_configuration {
-      file_system_id = aws_efs_file_system.models.id
-      root_directory = "/"
-    }
-  }
+  #   efs_volume_configuration {
+  #     file_system_id = aws_efs_file_system.models.id
+  #     root_directory = "/"
+  #   }
+  # }
 
   container_definitions = jsonencode([
     {
@@ -229,9 +229,9 @@ resource "aws_ecs_task_definition" "api" {
 
       command = ["uvicorn", "ai_agents.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
-      mountPoints = [
-        { sourceVolume = "models", containerPath = "/mnt/models", readOnly = false }
-      ]
+      # mountPoints = [
+      #   { sourceVolume = "models", containerPath = "/mnt/models", readOnly = false }
+      # ]
 
       environment = [
         { name = "QDRANT_URL", value = var.qdrant_url },
@@ -246,11 +246,11 @@ resource "aws_ecs_task_definition" "api" {
         { name = "LANGCHAIN_PROJECT", value = var.langchain_project },
         { name = "LANGCHAIN_TRACING_V2", value = tostring(var.langchain_tracing_v2) },
 
-        # Persistent cache for FastEmbed
-        { name = "FASTEMBED_CACHE_PATH", value = "/mnt/models/fastembed_cache" },
-        { name = "HF_HOME", value = "/mnt/models/hf" },
-        { name = "HUGGINGFACE_HUB_CACHE", value = "/mnt/models/hf/hub" },
-        { name = "TRANSFORMERS_CACHE", value = "/mnt/models/hf/transformers" },
+        # # Persistent cache for FastEmbed
+        # { name = "FASTEMBED_CACHE_PATH", value = "/mnt/models/fastembed_cache" },
+        # { name = "HF_HOME", value = "/mnt/models/hf" },
+        # { name = "HUGGINGFACE_HUB_CACHE", value = "/mnt/models/hf/hub" },
+        # { name = "TRANSFORMERS_CACHE", value = "/mnt/models/hf/transformers" },
       ]
 
       secrets = [

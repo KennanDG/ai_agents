@@ -3,7 +3,7 @@ from langchain_core.documents import Document
 from langchain_core.runnables import RunnableLambda
 
 from .chain import build_rag_chain
-from .embeddings import build_fastembed_embeddings
+from .embeddings import build_jina_embeddings
 from .settings import RagSettings
 from .vectorstore import build_qdrant, build_retriever
 from .singletons import get_rag_graph, get_vectorstore
@@ -19,7 +19,7 @@ from .query_translations.plan import plan_queries
 @traceable(name="rag_answer", tags=["rag", "query-expansion", "rrf-fusion", "cross-encoder-rerank"])
 def answer(question: str, settings: RagSettings) -> str:
     
-    embeddings = build_fastembed_embeddings(settings.embedding_model, settings.chunk_size) # Embedding model
+    embeddings = build_jina_embeddings(settings.embedding_model) # Embedding model
 
     # initialize the vector database
     vs = get_vectorstore(settings)

@@ -16,7 +16,7 @@ qdrant_api_key = "REDACTED"
 groq_url     = "https://api.groq.com/openai/v1"
 groq_api_key = "REDACTED"
 
-jina_url     = "https://api.jina.ai/v1/rerank"
+jina_url     = "https://api.jina.ai/v1"
 jina_api_key = "REDACTED"
 
 langsmith_url        = "https://api.smith.langchain.com"

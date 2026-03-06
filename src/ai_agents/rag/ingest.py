@@ -12,9 +12,9 @@ from dataclasses import dataclass
 
 from langsmith import traceable
 from langchain_core.documents import Document
-from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
+from langchain_community.embeddings.jina import JinaEmbeddings
 
-from .embeddings import build_fastembed_embeddings
+from .embeddings import build_jina_embeddings
 from .loaders import load_text_files, _repo_relative
 from .settings import RagSettings
 from .splitter import split_docs
@@ -625,7 +625,7 @@ def _load_documents(
 def _group_and_upsert_docs(
     docs: list[Document], 
     settings: RagSettings, 
-    embeddings: FastEmbedEmbeddings,
+    embeddings: JinaEmbeddings,
     dev: bool = False
 ) -> int:
     """
@@ -874,7 +874,7 @@ def ingest_files(paths: Iterable[str | Path], settings: RagSettings) -> int:
             doc.metadata["path_rel"] = rel_by_local_abs.get(abs_p, doc.metadata.get("path_rel"))
 
     # 5) Embed and Upsert
-    embeddings = build_fastembed_embeddings(settings.embedding_model, settings.chunk_size)
+    embeddings = build_jina_embeddings(settings.embedding_model)
     return _group_and_upsert_docs(docs, settings, embeddings, False)
 
 

@@ -3,7 +3,7 @@ from functools import lru_cache
 from typing import Optional
 
 from .settings import RagSettings
-from .embeddings import build_fastembed_embeddings
+from .embeddings import build_jina_embeddings
 from .vectorstore import build_qdrant
 
 
@@ -14,7 +14,7 @@ from .vectorstore import build_qdrant
 
 @lru_cache(maxsize=1)
 def get_embeddings(model_name: str, chunk_size: int):
-    return build_fastembed_embeddings(model_name, chunk_size)
+    return build_jina_embeddings(model_name)
 
 
 # ---------------------------
@@ -44,7 +44,7 @@ def _get_vectorstore_cached(
     settings.collection_name = collection_name
     settings.namespace = namespace
 
-    emb = build_fastembed_embeddings(embedding_model, chunk_size)
+    emb = build_jina_embeddings(embedding_model)
 
     return build_qdrant(settings=settings, embedding_fn=emb)
 

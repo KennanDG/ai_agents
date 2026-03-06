@@ -14,12 +14,8 @@ from ai_agents.core.retry import retry
 
 from .settings import RagSettings
 from .chain import build_rag_chain
-from .singletons import get_vectorstore
 from .retrieval import retrieve_collection, parallel_retrieve_collections, available_base_collections
 from .prompts import build_grader_prompt, build_collection_router_prompt, build_docs_grader_prompt
-
-from .query_translations.rag_fusion import rrf_fuse
-from .query_translations.cross_encoder import cross_encoder_rerank
 from .query_translations.plan import plan_queries
 
 

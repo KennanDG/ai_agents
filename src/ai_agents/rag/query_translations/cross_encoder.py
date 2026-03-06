@@ -6,7 +6,7 @@ import requests
 from langchain_core.documents import Document
 from langsmith import traceable
 # from fastembed.rerank.cross_encoder import TextCrossEncoder
-from ai_agents.rag.settings import RagSettings as settings
+from ai_agents.config.settings import settings
 
 # _MODEL_CACHE: dict[tuple[str, str], TextCrossEncoder] = {}
 
@@ -37,8 +37,8 @@ def cross_encoder_rerank(
         return []
     
 
-    url = settings.jina_api_url
-    api_key = settings.jina_api_key
+    url = f"{settings.jina_api_url}/rerank"
+    api_key = settings.resolved_jina_api_key()
 
     documents = [(d.page_content or "")[:max_chars] for d in docs]
 
@@ -47,8 +47,9 @@ def cross_encoder_rerank(
         "query": question,
         "documents": documents,
         "top_n": min(top_k, len(documents)),
-        "return_documents": False,
+        "return_documents": True,
         "truncation": True,
+        "max_doc_length": max_chars
     }
 
     headers = {
@@ -65,12 +66,29 @@ def cross_encoder_rerank(
         # Fail soft: keep pipeline running
         return docs[:top_k]
 
-    results = data.get("results") or []
+    results: List[dict] = data.get("results") or []
 
     if not results:
         return docs[:top_k]
     
-    return results[:top_k]
+    # Jina returns entries with `index` pointing into the input documents list
+    ranked = []
+    seen = set()
+    for r in results:
+        idx = r.get("index")
+        if isinstance(idx, int) and 0 <= idx < len(docs) and idx not in seen:
+            ranked.append(docs[idx])
+            seen.add(idx)
+
+    # If API returned fewer than top_k, pad with remaining docs in original order
+    if len(ranked) < top_k:
+        for i, d in enumerate(docs):
+            if i not in seen:
+                ranked.append(d)
+            if len(ranked) >= top_k:
+                break
+
+    return ranked[:top_k]
 
     # # Jina returns entries with `index` pointing into the input documents list
     # ranked = []
