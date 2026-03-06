@@ -269,6 +269,10 @@ resource "aws_ecs_task_definition" "api" {
         {
           name      = "JINA_API_KEY"
           valueFrom = "${var.jina_secret_arn}:JINA_API_KEY::"
+        },
+        {
+          name      = "AI_AGENTS_API_KEY"
+          valueFrom = "${var.app_secret_arn}:AI_AGENTS_API_KEY::"
         }
       ]
 

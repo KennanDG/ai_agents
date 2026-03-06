@@ -53,12 +53,28 @@ class Settings(BaseSettings):
         return None
     
 
+
+    def resolved_ai_agents_api_key(self) -> str | None:
+        if self.ai_agents_api_key:
+            return self.ai_agents_api_key
+        
+        if self.ai_agents_secret_arn:
+            self.ai_agents_api_key = get_secret_json(self.ai_agents_secret_arn).get("AI_AGENTS_API_KEY")
+            return self.ai_agents_api_key
+        
+        return None
+    
+
     
     model_config = SettingsConfigDict(
         env_file=os.getenv("ENV_FILE", ".env"),
         extra="ignore"
         )
 
+
+    # App API key
+    ai_agents_api_key: str | None = Field(default=None, alias="AI_AGENTS_API_KEY")
+    ai_agents_secret_arn: str | None = Field(default=None, alias="AI_AGENTS_SECRET_ARN")
 
     # LangChain
     langchain_api_key: str | None = Field(default=None, alias="LANGCHAIN_API_KEY")

@@ -24,6 +24,7 @@ variable "groq_secret_arn" { type = string }
 variable "qdrant_secret_arn" { type = string }
 variable "langchain_secret_arn" { type = string }
 variable "jina_secret_arn" { type = string }
+variable "app_secret_arn" { type = string }
 
 variable "sources_table_name" { type = string }
 variable "jobs_table_name" { type = string }
