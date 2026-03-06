@@ -39,7 +39,7 @@ class RagSettings(BaseModel):
     # -------------------------
     # Model selection
     # -------------------------
-    embedding_model: str = getattr(settings, "embedding_model", "nomic-ai/nomic-embed-text-v1.5")
+    embedding_model: str = getattr(settings, "embedding_model", "jina-embeddings-v2-base-en")
     chat_model: str = getattr(settings, "chat_model", "llama-3.1-8b-instant")
     query_model: str = getattr(settings, "query_model", getattr(settings, "chat_model", "llama-3.1-8b-instant"))
     verify_model: str = getattr(settings, "verify_model", getattr(settings, "chat_model", "llama-3.1-8b-instant"))

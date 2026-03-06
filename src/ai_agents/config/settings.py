@@ -85,14 +85,15 @@ class Settings(BaseSettings):
     qdrant_collection: str = Field(default="rag-default", alias="QDRANT_COLLECTION")
 
     # FastEmbed
-    embedding_model: str = Field(default="nomic-ai/nomic-embed-text-v1.5", alias="EMBEDDING_MODEL")    # Doc embedding
+    
     rerank_device: str = Field(default="cpu", alias="RERANK_DEVICE") 
 
 
     # Jina AI
+    embedding_model: str = Field(default="jina-embeddings-v2-base-en", alias="EMBEDDING_MODEL")    # Doc embedding
     rerank_model: str = Field(default="jina-reranker-v3", alias="RERANK_MODEL")
     jina_api_key: str | None = Field(default=None, alias="JINA_API_KEY")
-    jina_api_url: str | None = Field(default="https://api.jina.ai/v1/rerank", alias="JINA_URL")
+    jina_api_url: str | None = Field(default="https://api.jina.ai/v1", alias="JINA_URL")
     jina_secret_arn: str | None = Field(default=None, alias="JINA_SECRET_ARN")
 
 

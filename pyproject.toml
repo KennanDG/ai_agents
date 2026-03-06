@@ -10,7 +10,6 @@ dependencies = [
     "kombu>=5.6.2",
     "boto3>=1.42.44",
     "fastapi>=0.128.2",
-    "fastembed>=0.7.4",
     "langchain>=1.2.0",
     "langchain-community>=0.4.1",
     "langchain-groq>=1.1.2",
@@ -32,11 +31,6 @@ worker = [
     "pymupdf4llm>=0.2.7",
     "pillow>=11.0.0,<12.0.0",
     "ghostscript>=0.8.1",
-]
-
-chroma = [
-    "chromadb>=1.3.7",
-    "langchain-chroma>=1.1.0",
 ]
 
 

@@ -2,7 +2,7 @@ import sys
 
 from ai_agents.rag.ingest import ingest_files
 from ai_agents.rag.settings import RagSettings
-from ai_agents.rag.embeddings import build_fastembed_embeddings
+from ai_agents.rag.embeddings import build_jina_embeddings
 
 
 def main():
@@ -11,7 +11,7 @@ def main():
         raise SystemExit(2)
 
     settings = RagSettings()
-    embeddings = build_fastembed_embeddings(settings.embedding_model, settings.chunk_size)
+    embeddings = build_jina_embeddings(settings.embedding_model)
     test_embedding = embeddings.embed_query("test")
     model_dimension = len(test_embedding)
 

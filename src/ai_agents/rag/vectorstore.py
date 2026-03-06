@@ -6,7 +6,7 @@ import os
 from langchain_core.documents import Document
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, Filter, FieldCondition, MatchValue
+from qdrant_client.models import Distance, VectorParams, Filter, FieldCondition, MatchValue, PayloadSchemaType
 
 from .settings import RagSettings
 from ai_agents.config.secrets import get_secret_json
@@ -17,6 +17,16 @@ from ai_agents.config.settings import settings as config_settings
 NOMIC_EMBED_TEXT = 768
 MXBAI_EMBED_LARGE_V1 = 1024
 MISTRAL_EMBED = 1024
+
+
+def _ensure_payload_indexes(client: QdrantClient, collection_name: str) -> None:
+    # Make source_uri filterable
+    client.create_payload_index(
+        collection_name=collection_name,
+        field_name="source_uri",
+        field_schema=PayloadSchemaType.KEYWORD,
+    )
+
 
 def build_qdrant(
     settings: RagSettings,
@@ -45,11 +55,19 @@ def build_qdrant(
             ),
         )
 
+    
+    try:
+        _ensure_payload_indexes(client, collection_name)
+    except Exception as e:
+        # optionally ignore "already exists" / conflict errors
+        pass
+
     return QdrantVectorStore(
         client=client,
         collection_name=collection_name,
         embedding=embedding_fn,
     )
+
 
 
 
