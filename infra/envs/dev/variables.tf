@@ -92,6 +92,12 @@ variable "jina_api_key" {
 }
 
 
+variable "ai_agents_api_key" {
+  type      = string
+  sensitive = true
+}
+
+
 
 variable "langchain_project" {
   type        = string

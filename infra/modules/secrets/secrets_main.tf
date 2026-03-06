@@ -35,3 +35,13 @@ resource "aws_secretsmanager_secret_version" "jina" {
   secret_id     = aws_secretsmanager_secret.jina.id
   secret_string = jsonencode({ JINA_API_KEY = var.jina_api_key })
 }
+
+
+resource "aws_secretsmanager_secret" "app" {
+  name = "${var.name}/app"
+}
+
+resource "aws_secretsmanager_secret_version" "app" {
+  secret_id     = aws_secretsmanager_secret.app.id
+  secret_string = jsonencode({ AI_AGENTS_API_KEY = var.ai_agents_api_key })
+}

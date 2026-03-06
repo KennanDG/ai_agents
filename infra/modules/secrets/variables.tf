@@ -19,3 +19,9 @@ variable "jina_api_key" {
   type      = string
   sensitive = true
 }
+
+
+variable "ai_agents_api_key" {
+  type      = string
+  sensitive = true
+}

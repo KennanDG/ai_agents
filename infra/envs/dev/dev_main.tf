@@ -58,6 +58,7 @@ module "ecs" {
   qdrant_secret_arn    = module.secrets.qdrant_secret_arn
   langchain_secret_arn = module.secrets.langchain_secret_arn
   jina_secret_arn      = module.secrets.jina_secret_arn
+  app_secret_arn       = module.secrets.app_secret_arn
 
   sources_table_name = module.dynamodb.sources_table_name
   jobs_table_name    = module.dynamodb.jobs_table_name
@@ -67,7 +68,7 @@ module "ecs" {
 
   api_sg_id     = module.network.api_sg_id
   alb_sg_id     = module.network.alb_sg_id
-  api_image_uri = "${module.ecr.api_repo_url}@sha256:66cdc01881f2264895e6b655ef13b5a831bb371b858823cdc0f1e00f52f67d8a"
+  api_image_uri = "${module.ecr.api_repo_url}@sha256:c9b7b95ec6cc3ca5135504ee0f784c81e5f26cedb4c8f26be6647f112184e6d6"
 }
 
 
@@ -83,6 +84,7 @@ module "iam" {
   qdrant_secret_arn    = module.secrets.qdrant_secret_arn
   langchain_secret_arn = module.secrets.langchain_secret_arn
   jina_secret_arn      = module.secrets.jina_secret_arn
+  app_secret_arn       = module.secrets.app_secret_arn
 
   sources_table_arn = module.dynamodb.sources_table_arn
   jobs_table_arn    = module.dynamodb.jobs_table_arn
@@ -146,6 +148,7 @@ module "secrets" {
   qdrant_api_key    = var.qdrant_api_key
   langchain_api_key = var.langchain_api_key
   jina_api_key      = var.jina_api_key
+  ai_agents_api_key = var.ai_agents_api_key
 
 }
 
