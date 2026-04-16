@@ -9,6 +9,8 @@ variable "image_uri" { type = string }
 variable "qdrant_url" { type = string }
 variable "langsmith_url" { type = string }
 variable "ingest_queue_url" { type = string }
+variable "groq_url" { type = string }
+variable "jina_url" { type = string }
 
 variable "raw_bucket" { type = string }
 variable "derived_bucket" { type = string }
@@ -16,6 +18,8 @@ variable "derived_bucket" { type = string }
 variable "groq_secret_arn" { type = string }
 variable "qdrant_secret_arn" { type = string }
 variable "langchain_secret_arn" { type = string }
+variable "jina_secret_arn" { type = string }
+variable "app_secret_arn" { type = string }
 
 variable "sources_table_name" { type = string }
 variable "jobs_table_name" { type = string }

@@ -35,10 +35,10 @@ output "ecs_service_name" {
   description = "ECS service name for worker"
 }
 
-output "api_base_url" {
-  value       = module.ecs.api_base_url
-  description = "ECS API URL"
-}
+# output "api_base_url" {
+#   value       = module.ecs.api_base_url
+#   description = "ECS API URL"
+# }
 
 
 
