@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .filesystem import DEFAULT_IGNORES, read_file
+from ai_agents.agents.coding.tools.filesystem import DEFAULT_IGNORES, read_file
 
 TEXT_SUFFIXES = {
     ".py",

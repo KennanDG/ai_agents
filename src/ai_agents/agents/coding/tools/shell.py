@@ -15,7 +15,7 @@ ALLOWED_COMMAND_PREFIXES = (
     "python -m compileall",
 )
 
-BLOCKED_COMMANDS = {"rm", "rmdir", "del", "format", "shutdown", "reboot", "mkfs", "chmod", "chown"}
+BLOCKED_COMMANDS = {"sudo", "rm", "rmdir", "del", "format", "shutdown", "reboot", "mkfs", "chmod", "chown"}
 
 
 def is_allowed_command(command: str) -> bool:
