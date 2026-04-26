@@ -31,45 +31,45 @@ module "ecr" {
 }
 
 
-module "ecs" {
-  source = "../../modules/ecs"
-  name   = var.project_name
-  region = var.aws_region
+# module "ecs" {
+#   source = "../../modules/ecs"
+#   name   = var.project_name
+#   region = var.aws_region
 
-  vpc_id            = module.network.vpc_id
-  public_subnet_ids = module.network.public_subnet_ids
-  worker_sg_id      = module.network.worker_sg_id
+#   vpc_id            = module.network.vpc_id
+#   public_subnet_ids = module.network.public_subnet_ids
+#   worker_sg_id      = module.network.worker_sg_id
 
-  task_role_arn      = module.iam.ecs_task_role_arn
-  execution_role_arn = module.iam.ecs_execution_role_arn
+#   task_role_arn      = module.iam.ecs_task_role_arn
+#   execution_role_arn = module.iam.ecs_execution_role_arn
 
-  worker_image_uri = "${module.ecr.worker_repo_url}@sha256:2bb3e3594d5d86557dd9d8522abd7d662b5a1141627e24339f8cccc20ed6d2d2"
+#   worker_image_uri = "${module.ecr.worker_repo_url}@sha256:2bb3e3594d5d86557dd9d8522abd7d662b5a1141627e24339f8cccc20ed6d2d2"
 
-  qdrant_url       = var.qdrant_url
-  groq_url         = var.groq_url
-  jina_url         = var.jina_url
-  ingest_queue_url = module.sqs.ingest_queue_url
-  langsmith_url    = var.langsmith_url
+#   qdrant_url       = var.qdrant_url
+#   groq_url         = var.groq_url
+#   jina_url         = var.jina_url
+#   ingest_queue_url = module.sqs.ingest_queue_url
+#   langsmith_url    = var.langsmith_url
 
-  raw_bucket     = module.s3.raw_bucket
-  derived_bucket = module.s3.derived_bucket
+#   raw_bucket     = module.s3.raw_bucket
+#   derived_bucket = module.s3.derived_bucket
 
-  groq_secret_arn      = module.secrets.groq_secret_arn
-  qdrant_secret_arn    = module.secrets.qdrant_secret_arn
-  langchain_secret_arn = module.secrets.langchain_secret_arn
-  jina_secret_arn      = module.secrets.jina_secret_arn
-  app_secret_arn       = module.secrets.app_secret_arn
+#   groq_secret_arn      = module.secrets.groq_secret_arn
+#   qdrant_secret_arn    = module.secrets.qdrant_secret_arn
+#   langchain_secret_arn = module.secrets.langchain_secret_arn
+#   jina_secret_arn      = module.secrets.jina_secret_arn
+#   app_secret_arn       = module.secrets.app_secret_arn
 
-  sources_table_name = module.dynamodb.sources_table_name
-  jobs_table_name    = module.dynamodb.jobs_table_name
+#   sources_table_name = module.dynamodb.sources_table_name
+#   jobs_table_name    = module.dynamodb.jobs_table_name
 
-  langchain_project    = var.langchain_project
-  langchain_tracing_v2 = var.langchain_tracing_v2
+#   langchain_project    = var.langchain_project
+#   langchain_tracing_v2 = var.langchain_tracing_v2
 
-  # api_sg_id     = module.network.api_sg_id
-  # alb_sg_id     = module.network.alb_sg_id
-  # api_image_uri = "${module.ecr.api_repo_url}@sha256:c9b7b95ec6cc3ca5135504ee0f784c81e5f26cedb4c8f26be6647f112184e6d6"
-}
+#   # api_sg_id     = module.network.api_sg_id
+#   # alb_sg_id     = module.network.alb_sg_id
+#   # api_image_uri = "${module.ecr.api_repo_url}@sha256:c9b7b95ec6cc3ca5135504ee0f784c81e5f26cedb4c8f26be6647f112184e6d6"
+# }
 
 
 module "iam" {

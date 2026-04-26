@@ -25,15 +25,15 @@ output "worker_repo_url" {
 
 
 # --- ECS ---
-output "ecs_cluster_name" {
-  value       = module.ecs.cluster_name
-  description = "ECS cluster name"
-}
+# output "ecs_cluster_name" {
+#   value       = module.ecs.cluster_name
+#   description = "ECS cluster name"
+# }
 
-output "ecs_service_name" {
-  value       = module.ecs.service_name
-  description = "ECS service name for worker"
-}
+# output "ecs_service_name" {
+#   value       = module.ecs.service_name
+#   description = "ECS service name for worker"
+# }
 
 # output "api_base_url" {
 #   value       = module.ecs.api_base_url

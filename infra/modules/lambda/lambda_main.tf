@@ -30,7 +30,7 @@ resource "aws_lambda_function" "this" {
       QDRANT_SECRET_ARN    = var.qdrant_secret_arn
       LANGCHAIN_SECRET_ARN = var.langchain_secret_arn
       JINA_SECRET_ARN      = var.jina_secret_arn
-      AI_AGENTS_SECRET_ARN       = var.app_secret_arn
+      AI_AGENTS_SECRET_ARN = var.app_secret_arn
 
     }
   }
