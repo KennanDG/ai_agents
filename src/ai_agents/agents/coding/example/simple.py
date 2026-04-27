@@ -55,7 +55,7 @@ def execute_python_script(file_path: str) -> str:
 def initialize_coding_agent():
 
     llm = ChatGroq(
-        model=settings.chat_model, 
+        model=settings.coding_model, 
         api_key=settings.resolved_groq_api_key(),
         temperature=0.0 # Strict determinism
     )

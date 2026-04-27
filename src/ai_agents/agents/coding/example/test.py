@@ -22,7 +22,7 @@ if not GROQ_API_KEY:
     raise RuntimeError("GROQ_API_KEY is not set")
 
 llm = ChatGroq(
-    model=settings.chat_model,
+    model=settings.coding_model,
     api_key=GROQ_API_KEY,
     temperature=0.0,
 )

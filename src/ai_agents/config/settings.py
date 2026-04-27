@@ -89,6 +89,8 @@ class Settings(BaseSettings):
     caption_model: str = Field(default="meta-llama/llama-4-scout-17b-16e-instruct", alias="CAPTION_MODEL")  # VLM
     verify_model: str = Field(default="llama-3.1-8b-instant", alias="VERIFY_MODEL")
     verify_docs_model: str = Field(default="llama-3.1-8b-instant", alias="VERIFY_DOCS_MODEL")
+    coding_model: str = Field(default="openai/gpt-oss-20b", alias="QUERY_MODEL") 
+    reasoning_model: str = Field(default="openai/gpt-oss-20b", alias="QUERY_MODEL") 
     groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
     groq_api_url: str | None = Field(default="https://api.groq.com/openai/v1", alias="GROQ_URL")
     groq_secret_arn: str | None = Field(default=None, alias="GROQ_SECRET_ARN")

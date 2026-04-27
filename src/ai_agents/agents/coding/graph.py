@@ -16,19 +16,21 @@ from ai_agents.agents.coding.tools.filesystem import list_files, read_file, writ
 from ai_agents.agents.coding.tools.search import search_repo
 from ai_agents.agents.coding.tools.shell import run_command
 from ai_agents.agents.coding.tools.patch import unified_diff
+from ai_agents.agents.coding.tests.runner import run_validation_suite
 
 
 
 # Initialize the Groq model
 llm = ChatGroq(
-    model=config_settings.chat_model,
+    model=config_settings.coding_model,
     api_key=config_settings.resolved_groq_api_key()
 )
 
 
 class CodingAgentState(TypedDict, total=False):
     user_request: str
-    repo_root: str
+    repo_root: str          # target root for searching/patching
+    workspace_root: str     # project root for validation
     allow_write: bool
     selected_skill: str
     skill_instructions: str
@@ -55,7 +57,7 @@ class PlanDecision(BaseModel):
 
 class FileToInspect(BaseModel):
     path: str
-    reason: str
+    reason: str = ""
 
 
 class ContextDecision(BaseModel):
@@ -65,11 +67,11 @@ class ContextDecision(BaseModel):
 class FileChange(BaseModel):
     path: str = Field(description="Repository-relative path to create or overwrite.")
     content: str = Field(description="Full final content for the file.")
-    reason: str = Field(description="Why this file needs to change.")
+    reason: str = Field(default="", description="Why this file needs to change.")
 
 
 class PatchDecision(BaseModel):
-    summary: str
+    summary: str = ""
     file_changes: list[FileChange] = Field(default_factory=list)
     validation_commands: list[str] = Field(default_factory=list)
 
@@ -91,6 +93,7 @@ def _allow_write(state: CodingAgentState, config: CodingAgentSettings) -> bool:
 
 
 def plan_node(state: CodingAgentState) -> CodingAgentState:
+
     request = state["user_request"]
 
     try:
@@ -100,7 +103,11 @@ def plan_node(state: CodingAgentState) -> CodingAgentState:
                 ("system", PLANNER_SYSTEM_PROMPT),
                 (
                     "human",
-                    f"""Create a minimal coding-agent plan for this request.\n\nRequest:\n{request}\n\nRules:\n- Search queries should be short terms likely to appear in file names or code.\n- Validation commands must be safe, like `uv run pytest`, `uv run ruff check .`, or `python -m compileall .`.\n- Do not invent specific files unless the request clearly names them.""",
+                    f"""Create a minimal coding-agent plan for this request.
+                    \n\nRequest:\n{request}\n\nRules:
+                    \n- Search queries should be short terms likely to appear in file names or code.
+                    \n- Validation commands must be safe, like `uv run pytest`, `uv run ruff check .`, or `python -m compileall .`.
+                    \n- Do not invent specific files unless the request clearly names them.""",
                 ),
             ]
         )
@@ -305,26 +312,30 @@ def patch_node(state: CodingAgentState, config: CodingAgentSettings = default_se
 
 
 def validate_node(state: CodingAgentState, config: CodingAgentSettings = default_settings) -> CodingAgentState:
-    repo_root = _repo_root(state, config)
-    commands = state.get("validation_commands") or _default_validation_commands(repo_root)
-    results: list[dict[str, Any]] = []
+    
+    workspace_root = state.get("workspace_root", "")
 
-    if not config.allow_shell:
-        return {
-            "validation_commands": commands,
-            "validation_results": [
-                {"command": command, "returncode": 126, "stderr": "Shell disabled", "stdout": ""}
-                for command in commands
-            ],
-            "status": "validated",
-        }
+    print("\n\nCWD:", workspace_root, "\n\n")
 
-    for command in commands:
-        results.append(run_command(repo_root, command, timeout_seconds=config.shell_timeout_seconds))
+    commands = state.get("validation_commands") or _default_validation_commands(workspace_root)
+
+    changed_files = [
+        item.get("path", "")
+        for item in state.get("file_changes", [])
+        if item.get("path")
+    ]
+
+    suite = run_validation_suite(
+        workspace_root,
+        changed_files=changed_files,
+        requested_commands=commands,
+        allow_shell=config.allow_shell,
+        timeout_seconds=config.shell_timeout_seconds,
+        profile_name="coding-agent-default",
+    )
 
     return {
-        "validation_commands": commands,
-        "validation_results": results,
+        "validation_results": suite.to_dicts(),
         "status": "validated",
     }
 

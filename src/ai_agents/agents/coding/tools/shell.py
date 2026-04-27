@@ -43,15 +43,25 @@ def run_command(repo_root: Path, command: str, timeout_seconds: int = 60) -> dic
             "stderr": "Command blocked by coding-agent allowlist.",
         }
 
-    completed = subprocess.run(
-        command,
-        cwd=repo_root,
-        shell=True,  # should shell be set to false?
-        check=False,
-        text=True,
-        capture_output=True,
-        timeout=timeout_seconds,
-    )
+    try:
+        completed = subprocess.run(
+            shlex.split(command),
+            cwd=repo_root,
+            shell=False,
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=timeout_seconds,
+        )
+        
+    except FileNotFoundError as exc:
+        return {
+            "command": command,
+            "returncode": 127,
+            "stdout": "",
+            "stderr": f"Executable not found: {exc}",
+        }
+
     return {
         "command": command,
         "returncode": completed.returncode,
