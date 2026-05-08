@@ -192,3 +192,26 @@ Question:
 def build_rag_prompt() -> ChatPromptTemplate:
     """Build the prompt used for answer generation."""
     return ChatPromptTemplate.from_template(RAG_TEMPLATE)
+
+
+# =========================
+# REFINEMENT PROMPTS
+# =========================
+
+ANSWER_REFINE_TEMPLATE = """You are an assistant tasked with refining a draft answer based on additional context.
+
+Given the original draft answer and new context snippets, improve the answer for accuracy, completeness, and relevance.
+
+Draft Answer:
+{draft_answer}
+
+Additional Context:
+{context}
+
+Provide the refined answer only, without any explanations.
+"""
+
+@traceable
+def build_answer_refine_prompt() -> ChatPromptTemplate:
+    """Build the prompt used for refining answers with extra context."""
+    return ChatPromptTemplate.from_template(ANSWER_REFINE_TEMPLATE)

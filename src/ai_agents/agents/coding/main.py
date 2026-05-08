@@ -1,13 +1,22 @@
 from __future__ import annotations
 
+import os
 import argparse
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
+from langchain_core.runnables import RunnableConfig
+from langsmith import traceable
+from dotenv import load_dotenv
 
 from ai_agents.agents.coding.graph import build_coding_agent_graph, _bullets
 
+load_dotenv()
 
+LANGCHAIN_TRACING_V2=os.getenv("LANGCHAIN_TRACING_V2", True)
+LANGCHAIN_API_KEY=os.environ["LANGCHAIN_API_KEY"]
+LANGCHAIN_PROJECT=os.getenv("LANGCHAIN_PROJECT", "ai-agents-dev")
+LANGSMITH_ENDPOINT=os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
 
 
 def _fence(value: object) -> str:
@@ -126,7 +135,7 @@ def write_markdown_report(
 
 
 
-
+@traceable(name="run_coding_agent", tags=["coding", "agent"])
 def run_coding_agent(
     user_request: str,
     repo_root: str | Path | None = None,
