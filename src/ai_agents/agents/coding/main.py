@@ -9,7 +9,8 @@ from langchain_core.runnables import RunnableConfig
 from langsmith import traceable
 from dotenv import load_dotenv
 
-from ai_agents.agents.coding.graph import build_coding_agent_graph, _bullets
+from ai_agents.agents.coding.graph import build_coding_agent_graph
+from ai_agents.agents.coding.utils.text import bullets
 
 load_dotenv()
 
@@ -73,15 +74,15 @@ def render_markdown_report(result: dict[str, Any]) -> str:
 
 ## Plan
 
-{_bullets(result.get("plan", []))}
+{bullets(result.get("plan", []))}
 
 ## Search Queries
 
-{_bullets(result.get("search_queries", []))}
+{bullets(result.get("search_queries", []))}
 
 ## Files Inspected
 
-{_bullets(result.get("files_inspected", []))}
+{bullets(result.get("files_inspected", []))}
 
 ## Patch Summary
 
@@ -101,7 +102,7 @@ def render_markdown_report(result: dict[str, Any]) -> str:
 
 ## Errors
 
-{_bullets(result.get("errors", []))}
+{bullets(result.get("errors", []))}
 """.strip() + "\n"
 
 

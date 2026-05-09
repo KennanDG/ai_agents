@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ai_agents.agents.coding.tools.filesystem import DEFAULT_IGNORES, read_file
+import difflib
 
 TEXT_SUFFIXES = {
     ".py",
@@ -53,7 +54,13 @@ def search_repo(repo_root: Path, query: str, max_results: int = 25) -> list[str]
 
         for line_no, line in enumerate(text.splitlines(), start=1):
 
-            if query_lower in line.lower():
+            line_lower = line.lower()
+            if query_lower in line_lower:
+                matches.append(f"{rel}:{line_no}: {line.strip()[:300]}")
+                break
+            # Simple fuzzy matching: consider a line a match if similarity > 0.8
+            similarity = difflib.SequenceMatcher(None, query_lower, line_lower).ratio()
+            if similarity > 0.8:
                 matches.append(f"{rel}:{line_no}: {line.strip()[:300]}")
                 break
 

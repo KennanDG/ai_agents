@@ -81,3 +81,21 @@ def write_file(repo_root: Path, path: str | Path, content: str, *, allow_write: 
     return f"WROTE: {target.relative_to(repo_root)} ({len(content)} chars)"
 
 
+@tool
+def file_size(repo_root: Path, path: str | Path) -> int:
+    """Return the size in bytes of a file within the repository.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        IsADirectoryError: If the path points to a directory.
+    """
+    target = resolve_in_repo(repo_root, path)
+
+    if not target.exists():
+        raise FileNotFoundError(str(path))
+
+    if not target.is_file():
+        raise IsADirectoryError(str(path))
+
+    return target.stat().st_size
+
