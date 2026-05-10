@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ai_agents.agents.coding.tools.filesystem import DEFAULT_IGNORES, read_file
+from ai_agents.agents.coding.utils.search import is_ignored_context_path
 import difflib
 import re
 
@@ -46,8 +47,10 @@ def search_repo(repo_root: Path, query: str, max_results: int = 25) -> list[str]
         if not path.is_file() or path.suffix.lower() not in TEXT_SUFFIXES:
             continue
 
-
         rel = path.relative_to(repo_root)
+
+        if is_ignored_context_path(str(rel)):
+            continue
         
         try:
             text = read_file(repo_root, rel, max_chars=50_000)
@@ -112,6 +115,9 @@ def robust_search(repo_root: Path, queries: list[str] | str, max_results: int = 
             continue
 
         rel = path.relative_to(repo_root)
+
+        if is_ignored_context_path(str(rel)):
+            continue
 
         try:
             text = read_file(repo_root, rel, max_chars=50_000)

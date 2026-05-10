@@ -40,6 +40,7 @@ from ai_agents.agents.coding.schemas import (
 from ai_agents.agents.coding.utils.search import (
     derive_search_queries,
     paths_from_search_results,
+    filter_context_paths
 )
 
 from ai_agents.agents.coding.settings import CodingAgentSettings, settings as default_settings
@@ -49,7 +50,7 @@ from ai_agents.agents.coding.tests.runner import run_validation_suite
 from ai_agents.agents.coding.utils.text import bullets, dedupe
 from ai_agents.agents.coding.tools.filesystem import list_files, read_file, write_file
 from ai_agents.agents.coding.tools.patch import unified_diff
-from ai_agents.agents.coding.tools.search import search_repo
+from ai_agents.agents.coding.tools.search import robust_search
 
 from ai_agents.agents.coding.utils.validation import (
     default_validation_commands,
@@ -128,7 +129,7 @@ def gather_context_node(
     files_inspected: list[str] = []
 
     try:
-        root_files = list_files(repo_root, ".", max_depth=2)[: cfg.max_search_results]
+        root_files = filter_context_paths(list_files(repo_root, ".", max_depth=2))[: cfg.max_search_results]
         context.append("Repository files:\n" + "\n".join(root_files))
 
     except Exception as exc:
@@ -141,9 +142,11 @@ def gather_context_node(
 
     for query in state.get("search_queries", []):
         try:
-            matches = search_repo(repo_root, query, max_results=cfg.max_search_results)
+            matches = robust_search(repo_root, query, max_results=cfg.max_search_results)
+
             if matches:
                 search_blocks.append(f"Search results for '{query}':\n" + "\n".join(matches))
+
         except Exception as exc:
             errors.append(f"Search failed for query '{query}': {exc}")
 
@@ -165,13 +168,13 @@ def gather_context_node(
             ),
         )
 
-        candidate_paths = [item.path for item in decision.files_to_inspect]
+        candidate_paths = filter_context_paths([item.path for item in decision.files_to_inspect])
 
     except Exception as exc:
         errors.append(f"LLM context selection failed; using search-derived context only: {exc}")
         candidate_paths = paths_from_search_results(search_blocks)
 
-    for path in dedupe(candidate_paths)[:MAX_FILES_TO_INSPECT]:
+    for path in dedupe(filter_context_paths(candidate_paths))[:MAX_FILES_TO_INSPECT]:
         try:
             content = read_file(repo_root, path, max_chars=cfg.max_file_chars)
             files_inspected.append(path)
