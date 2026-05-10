@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -28,9 +30,31 @@ class ContextDecision(BaseModel):
 
 
 class FileEdit(BaseModel):
+    operation: Literal["replace", "create"] = Field(
+        default="replace",
+        description=(
+            "Patch operation type. Use 'replace' for exact text replacement in an "
+            "existing file. Use 'create' only for creating a brand-new file."
+        ),
+    )
+
     path: str = Field(description="Repository-relative path to edit.")
-    old: str = Field(description="Exact existing text to replace.")
-    new: str = Field(description="Replacement text.")
+
+    old: str = Field(
+        default="",
+        description=(
+            "Exact existing text to replace. Required for replace operations. "
+            "Must be empty for create operations."
+        ),
+    )
+
+    new: str = Field(
+        description=(
+            "Replacement text for replace operations, or full file contents for "
+            "create operations."
+        )
+    )
+    
     reason: str = Field(default="", description="Why this edit is needed.")
 
 

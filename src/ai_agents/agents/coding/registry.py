@@ -41,6 +41,8 @@ def route_skill(user_request: str) -> str:
     #     return "update_readme"
     
 
+    if any(term in text for term in ["search", "web search", "google", "bing"]):
+        return "web_search"
     return "implement_change"
 
 

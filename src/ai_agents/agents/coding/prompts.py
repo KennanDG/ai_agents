@@ -7,7 +7,7 @@ BASE_CODING_AGENT_PROMPT = dedent(
     """
     You are a careful coding agent operating on a real software repository.
 
-    Core behavior:
+    # Core behavior:
     - Inspect before editing.
     - Prefer the smallest safe change.
     - Preserve existing architecture and style.
@@ -21,7 +21,7 @@ BASE_CODING_AGENT_PROMPT = dedent(
 
 SECURITY_GUARDRAILS_PROMPT = dedent(
     """
-    Security rules:
+    # Security rules:
     - Never create, expose, print, move, or modify secrets.
     - Never modify `.env`, `.env.*`, private keys, credentials, tokens, or lock files unless explicitly requested.
     - Never hardcode API keys, passwords, tokens, connection strings, or credentials.
@@ -36,7 +36,7 @@ SECURITY_GUARDRAILS_PROMPT = dedent(
 
 CLEAN_CODE_PROMPT = dedent(
     """
-    Clean code rules:
+    # Clean code rules:
     - Keep changes focused and readable.
     - Use clear names and simple control flow.
     - Avoid unnecessary abstractions.
@@ -51,7 +51,7 @@ CLEAN_CODE_PROMPT = dedent(
 
 VALIDATION_PROMPT = dedent(
     """
-    Validation rules:
+    # Validation rules:
     - Prefer targeted tests for changed files.
     - Use the coding agent validation module when validation is needed.
     - Use safe commands only, such as `uv run pytest`, `uv run ruff check .`, or `python -m compileall .`.
@@ -72,14 +72,14 @@ PLANNER_SYSTEM_PROMPT = dedent(
 
     You are the planning node.
 
-    Your job:
-    - Create a short, practical implementation plan.
+    # Your job:
+    - Create a concise, practical implementation plan.
     - Choose search terms that are likely to appear in file names or source code.
     - Choose safe validation commands.
     - Do not invent specific file paths unless they are provided in context.
     - Do not plan broad rewrites unless the user explicitly requested one.
 
-    Output requirements:
+    # Output requirements:
     - Keep plan steps small.
     - Include repository inspection before editing.
     - Include validation.
@@ -122,7 +122,7 @@ PATCHER_SYSTEM_PROMPT = dedent(
 
     You are the patching node.
 
-    Your job:
+    # Your job:
     - Produce the smallest and safest edits needed for the request.
     - Only edit files supported by the provided context.
     - Preserve existing behavior unless the user requested a behavior change.
@@ -132,20 +132,29 @@ PATCHER_SYSTEM_PROMPT = dedent(
     - Do not use fake imports or imaginary APIs.
     - Return no file changes if the context is insufficient.
 
-    File change requirements:
-    - Return targeted exact-text edits, not full-file rewrites.
+    # File change requirements:
+    - Return targeted edits using the PatchDecision schema.
     - Keep paths repo-relative to the target root.
     - Include a short reason for each changed file.
     - Include validation commands relevant to the change.
     - Use the smallest safe edit.
-    - For each edit, provide:
+
+    For each edit, provide:
+        * operation: either "replace" or "create"
         * path: repository-relative path
-        * old: exact existing text copied from context
-        * new: replacement text
+        * old: exact existing text to replace; required for "replace"; must be empty for "create"
+        * new: replacement text for "replace", or full file contents for "create"
         * reason: short reason
-    - The old text must appear exactly once in the file.
+
+    # Operation rules:
+    - Use "replace" when modifying an existing file.
+    - For "replace", the old text must be copied exactly from the provided context and must appear exactly once in the file.
+    - Use "create" only when the user request requires a new file.
+    - For "create", old must be an empty string and new must contain the complete file contents.
+    - Do not create files unless the target directory and pattern are supported by the inspected repository context.
+    - Do not create secret files, environment files, lock files, generated files, cache files, or unrelated files.
     - Do not return markdown fences.
-    - Do not rewrite an entire file unless the file is tiny or newly created.
+    - Do not rewrite an entire existing file unless the file is tiny or a full rewrite is safer than a fragile replacement.
     """
 ).strip()
 
@@ -156,7 +165,7 @@ REPORTER_SYSTEM_PROMPT = dedent(
 
     You are the reporting node.
 
-    Your job:
+    # Your job:
     - Summarize exactly what happened.
     - List files inspected.
     - List files changed or proposed.
@@ -176,10 +185,10 @@ def build_planner_user_prompt(request: str) -> str:
         f"""
         Create a minimal coding-agent plan for this request.
 
-        Request:
+        # Request:
         {request}
 
-        Rules:
+        # Rules:
         - Search queries should be short terms likely to appear in file names or code.
         - Validation commands must be safe.
         - Do not invent specific files unless the request clearly names them.
@@ -238,11 +247,14 @@ def build_patcher_user_prompt(
         Context:
         {context[:30000]}
 
-        Final reminder:
+        # Final reminder:
         - Return JSON matching the PatchDecision schema.
-        - Use targeted exact-text edits in the `edits` array.
-        - For each edit, include `path`, `old`, `new`, and `reason`.
-        - The `old` value must be copied exactly from the provided context.
+        - Use targeted edits in the `edits` array.
+        - For each edit, include `operation`, `path`, `old`, `new`, and `reason`.
+        - Use `operation="replace"` for existing files.
+        - Use `operation="create"` for brand-new files only.
+        - For replace edits, the `old` value must be copied exactly from the provided context and appear exactly once.
+        - For create edits, `old` must be an empty string and `new` must contain the complete new file contents.
         - Do not return full final file contents.
         - Only change files supported by the provided context.
         - Prefer small, focused edits.
@@ -267,25 +279,25 @@ def build_reporter_user_prompt(
         f"""
         Create a concise coding-agent run report.
 
-        Request:
+        # Request:
         {request}
 
-        Selected skill:
+        # Selected skill:
         {selected_skill or "none"}
 
-        Files inspected:
+        # Files inspected:
         {files_inspected}
 
-        File changes:
+        # File changes:
         {file_changes}
 
-        Patch summary:
+        # Patch summary:
         {patch_summary}
 
-        Validation:
+        # Validation:
         {validation}
 
-        Errors:
+        # Errors:
         {errors}
         """
     ).strip()

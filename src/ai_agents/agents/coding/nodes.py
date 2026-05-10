@@ -50,7 +50,7 @@ from ai_agents.agents.coding.tests.runner import run_validation_suite
 from ai_agents.agents.coding.utils.text import bullets, dedupe
 from ai_agents.agents.coding.tools.filesystem import list_files, read_file, write_file
 from ai_agents.agents.coding.tools.patch import unified_diff
-from ai_agents.agents.coding.tools.search import robust_search
+from ai_agents.agents.coding.tools.search import robust_search, search_repo
 
 from ai_agents.agents.coding.utils.validation import (
     default_validation_commands,
@@ -243,13 +243,47 @@ def patch_node(
             continue
 
         try:
-            before = read_file(repo_root, path, max_chars=1_000_000)
-            after = apply_exact_replace(before, edit.old, edit.new, path=path)
+            if edit.operation == "create":
+                if edit.old.strip():
+                    raise ValueError(
+                        f"Create operation for {path} must use an empty old value."
+                    )
 
+                try:
+                    read_file(repo_root, path, max_chars=1)
+                except FileNotFoundError:
+                    before = ""
+                    after = edit.new
+                else:
+                    raise FileExistsError(
+                        f"Cannot create {path}; file already exists. Use operation='replace'."
+                    )
+
+            elif edit.operation == "replace":
+                if not edit.old:
+                    raise ValueError(
+                        f"Replace operation for {path} requires non-empty old text."
+                    )
+
+                before = read_file(repo_root, path, max_chars=1_000_000)
+                after = apply_exact_replace(before, edit.old, edit.new, path=path)
+
+            else:
+                raise ValueError(f"Unsupported edit operation for {path}: {edit.operation}")
+
+            
             diffs.append(unified_diff(path, before, after))
             result = write_file(repo_root, path, after, allow_write=allow_write)
             write_results.append(result)
-            file_changes.append({"path": path, "reason": edit.reason, "write_result": result})
+            
+            file_changes.append(
+                {
+                    "path": path,
+                    "operation": edit.operation,
+                    "reason": edit.reason,
+                    "write_result": result,
+                }
+            )
 
         except Exception as exc:
             errors.append(f"Failed to process edit for {path}: {exc}")

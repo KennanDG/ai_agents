@@ -9,7 +9,7 @@ class CodingAgentSettings:
     """Runtime guardrails for the coding agent."""
 
     repo_root: Path = Path.cwd()
-    max_search_results: int = 25
+    max_search_results: int = 50
     max_file_chars: int = 25_000
     dry_run: bool = True
     allow_write: bool = False
