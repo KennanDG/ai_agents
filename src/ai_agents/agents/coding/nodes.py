@@ -195,6 +195,7 @@ def patch_node(
     cfg: CodingAgentSettings = default_settings,
 ) -> CodingAgentState:
     """Ask the LLM for exact edits and apply them when writes are enabled."""
+    
     repo_root = resolve_repo_root(state, cfg)
     errors = list(state.get("errors", []))
     allow_write = resolve_allow_write(state, cfg)

@@ -4,6 +4,8 @@ from typing import TypeVar
 
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_groq import ChatGroq
+from openrouter import OpenRouter
+from google import genai
 from pydantic import BaseModel
 
 from ai_agents.agents.coding.utils.constants import LLM_DECISION_MAX_ATTEMPTS

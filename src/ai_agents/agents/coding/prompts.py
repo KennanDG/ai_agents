@@ -56,7 +56,8 @@ VALIDATION_PROMPT = dedent(
     - Use the coding agent validation module when validation is needed.
     - Use safe commands only, such as `uv run pytest`, `uv run ruff check .`, or `python -m compileall .`.
     - Do not claim validation passed unless command results show success.
-    - If validation fails, report the exact failing command and likely next fix.
+    - If blocking validation fails, report the exact failing command and likely next fix.
+    - If lint fails but blocking validation passes, report lint as advisory.
     """
 ).strip()
 
@@ -160,7 +161,8 @@ REPORTER_SYSTEM_PROMPT = dedent(
     - Summarize validation results.
     - Clearly state errors, skipped work, and uncertainty.
     - Do not claim files were written if the run was dry-run only.
-    - Do not claim validation passed unless all validation commands returned exit code 0.
+    - Do not claim validation passed unless all blocking validation commands returned exit code 0.
+    - Report lint failures as advisory warnings when they are non-blocking.
 
     Keep the report concise, readable, and honest.
     """
