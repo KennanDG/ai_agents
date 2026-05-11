@@ -23,6 +23,7 @@ dependencies = [
     "langchain-core>=1.2.12",
     "openrouter>=0.9.1",
     "google-genai>=2.0.1",
+    "langchain-openai>=1.2.1",
 ]
 
 

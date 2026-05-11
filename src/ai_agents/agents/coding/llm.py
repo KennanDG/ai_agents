@@ -4,27 +4,24 @@ from typing import TypeVar
 
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_groq import ChatGroq
-from openrouter import OpenRouter
-from google import genai
+from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
 from ai_agents.agents.coding.utils.constants import LLM_DECISION_MAX_ATTEMPTS
 from ai_agents.agents.coding.runtime import node_config
 from ai_agents.agents.coding.state import CodingAgentState
 from ai_agents.agents.coding.utils.text import message_content_to_text
-from ai_agents.config.settings import settings as config_settings
 
 
-llm = ChatGroq(
-    model=config_settings.reasoning_model,
-    api_key=config_settings.resolved_groq_api_key(),
-)
+
+
 
 DecisionT = TypeVar("DecisionT", bound=BaseModel)
 
 
 def invoke_parsed_decision(
     *,
+    model : ChatGroq | ChatOpenAI,
     schema: type[DecisionT],
     node_name: str,
     state: CodingAgentState,
@@ -52,7 +49,7 @@ def invoke_parsed_decision(
                 f"Parser/runtime error:\n{last_error}"
             )
 
-        response = llm.invoke(
+        response = model.invoke(
             [
                 (
                     "system",
