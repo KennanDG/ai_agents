@@ -8,7 +8,8 @@ Use when:
 
 Allowed tools:
 - list_files
-- search_repo
+- robust_search
+- web_search
 - read_file
 - write_file
 - run_command

@@ -24,6 +24,7 @@ dependencies = [
     "openrouter>=0.9.1",
     "google-genai>=2.0.1",
     "langchain-openai>=1.2.1",
+    "google-api-python-client>=2.197.0",
 ]
 
 

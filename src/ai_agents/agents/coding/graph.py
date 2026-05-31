@@ -6,11 +6,13 @@ from langgraph.types import RetryPolicy
 
 from ai_agents.agents.coding.nodes import (
     gather_context_node,
+    gmail_access_node,
     patch_node,
     plan_node,
     report_node,
     route_node,
     validate_node,
+    web_search_node,
 )
 from ai_agents.agents.coding.routing import (
     route_after_context,
@@ -19,6 +21,12 @@ from ai_agents.agents.coding.routing import (
 )
 from ai_agents.agents.coding.state import CodingAgentState
 
+
+def route_after_plan(state: CodingAgentState) -> str:
+    """Route to gmail_access or web_search based on skill."""
+    if state.get("selected_skill") == "gmail_access":
+        return "gmail_access"
+    return "web_search"
 
 
 def build_coding_agent_graph():
@@ -36,10 +44,21 @@ def build_coding_agent_graph():
     builder.add_node("patch", patch_node, retry_policy=transient_retry)
     builder.add_node("validate", validate_node, retry_policy=transient_retry)
     builder.add_node("report", report_node, retry_policy=transient_retry)
+    builder.add_node("web_search", web_search_node, retry_policy=transient_retry)
+    builder.add_node("gmail_access", gmail_access_node, retry_policy=transient_retry)
 
     builder.add_edge(START, "route")
     builder.add_edge("route", "plan")
-    builder.add_edge("plan", "gather_context")
+    builder.add_conditional_edges(
+        "plan",
+        route_after_plan,
+        {
+            "web_search": "web_search",
+            "gmail_access": "gmail_access",
+        },
+    )
+    builder.add_edge("web_search", "gather_context")
+    builder.add_edge("gmail_access", "gather_context")
     builder.add_conditional_edges(
         "gather_context",
         route_after_context,

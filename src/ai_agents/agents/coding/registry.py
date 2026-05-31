@@ -33,15 +33,13 @@ def route_skill(user_request: str) -> str:
         return "debug"
     if any(term in text for term in ["test", "pytest", "unit test", "regression"]):
         return "tests"
-    # if any(term in text for term in ["fastapi", "endpoint", "route", "router"]):
-    #     return "add_fastapi_endpoint"
     # if any(term in text for term in ["langgraph", "graph", "node", "edge", "state"]):
     #     return "add_langgraph_node"
-    # if any(term in text for term in ["readme", "docs", "documentation"]):
-    #     return "update_readme"
     
     if any(term in text for term in ["web search", "search the web", "google", "bing", "online search"]):
         return "web_search"
+    if any(term in text for term in ["gmail", "gmail access", "email", "send email", "email draft", "gmail api"]):
+        return "gmail_access"
 
     return "implement_change"
 

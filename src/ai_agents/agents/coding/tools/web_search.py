@@ -25,6 +25,7 @@ def web_search(query: str, num_results: int = 5) -> str:
         A JSON string containing an array of result objects (title, link, snippet).
     """
     api_key = os.environ.get("SERPAPI_API_KEY")
+
     if not api_key:
         return json.dumps({"error": "SERPAPI_API_KEY not set"})
 
@@ -34,6 +35,7 @@ def web_search(query: str, num_results: int = 5) -> str:
         "num": str(num_results),
         "engine": "google",
     }
+
     url = "https://serpapi.com/search?" + urllib.parse.urlencode(params)
 
     try:
@@ -44,6 +46,7 @@ def web_search(query: str, num_results: int = 5) -> str:
 
     organic_results = data.get("organic_results", [])
     results = []
+    
     for item in organic_results[:num_results]:
         results.append({
             "title": item.get("title"),

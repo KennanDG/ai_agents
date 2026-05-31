@@ -55,6 +55,7 @@ from ai_agents.agents.coding.tests.runner import run_validation_suite
 from ai_agents.agents.coding.utils.text import bullets, dedupe
 from ai_agents.agents.coding.tools.filesystem import list_files, read_file, write_file
 from ai_agents.agents.coding.tools.patch import unified_diff
+from ai_agents.agents.coding.tools.web_search import web_search
 from ai_agents.agents.coding.tools.search import robust_search, search_repo
 
 from ai_agents.agents.coding.utils.validation import (
@@ -70,6 +71,10 @@ load_dotenv()
 
 
 OPEN_ROUTER_API_KEY=os.environ["OPEN_ROUTER_API_KEY"]
+OPEN_ROUTER_URL="https://openrouter.ai/api/v1"
+
+DOCKER_API_KEY=os.environ["DOCKER_API_KEY"]
+DOCKER_URL="https://api.deepseek.com"
 
 
 model = ChatGroq(
@@ -81,7 +86,7 @@ model = ChatGroq(
 reasoning_model = ChatOpenAI(
     model=config_settings.reasoning_model, # e.g., "deepseek/deepseek-v4-pro"
     api_key=OPEN_ROUTER_API_KEY, 
-    base_url="https://openrouter.ai/api/v1",
+    base_url=OPEN_ROUTER_URL,
     max_retries=2
 )
 
@@ -180,6 +185,10 @@ def gather_context_node(
             errors.append(f"Search failed for query '{query}': {exc}")
 
     context.extend(search_blocks)
+
+    web_results = state.get("web_search_results")
+    if web_results:
+        context.append(f"\n\n# Web search results:\n{web_results}")
 
     try:
         decision: ContextDecision = invoke_parsed_decision(
@@ -460,3 +469,44 @@ Errors:
 {bullets(state.get("errors", [])) if state.get("errors") else "None"}
 """.strip()
         return {"report": report, "status": "reported"}
+
+
+def web_search_node(state: CodingAgentState) -> CodingAgentState:
+    """
+    Perform web search if the selected skill is web_search.
+    Uses the user request as the search query.
+    """
+    if state.get("selected_skill") != "web_search":
+        return {"status": "web_search_skipped"}
+
+    query = state.get("user_request", "")
+    if not query:
+        return {
+            "web_search_results": "",
+            "status": "web_search_skipped",
+        }
+
+    try:
+        results = web_search(query, num_results=5)
+        return {
+            "web_search_results": results,
+            "status": "web_search_completed",
+        }
+    except Exception as exc:
+        return {
+            "web_search_results": f"Web search failed: {exc}",
+            "errors": [*state.get("errors", []), f"Web search failed: {exc}"],
+            "status": "web_search_failed",
+        }
+
+
+def gmail_access_node(state: CodingAgentState) -> CodingAgentState:
+    """
+    Perform Gmail access if the selected skill is gmail_access.
+    Currently a placeholder.
+    """
+    if state.get("selected_skill") != "gmail_access":
+        return {"status": "gmail_access_skipped"}
+    # Placeholder: log that gmail access was triggered
+    # In future, invoke gmail API here.
+    return {"status": "gmail_access_completed"}
