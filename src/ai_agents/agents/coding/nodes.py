@@ -232,6 +232,12 @@ def gather_context_node(
 
 
 
+
+def _same_file_content(existing: str, requested: str) -> bool:
+    """Return True when an attempted create is effectively already applied."""
+    return existing == requested or existing.rstrip("\n") == requested.rstrip("\n")
+
+
 def patch_node(
     state: CodingAgentState,
     cfg: CodingAgentSettings = default_settings,
@@ -244,9 +250,21 @@ def patch_node(
     patch_attempts = int(state.get("patch_attempts", 0)) + 1
     max_patch_attempts = int(state.get("max_patch_attempts", MAX_PATCH_ATTEMPTS))
 
-    file_changes: list[dict[str, str]] = []
-    diffs: list[str] = []
-    write_results: list[str] = []
+    previous_file_changes = list(state.get("file_changes", []))
+    previous_diffs = list(state.get("diffs", []))
+    
+    known_changed_paths = {
+        item.get("path", "")
+        for item in previous_file_changes
+        if item.get("path")
+    }
+
+    file_changes: list[dict[str, str]] = [*previous_file_changes]
+    diffs: list[str] = [*previous_diffs]
+
+    attempt_file_changes: list[dict[str, str]] = []
+    attempt_write_results: list[str] = []
+    idempotent_noops = 0
 
     try:
         decision: PatchDecision = invoke_parsed_decision(
@@ -290,13 +308,34 @@ def patch_node(
                     )
 
                 try:
-                    read_file(repo_root, path, max_chars=1)
+                    existing = read_file(repo_root, path, max_chars=1_000_000)
                 except FileNotFoundError:
                     before = ""
                     after = edit.new
                 else:
+                    if _same_file_content(existing, edit.new):
+                        result = (
+                            f"No-op: {path} already exists with the requested content."
+                        )
+                        attempt_write_results.append(result)
+                        idempotent_noops += 1
+
+                        if path not in known_changed_paths:
+                            change = {
+                                "path": path,
+                                "operation": edit.operation,
+                                "reason": edit.reason,
+                                "write_result": result,
+                            }
+                            attempt_file_changes.append(change)
+                            file_changes.append(change)
+                            known_changed_paths.add(path)
+
+                        continue
+
                     raise FileExistsError(
-                        f"Cannot create {path}; file already exists. Use operation='replace'."
+                        f"Cannot create {path}; file already exists with different content. "
+                        "Use operation='replace'."
                     )
 
             elif edit.operation == "replace":
@@ -314,16 +353,18 @@ def patch_node(
             
             diffs.append(unified_diff(path, before, after))
             result = write_file(repo_root, path, after, allow_write=allow_write)
-            write_results.append(result)
-            
-            file_changes.append(
-                {
-                    "path": path,
-                    "operation": edit.operation,
-                    "reason": edit.reason,
-                    "write_result": result,
-                }
-            )
+            attempt_write_results.append(result)
+
+            change = {
+                "path": path,
+                "operation": edit.operation,
+                "reason": edit.reason,
+                "write_result": result,
+            }
+
+            attempt_file_changes.append(change)
+            file_changes.append(change)
+            known_changed_paths.add(path)
 
         except Exception as exc:
             errors.append(f"Failed to process edit for {path}: {exc}")
@@ -331,14 +372,18 @@ def patch_node(
     validation_commands = decision.validation_commands or state.get("validation_commands") or []
     mode = "WRITE MODE" if allow_write else "DRY RUN"
 
+    successful_attempt_items = len(attempt_file_changes) + idempotent_noops
+
     patch_summary = (
         f"{mode}: {decision.summary}\n\n"
         f"Patch attempt: {patch_attempts}/{max_patch_attempts}\n"
-        f"Files changed/proposed: {len(file_changes)}\n"
-        f"Write results:\n{bullets(write_results)}"
+        f"Files changed/proposed this attempt: {len(attempt_file_changes)}\n"
+        f"Idempotent create no-ops this attempt: {idempotent_noops}\n"
+        f"Total files changed/proposed: {len(file_changes)}\n"
+        f"Write results:\n{bullets(attempt_write_results)}"
     )
 
-    if decision.edits and not file_changes:
+    if decision.edits and successful_attempt_items == 0:
         status: Literal["patched", "patch_failed", "patch_skipped"] = "patch_failed"
     elif not decision.edits:
         status = "patch_skipped"
