@@ -6,6 +6,11 @@ from typing import Any, Literal, TypedDict
 CodingAgentStatus = Literal[
     "planned",
     "routed",
+    "web_search_skipped",
+    "web_search_completed",
+    "web_search_failed",
+    "gmail_access_skipped",
+    "gmail_access_completed",
     "context_gathered",
     "context_failed",
     "patched",
@@ -25,7 +30,9 @@ class CodingAgentState(TypedDict, total=False):
     selected_skill: str
     skill_instructions: str
     plan: list[str]
-    search_queries: list[str]
+    search_requests: list[dict[str, Any]]
+    search_queries: list[str]  # legacy fallback while migrating to structured search
+    search_results: list[dict[str, Any]]
     context: list[str]
     files_inspected: list[str]
     file_changes: list[dict[str, str]]

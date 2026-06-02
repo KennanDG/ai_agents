@@ -43,9 +43,11 @@ from ai_agents.agents.coding.schemas import (
 )
 
 from ai_agents.agents.coding.utils.search import (
-    derive_search_queries,
+    derive_search_requests,
+    filter_context_paths,
+    legacy_queries_to_search_requests,
+    paths_from_ranked_results,
     paths_from_search_results,
-    filter_context_paths
 )
 
 from ai_agents.agents.coding.settings import CodingAgentSettings, settings as default_settings
@@ -56,7 +58,7 @@ from ai_agents.agents.coding.utils.text import bullets, dedupe
 from ai_agents.agents.coding.tools.filesystem import list_files, read_file, write_file
 from ai_agents.agents.coding.tools.patch import unified_diff
 from ai_agents.agents.coding.tools.web_search import web_search
-from ai_agents.agents.coding.tools.search import robust_search, search_repo
+from ai_agents.agents.coding.tools.search import format_search_results, search_repository
 
 from ai_agents.agents.coding.utils.validation import (
     default_validation_commands,
@@ -93,6 +95,42 @@ reasoning_model = ChatOpenAI(
 
 
 
+
+
+def _dump_search_request(search_request: object) -> dict[str, object]:
+    """Serialize Pydantic search request models into plain state dicts."""
+
+    if hasattr(search_request, "model_dump"):
+        return search_request.model_dump(exclude_none=True)  # type: ignore[attr-defined]
+
+    if hasattr(search_request, "dict"):
+        return search_request.dict(exclude_none=True)  # type: ignore[attr-defined]
+
+    if isinstance(search_request, dict):
+        return dict(search_request)
+
+    return {}
+
+
+def _planned_search_requests(decision: PlanDecision, request: str) -> list[dict[str, object]]:
+    search_requests = [
+        item
+        for item in (_dump_search_request(item) for item in decision.search_requests)
+        if item
+    ]
+
+    if search_requests:
+        return search_requests
+
+    if decision.search_queries:
+        return legacy_queries_to_search_requests(decision.search_queries)
+
+    return derive_search_requests(request)
+
+
+
+
+
 def plan_node(state: CodingAgentState) -> CodingAgentState:
     request = state["user_request"]
     planner_prompt = build_planner_user_prompt(request)
@@ -115,9 +153,12 @@ def plan_node(state: CodingAgentState) -> CodingAgentState:
             user_prompt=planner_prompt,
         )
 
+        search_requests = _planned_search_requests(decision, request)
+
         return {
             "plan": decision.plan,
-            "search_queries": decision.search_queries or derive_search_queries(request),
+            "search_requests": search_requests,
+            "search_queries": decision.search_queries,
             "validation_commands": decision.validation_commands,
             "status": "planned",
         }
@@ -131,7 +172,7 @@ def plan_node(state: CodingAgentState) -> CodingAgentState:
                 "Run targeted validation.",
                 "Report inspected files, changed files, validation, and errors.",
             ],
-            "search_queries": derive_search_queries(request),
+            "search_queries": derive_search_requests(request),
             "errors": [*state.get("errors", []), f"LLM planning failed; used fallback plan: {exc}"],
             "status": "planned",
         }
@@ -173,20 +214,37 @@ def gather_context_node(
         }
 
     search_blocks: list[str] = []
+    search_result_dicts: list[dict[str, object]] = []
+    search_requests = list(state.get("search_requests") or [])
 
-    for query in state.get("search_queries", []):
+    if not search_requests:
+        search_requests = legacy_queries_to_search_requests(state.get("search_queries", []))
+
+    if not search_requests:
+        search_requests = derive_search_requests(state["user_request"])
+
+    if search_requests:
         try:
-            matches = robust_search(repo_root, query, max_results=cfg.max_search_results)
+            search_results = search_repository(
+                repo_root,
+                search_requests,
+                max_results=cfg.max_search_results,
+            )
+            search_result_dicts = [result.to_dict() for result in search_results]
 
-            if matches:
-                search_blocks.append(f"Search results for '{query}':\n" + "\n".join(matches))
+            if search_results:
+                search_blocks.append(
+                    "Ranked repository search results:\n"
+                    + "\n".join(format_search_results(search_results))
+                )
 
         except Exception as exc:
-            errors.append(f"Search failed for query '{query}': {exc}")
+            errors.append(f"Structured repository search failed: {exc}")
 
     context.extend(search_blocks)
 
     web_results = state.get("web_search_results")
+
     if web_results:
         context.append(f"\n\n# Web search results:\n{web_results}")
 
@@ -209,9 +267,14 @@ def gather_context_node(
 
         candidate_paths = filter_context_paths([item.path for item in decision.files_to_inspect])
 
+        if not candidate_paths:
+            candidate_paths = paths_from_ranked_results(search_result_dicts)
+
+
     except Exception as exc:
         errors.append(f"LLM context selection failed; using search-derived context only: {exc}")
-        candidate_paths = paths_from_search_results(search_blocks)
+        candidate_paths = paths_from_ranked_results(search_result_dicts) or paths_from_search_results(search_blocks)
+
 
     for path in dedupe(filter_context_paths(candidate_paths))[:MAX_FILES_TO_INSPECT]:
         try:
@@ -225,9 +288,12 @@ def gather_context_node(
     return {
         "context": context,
         "files_inspected": files_inspected,
+        "search_requests": search_requests,
+        "search_results": search_result_dicts,
         "errors": errors,
         "status": "context_gathered" if context else "context_failed",
     }
+
 
 
 
@@ -383,12 +449,14 @@ def patch_node(
         f"Write results:\n{bullets(attempt_write_results)}"
     )
 
+
     if decision.edits and successful_attempt_items == 0:
         status: Literal["patched", "patch_failed", "patch_skipped"] = "patch_failed"
     elif not decision.edits:
         status = "patch_skipped"
     else:
         status = "patched"
+        
 
     return {
         "patch_attempts": patch_attempts,

@@ -3,12 +3,17 @@ from __future__ import annotations
 from typing import Literal
 
 from pydantic import BaseModel, Field
+from dataclasses import dataclass, field
 
 
 class PlanDecision(BaseModel):
     plan: list[str] = Field(
         default_factory=list,
         description="Short implementation plan steps.",
+    )
+    search_requests: list[SearchRequest] = Field(
+        default_factory=list,
+        description="Structured repository search requests to gather context.",
     )
     search_queries: list[str] = Field(
         default_factory=list,
@@ -66,3 +71,61 @@ class PatchDecision(BaseModel):
 
 class ReportDecision(BaseModel):
     report: str
+
+
+#################################### Search Service Classes ####################################
+
+SearchMode = Literal["all", "any", "exact", "symbol"]
+@dataclass(frozen=True)
+class RepoSearchRequest:
+    """Structured repository search request used by the deterministic search service."""
+
+    terms: list[str] = field(default_factory=list)
+    path_includes: list[str] = field(default_factory=list)
+    path_excludes: list[str] = field(default_factory=list)
+    file_extensions: list[str] = field(default_factory=list)
+    mode: SearchMode = "all"
+    max_results: int | None = None
+
+
+@dataclass(frozen=True)
+class PythonSymbol:
+    path: str
+    name: str
+    kind: str
+    line_no: int
+
+
+class SearchRequest(BaseModel):
+    terms: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Code, symbol, filename, or domain terms to search for. Keep terms short; "
+            "do not include unsupported operators such as in:path:."
+        ),
+    )
+    path_includes: list[str] = Field(
+        default_factory=list,
+        description="Repo-relative path fragments that results should be under or contain.",
+    )
+    path_excludes: list[str] = Field(
+        default_factory=list,
+        description="Repo-relative path fragments to exclude from search.",
+    )
+    file_extensions: list[str] = Field(
+        default_factory=list,
+        description="Optional file extensions to include, such as .py, .md, .tsx, or .sql.",
+    )
+    mode: SearchMode = Field(
+        default="all",
+        description=(
+            "Matching mode. Use all for focused searches, any for broad fallback/path-only "
+            "discovery, exact for exact phrase searches, and symbol for Python functions/classes/imports."
+        ),
+    )
+    max_results: int | None = Field(
+        default=None,
+        description="Optional per-request result cap.",
+        ge=1,
+        le=50,
+    )

@@ -189,7 +189,12 @@ def build_planner_user_prompt(request: str) -> str:
         {request}
 
         # Rules:
-        - Search queries should be short terms likely to appear in file names or code.
+        - Prefer structured `search_requests` over legacy `search_queries`.
+        - Put code identifiers, symbols, and concise domain words in `terms`.
+        - Put known folders or path fragments in `path_includes`.
+        - Put file types such as `.py`, `.md`, `.tsx`, or `.sql` in `file_extensions`.
+        - Use `mode="all"` by default, `mode="symbol"` for Python symbol lookup, and `mode="any"` only for broad fallback or path-only discovery.
+        - Do not use unsupported search syntax such as `in:path:`, `path:`, `file:`, or shell globs inside `terms`.
         - Validation commands must be safe.
         - Do not invent specific files unless the request clearly names them.
         """
