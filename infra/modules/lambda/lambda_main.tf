@@ -5,8 +5,8 @@ resource "aws_lambda_function" "this" {
   package_type = "Image"
   image_uri    = var.image_uri
 
-  timeout     = 30
-  memory_size = 1024
+  timeout     = 60
+  memory_size = 2048
 
   ephemeral_storage {
     size = 4096 # (4GB)
@@ -15,23 +15,22 @@ resource "aws_lambda_function" "this" {
   environment {
     variables = {
       QDRANT_URL           = var.qdrant_url
+      GROQ_URL             = var.groq_url
+      JINA_URL             = var.jina_url
+      LANGSMITH_URL        = var.langsmith_url
       INGEST_QUEUE_URL     = var.ingest_queue_url
-      LANGCHAIN_ENDPOINT   = var.langsmith_url
       RAW_BUCKET           = var.raw_bucket
       DERIVED_BUCKET       = var.derived_bucket
+      SOURCES_TABLE        = var.sources_table_name
+      JOBS_TABLE           = var.jobs_table_name
+      LANGCHAIN_PROJECT    = var.langchain_project
+      LANGCHAIN_TRACING_V2 = tostring(var.langchain_tracing_v2)
+
       GROQ_SECRET_ARN      = var.groq_secret_arn
       QDRANT_SECRET_ARN    = var.qdrant_secret_arn
       LANGCHAIN_SECRET_ARN = var.langchain_secret_arn
-      SOURCES_TABLE        = var.sources_table_name
-      JOBS_TABLE           = var.jobs_table_name
-
-      LANGCHAIN_TRACING_V2 = tostring(var.langchain_tracing_v2)
-      LANGCHAIN_PROJECT    = var.langchain_project
-
-      FASTEMBED_CACHE_PATH  = "/tmp/fastembed_cache"
-      HF_HOME               = "/tmp/hf"
-      HUGGINGFACE_HUB_CACHE = "/tmp/hf/hub"
-      TRANSFORMERS_CACHE    = "/tmp/hf/transformers"
+      JINA_SECRET_ARN      = var.jina_secret_arn
+      AI_AGENTS_SECRET_ARN = var.app_secret_arn
 
     }
   }
