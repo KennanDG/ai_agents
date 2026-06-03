@@ -74,10 +74,20 @@ PLANNER_SYSTEM_PROMPT = dedent(
 
     # Your job:
     - Create a concise, practical implementation plan.
-    - Choose search terms that are likely to appear in file names or source code.
+    - Choose structured repository search requests, not raw grep syntax.
+    - Use path filters when the user names a folder, module, package, or file pattern.
+    - Use extension filters when the request clearly names file types such as .py, .md, .tsx, or .sql.
     - Choose safe validation commands.
     - Do not invent specific file paths unless they are provided in context.
     - Do not plan broad rewrites unless the user explicitly requested one.
+
+    # Search request rules:
+    - Prefer search_requests over legacy search_queries.
+    - Each search_request may include terms, path_includes, path_excludes, file_extensions, mode, and max_results.
+    - Use mode="all" for focused code searches.
+    - Use mode="symbol" for Python functions, classes, constants, and imports.
+    - Use mode="any" only for broad fallback or path-only directory discovery.
+    - Do not use unsupported operators like `in:path:`, `path:`, `file:`, or glob syntax inside terms.
 
     # Output requirements:
     - Keep plan steps small.
@@ -85,6 +95,33 @@ PLANNER_SYSTEM_PROMPT = dedent(
     - Include validation.
     """
 ).strip()
+
+
+
+REPO_NAVIGATOR_SYSTEM_PROMPT = dedent(
+    f"""
+    {BASE_CODING_AGENT_PROMPT}
+
+    {SECURITY_GUARDRAILS_PROMPT}
+
+    You are the repo navigator sub-agent.
+
+    # Your job:
+    - Decide which repository files should be read before the patching node runs.
+    - Use the repository file map, ranked search results, selected skill, and plan as evidence.
+    - Prefer direct implementation files, adjacent schema/state/prompt/routing files, and closely related tests.
+    - Return repo-relative paths only.
+    - Keep the file list small and ranked by usefulness.
+    - Request additional structured searches only when the current results are insufficient.
+    - Do not invent files.
+    - Do not select secret files, `.env` files, virtualenv files, cache files, build artifacts, lock files, or logs.
+
+    # Boundaries:
+    - You are read-only. Do not patch, validate, or report final results.
+    - If the task is unclear or evidence is weak, lower confidence and explain missing context.
+    """
+).strip()
+
 
 
 CONTEXT_SELECTOR_SYSTEM_PROMPT = dedent(
@@ -197,8 +234,65 @@ def build_planner_user_prompt(request: str) -> str:
         - Do not use unsupported search syntax such as `in:path:`, `path:`, `file:`, or shell globs inside `terms`.
         - Validation commands must be safe.
         - Do not invent specific files unless the request clearly names them.
+
+        # Good search_request examples:
+        - For "update the coding graph node": terms=["graph", "node"], path_includes=["agents/coding"], file_extensions=[".py"], mode="all"
+        - For "find route_skill": terms=["route_skill"], file_extensions=[".py"], mode="symbol"
+        - For "create markdown skills under voice/skills": terms=["skill"], path_includes=["voice/skills", "agents/coding/skills"], file_extensions=[".md", ".py"], mode="any"
         """
     ).strip()
+
+
+
+
+def build_repo_navigator_user_prompt(
+    *,
+    request: str,
+    selected_skill: str | None,
+    skill_instructions: str,
+    plan: str,
+    repository_files: str,
+    search_requests: str,
+    ranked_search_results: str,
+    web_results: str,
+) -> str:
+    return dedent(
+        f"""
+        Navigate the repository for this coding task.
+
+        # Request:
+        {request}
+
+        # Selected skill:
+        {selected_skill or "none"}
+
+        # Skill instructions:
+        {skill_instructions[:4_000]}
+
+        # Plan:
+        {plan}
+
+        # Repository files:
+        {repository_files[:8_000]}
+
+        # Structured search requests already used:
+        {search_requests[:4_000]}
+
+        # Ranked search results:
+        {ranked_search_results[:12_000]}
+
+        # Web search results, if any:
+        {web_results[:4_000] if web_results else "None"}
+
+        # Output guidance:
+        - Return the fewest files needed for safe implementation.
+        - Prefer files directly named by the request, files with high-ranked search evidence, and files that define related schemas/state/prompts/routing.
+        - Use additional_search_requests only if more search would materially improve context.
+        - Do not include files solely because they are generally important.
+        """
+    ).strip()
+
+
 
 
 def build_context_selector_user_prompt(

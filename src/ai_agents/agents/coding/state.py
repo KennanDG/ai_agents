@@ -33,6 +33,11 @@ class CodingAgentState(TypedDict, total=False):
     search_requests: list[dict[str, Any]]
     search_queries: list[str]  # legacy fallback while migrating to structured search
     search_results: list[dict[str, Any]]
+    repo_navigation_summary: str
+    repo_navigation_files: list[dict[str, str]]
+    repo_navigation_confidence: float
+    repo_navigation_missing_context: list[str]
+    repo_navigation_search_requests: list[dict[str, Any]]
     context: list[str]
     files_inspected: list[str]
     file_changes: list[dict[str, str]]

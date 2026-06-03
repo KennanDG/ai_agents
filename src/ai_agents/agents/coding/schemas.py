@@ -30,6 +30,40 @@ class FileToInspect(BaseModel):
     reason: str = ""
 
 
+
+
+class RepoNavigationDecision(BaseModel):
+    """Read-only repo navigator output used before context loading."""
+
+    task_summary: str = Field(
+        default="",
+        description="Brief interpretation of the repository task.",
+    )
+    files_to_inspect: list[FileToInspect] = Field(
+        default_factory=list,
+        description="Small, ranked set of repo-relative files to read before editing.",
+    )
+    additional_search_requests: list[SearchRequest] = Field(
+        default_factory=list,
+        description=(
+            "Optional follow-up structured searches when the initial ranked results are "
+            "insufficient. Leave empty when enough files were found."
+        ),
+    )
+    missing_context: list[str] = Field(
+        default_factory=list,
+        description="Specific missing information needed before safe editing.",
+    )
+    confidence: float = Field(
+        default=0.0,
+        description="Confidence that the selected files are sufficient for the task.",
+        ge=0.0,
+        le=1.0,
+    )
+
+
+
+
 class ContextDecision(BaseModel):
     files_to_inspect: list[FileToInspect] = Field(default_factory=list)
 
