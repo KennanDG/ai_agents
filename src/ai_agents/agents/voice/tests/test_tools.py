@@ -6,6 +6,7 @@ import pytest
 from agents.voice.tools.web_search import web_search
 from agents.voice.tools.weather import get_weather
 from agents.voice.tools.translation import translate
+from agents.voice.tools.implement_change import implement_change
 
 
 class TestWebSearch:
@@ -86,3 +87,10 @@ class TestTranslation:
         result = translate("Hello")
         assert "error" in result
         assert "Network down" in result["error"]
+
+
+class TestImplementChange:
+    def test_return_placeholder(self):
+        result = implement_change("fix a bug")
+        assert result["status"] == "not_implemented"
+        assert "voice agent" in result["message"]

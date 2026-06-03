@@ -8,6 +8,16 @@ from ai_agents.agents.coding.state import CodingAgentState
 from ai_agents.agents.coding.utils.validation import validation_failed_results
 
 
+
+
+
+def route_after_plan(state: CodingAgentState) -> str:
+    """Route to gmail_access or web_search based on skill."""
+    if state.get("selected_skill") == "gmail_access":
+        return "gmail_access"
+    return "web_search"
+
+
 def route_after_context(state: CodingAgentState) -> Literal["patch", "report"]:
     if state.get("status") == "context_failed":
         return "report"
