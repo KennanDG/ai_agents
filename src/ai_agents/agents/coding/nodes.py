@@ -102,7 +102,7 @@ reasoning_model = ChatOpenAI(
 
 
 
-
+#################################### Helpers ####################################
 def _dump_search_request(search_request: object) -> dict[str, object]:
     """Serialize Pydantic search request models into plain state dicts."""
 
@@ -116,6 +116,7 @@ def _dump_search_request(search_request: object) -> dict[str, object]:
         return dict(search_request)
 
     return {}
+
 
 
 def _planned_search_requests(decision: PlanDecision, request: str) -> list[dict[str, object]]:
@@ -135,8 +136,6 @@ def _planned_search_requests(decision: PlanDecision, request: str) -> list[dict[
 
 
 
-
-
 def _search_requests_from_state(state: CodingAgentState) -> list[dict[str, object]]:
     search_requests = list(state.get("search_requests") or [])
 
@@ -150,6 +149,7 @@ def _search_requests_from_state(state: CodingAgentState) -> list[dict[str, objec
         return search_requests
 
     return derive_search_requests(state["user_request"]) # Extra fallback
+
 
 
 def _format_search_result_dicts(results: list[dict[str, object]]) -> str:
@@ -173,6 +173,7 @@ def _format_search_result_dicts(results: list[dict[str, object]]) -> str:
         lines.append(f"{path}:{line_no}: {snippet} [score={score_text}; {reason}]")
 
     return "\n".join(lines)
+
 
 
 def _repo_navigation_path_reasons(
@@ -201,6 +202,20 @@ def _repo_navigation_path_reasons(
 
     return reasons
 
+
+
+
+#################################### Nodes ####################################
+def route_node(state: CodingAgentState) -> CodingAgentState:
+    selected_skill = route_skill(state["user_request"])
+    registry = SkillRegistry().load()
+    skill = registry.get(selected_skill)
+
+    return {
+        "selected_skill": skill.name,
+        "skill_instructions": skill.instructions,
+        "status": "routed",
+    }
 
 
 
@@ -250,20 +265,6 @@ def plan_node(state: CodingAgentState) -> CodingAgentState:
             "errors": [*state.get("errors", []), f"LLM planning failed; used fallback plan: {exc}"],
             "status": "planned",
         }
-
-
-
-
-def route_node(state: CodingAgentState) -> CodingAgentState:
-    selected_skill = route_skill(state["user_request"])
-    registry = SkillRegistry().load()
-    skill = registry.get(selected_skill)
-
-    return {
-        "selected_skill": skill.name,
-        "skill_instructions": skill.instructions,
-        "status": "routed",
-    }
 
 
 
