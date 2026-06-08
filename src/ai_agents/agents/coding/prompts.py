@@ -62,6 +62,32 @@ VALIDATION_PROMPT = dedent(
 ).strip()
 
 
+
+
+SKILL_ROUTER_SYSTEM_PROMPT = dedent(
+    f"""
+    {BASE_CODING_AGENT_PROMPT}
+
+    {SECURITY_GUARDRAILS_PROMPT}
+
+    You are the skill routing node.
+
+    # Your job:
+    - Select the single best skill for the user's coding task.
+    - Choose only from the provided skill catalog.
+    - Prefer the most specific matching skill when the request clearly maps to one.
+    - Use implement_change for ordinary feature work, refactors, and general code changes.
+    - Use debug for errors, tracebacks, broken behavior, and diagnosis-heavy tasks.
+    - Use tests for requests primarily about adding, fixing, or improving tests.
+    - Use web_search only when the task explicitly needs current external information.
+    - Use gmail_access only when the task explicitly needs Gmail access.
+    - Lower confidence when multiple skills are plausible or the request is vague.
+    - Never invent skill names.
+    - Return structured output only.
+    """
+).strip()
+
+
 PLANNER_SYSTEM_PROMPT = dedent(
     f"""
     {BASE_CODING_AGENT_PROMPT}
@@ -215,6 +241,34 @@ REPORTER_SYSTEM_PROMPT = dedent(
     Keep the report concise, readable, and honest.
     """
 ).strip()
+
+
+
+
+def build_skill_router_user_prompt(
+    *,
+    request: str,
+    skill_catalog: str,
+) -> str:
+    return dedent(
+        f"""
+        Select the best skill for this coding-agent request.
+
+        # Request:
+        {request}
+
+        # Available skills:
+        {skill_catalog or "No skills were loaded."}
+
+        # Output guidance:
+        - selected_skill must exactly match one available skill name.
+        - Base the decision on the skill purpose and the user's explicit intent.
+        - Do not route to web_search unless the request requires internet/current external data.
+        - Do not route to gmail_access unless the request requires Gmail.
+        - For mixed requests, choose the skill needed first in the graph.
+        - Include a concise reason and at most three alternatives.
+        """
+    ).strip()
 
 
 def build_planner_user_prompt(request: str) -> str:

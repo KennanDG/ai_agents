@@ -29,11 +29,13 @@ from ai_agents.agents.coding.prompts import (
     PLANNER_SYSTEM_PROMPT,
     REPO_NAVIGATOR_SYSTEM_PROMPT,
     REPORTER_SYSTEM_PROMPT,
+    SKILL_ROUTER_SYSTEM_PROMPT,
     build_context_selector_user_prompt,
     build_patcher_user_prompt,
     build_planner_user_prompt,
     build_repo_navigator_user_prompt,
     build_reporter_user_prompt,
+    build_skill_router_user_prompt
 )
 
 
@@ -46,6 +48,7 @@ from ai_agents.agents.coding.schemas import (
     PlanDecision,
     RepoNavigationDecision,
     ReportDecision,
+    SkillRouteDecision
 )
 
 from ai_agents.agents.coding.utils.search import (
@@ -205,15 +208,106 @@ def _repo_navigation_path_reasons(
 
 
 
-#################################### Nodes ####################################
-def route_node(state: CodingAgentState) -> CodingAgentState:
-    selected_skill = route_skill(state["user_request"])
-    registry = SkillRegistry().load()
+def _route_with_fallback(
+    *,
+    state: CodingAgentState,
+    registry: SkillRegistry,
+    error: str | None = None,
+) -> CodingAgentState:
+    errors = list(state.get("errors", []))
+    if error:
+        errors.append(error)
+
+    selected_skill = route_skill(
+        state["user_request"],
+        registry.list_names(),
+        default_skill=registry.default_skill_name(),
+    )
     skill = registry.get(selected_skill)
 
     return {
         "selected_skill": skill.name,
         "skill_instructions": skill.instructions,
+        "route_confidence": 0.0,
+        "route_reason": "Deterministic fallback route was used.",
+        "route_alternatives": [],
+        "errors": errors,
+        "status": "routed",
+    }
+
+
+
+#################################### Nodes ####################################
+
+def route_node(state: CodingAgentState) -> CodingAgentState:
+    registry = SkillRegistry().load()
+
+    try:
+        default_skill = registry.default_skill_name()
+    except ValueError as exc:
+        return {
+            "selected_skill": "",
+            "skill_instructions": "",
+            "route_confidence": 0.0,
+            "route_reason": str(exc),
+            "route_alternatives": [],
+            "errors": [*state.get("errors", []), str(exc)],
+            "status": "route_failed",
+        }
+
+    try:
+        decision: SkillRouteDecision = invoke_parsed_decision(
+            model=model,
+            schema=SkillRouteDecision,
+            node_name="route",
+            state=state,
+            system_prompt=SKILL_ROUTER_SYSTEM_PROMPT,
+            user_prompt=build_skill_router_user_prompt(
+                request=state["user_request"],
+                skill_catalog=registry.router_catalog(),
+            ),
+        )
+
+    except Exception as exc:
+        return _route_with_fallback(
+            state=state,
+            registry=registry,
+            error=f"LLM skill routing failed; used fallback router: {exc}",
+        )
+
+    selected_skill = decision.selected_skill.strip()
+
+    if not registry.has(selected_skill):
+        selected_skill = route_skill(
+            state["user_request"],
+            registry.list_names(),
+            default_skill=default_skill,
+        )
+        route_reason = (
+            f"LLM selected an unknown skill; used fallback route. "
+            f"LLM reason: {decision.reason}"
+        )
+        confidence = 0.0
+    else:
+        route_reason = decision.reason
+        confidence = decision.confidence
+
+    skill = registry.get(selected_skill)
+    alternatives = [
+        {
+            "skill_name": item.skill_name,
+            "reason": item.reason,
+        }
+        for item in decision.alternatives
+        if registry.has(item.skill_name) and item.skill_name != selected_skill
+    ][:3]
+
+    return {
+        "selected_skill": skill.name,
+        "skill_instructions": skill.instructions,
+        "route_confidence": confidence,
+        "route_reason": route_reason,
+        "route_alternatives": alternatives,
         "status": "routed",
     }
 
@@ -823,6 +917,8 @@ Errors:
         return {"report": report, "status": "reported"}
 
 
+
+
 def web_search_node(state: CodingAgentState) -> CodingAgentState:
     """
     Perform web search if the selected skill is web_search.
@@ -850,6 +946,8 @@ def web_search_node(state: CodingAgentState) -> CodingAgentState:
             "errors": [*state.get("errors", []), f"Web search failed: {exc}"],
             "status": "web_search_failed",
         }
+
+
 
 
 def gmail_access_node(state: CodingAgentState) -> CodingAgentState:

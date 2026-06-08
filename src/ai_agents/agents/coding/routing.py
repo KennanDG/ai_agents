@@ -10,12 +10,16 @@ from ai_agents.agents.coding.utils.validation import validation_failed_results
 
 
 
-
 def route_after_plan(state: CodingAgentState) -> str:
-    """Route to gmail_access or web_search based on skill."""
-    if state.get("selected_skill") == "gmail_access":
+    selected_skill = state.get("selected_skill")
+
+    if selected_skill == "web_search":
+        return "web_search"
+
+    if selected_skill == "gmail_access":
         return "gmail_access"
-    return "web_search"
+
+    return "repo_navigator"
 
 
 def route_after_context(state: CodingAgentState) -> Literal["patch", "report"]:
@@ -56,4 +60,5 @@ def route_after_validate(state: CodingAgentState) -> Literal["gather_context", "
 def patch_attempts_remaining(state: CodingAgentState) -> bool:
     patch_attempts = int(state.get("patch_attempts", 0))
     max_patch_attempts = int(state.get("max_patch_attempts", MAX_PATCH_ATTEMPTS))
+
     return patch_attempts < max_patch_attempts

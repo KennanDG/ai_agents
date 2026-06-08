@@ -29,6 +29,9 @@ class CodingAgentState(TypedDict, total=False):
     allow_write: bool
     selected_skill: str
     skill_instructions: str
+    route_confidence: float
+    route_reason: str
+    route_alternatives: list[dict[str, str]]
     plan: list[str]
     search_requests: list[dict[str, Any]]
     search_queries: list[str]  # legacy fallback while migrating to structured search
@@ -50,3 +53,7 @@ class CodingAgentState(TypedDict, total=False):
     errors: list[str]
     patch_attempts: int
     max_patch_attempts: int
+
+
+
+    

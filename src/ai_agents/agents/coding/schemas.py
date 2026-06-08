@@ -6,6 +6,33 @@ from pydantic import BaseModel, Field
 from dataclasses import dataclass, field
 
 
+
+
+class SkillRouteAlternative(BaseModel):
+    skill_name: str = Field(description="Name of another plausible available skill.")
+    reason: str = Field(default="", description="Why this alternative might fit.")
+
+
+class SkillRouteDecision(BaseModel):
+    selected_skill: str = Field(
+        description="Exact name of the available skill that best matches the request.",
+    )
+    confidence: float = Field(
+        default=0.0,
+        description="Confidence that the selected skill is the best route.",
+        ge=0.0,
+        le=1.0,
+    )
+    reason: str = Field(
+        default="",
+        description="Brief routing rationale based on the request and skill catalog.",
+    )
+    alternatives: list[SkillRouteAlternative] = Field(
+        default_factory=list,
+        description="Other plausible skills, ranked from most to least plausible.",
+    )
+
+
 class PlanDecision(BaseModel):
     plan: list[str] = Field(
         default_factory=list,

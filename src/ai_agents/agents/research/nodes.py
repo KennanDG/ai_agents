@@ -3,11 +3,13 @@ from __future__ import annotations
 from ai_agents.agents.research.llm import invoke_parsed_decision, model, reasoning_model
 from ai_agents.agents.research.prompts import (
     PLANNER_SYSTEM_PROMPT,
+    REPORT_SYSTEM_PROMPT,
     SYNTHESIZER_SYSTEM_PROMPT,
     build_planner_user_prompt,
+    build_report_user_prompt,
     build_synthesizer_user_prompt,
 )
-from ai_agents.agents.research.schemas import PlanDecision, SynthesizeDecision
+from ai_agents.agents.research.schemas import PlanDecision, ReportDecision, SynthesizeDecision
 from ai_agents.agents.research.state import ResearchAgentState
 from ai_agents.agents.coding.tools.web_search import web_search
 
@@ -83,5 +85,28 @@ def synthesize_node(state: ResearchAgentState) -> ResearchAgentState:
 
 
 def report_node(state: ResearchAgentState) -> ResearchAgentState:
-    # In a full agent this node could format the final output or log results.
-    return {"status": "reported"}
+    research_summary = state.get("research_summary", "")
+    report = state.get("report", "")
+    user_prompt = build_report_user_prompt(
+        state["user_request"], research_summary, report
+    )
+    try:
+        decision: ReportDecision = invoke_parsed_decision(
+            model=model,
+            schema=ReportDecision,
+            node_name="report",
+            state=state,
+            system_prompt=REPORT_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+        )
+        return {
+            "report": decision.final_report,
+            "status": "reported",
+        }
+    except Exception as exc:
+        errors = list(state.get("errors", [])) + [f"Report generation failed: {exc}"]
+        return {
+            "errors": errors,
+            "report": report or "Report generation failed.",
+            "status": "failed",
+        }

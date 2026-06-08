@@ -53,6 +53,7 @@ def build_coding_agent_graph():
         {
             "web_search": "web_search",
             "gmail_access": "gmail_access",
+            "repo_navigator": "repo_navigator",
         },
     )
     builder.add_edge("web_search", "repo_navigator")
