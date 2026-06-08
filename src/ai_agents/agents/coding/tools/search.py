@@ -140,6 +140,7 @@ class RepoSearchService:
                 continue
 
             symbol_name = symbol.name.lower()
+
             if request.mode == "symbol":
                 matched = any(term == symbol_name or term in symbol_name for term in terms)
             elif request.mode == "all":
@@ -217,6 +218,7 @@ class RepoSearchService:
 
 
     def _iter_candidate_files(self, request: RepoSearchRequest) -> Iterable[Path]:
+        
         for path in sorted(self.repo_root.rglob("*")):
             if not path.is_file():
                 continue
@@ -236,6 +238,7 @@ class RepoSearchService:
                 continue
 
             yield path
+
 
     def _path_allowed(self, path: Path, request: RepoSearchRequest) -> bool:
         rel = path.as_posix().lower()

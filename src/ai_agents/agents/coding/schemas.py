@@ -6,6 +6,33 @@ from pydantic import BaseModel, Field
 from dataclasses import dataclass, field
 
 
+
+
+class SkillRouteAlternative(BaseModel):
+    skill_name: str = Field(description="Name of another plausible available skill.")
+    reason: str = Field(default="", description="Why this alternative might fit.")
+
+
+class SkillRouteDecision(BaseModel):
+    selected_skill: str = Field(
+        description="Exact name of the available skill that best matches the request.",
+    )
+    confidence: float = Field(
+        default=0.0,
+        description="Confidence that the selected skill is the best route.",
+        ge=0.0,
+        le=1.0,
+    )
+    reason: str = Field(
+        default="",
+        description="Brief routing rationale based on the request and skill catalog.",
+    )
+    alternatives: list[SkillRouteAlternative] = Field(
+        default_factory=list,
+        description="Other plausible skills, ranked from most to least plausible.",
+    )
+
+
 class PlanDecision(BaseModel):
     plan: list[str] = Field(
         default_factory=list,
@@ -28,6 +55,40 @@ class PlanDecision(BaseModel):
 class FileToInspect(BaseModel):
     path: str
     reason: str = ""
+
+
+
+
+class RepoNavigationDecision(BaseModel):
+    """Read-only repo navigator output used before context loading."""
+
+    task_summary: str = Field(
+        default="",
+        description="Brief interpretation of the repository task.",
+    )
+    files_to_inspect: list[FileToInspect] = Field(
+        default_factory=list,
+        description="Small, ranked set of repo-relative files to read before editing.",
+    )
+    additional_search_requests: list[SearchRequest] = Field(
+        default_factory=list,
+        description=(
+            "Optional follow-up structured searches when the initial ranked results are "
+            "insufficient. Leave empty when enough files were found."
+        ),
+    )
+    missing_context: list[str] = Field(
+        default_factory=list,
+        description="Specific missing information needed before safe editing.",
+    )
+    confidence: float = Field(
+        default=0.0,
+        description="Confidence that the selected files are sufficient for the task.",
+        ge=0.0,
+        le=1.0,
+    )
+
+
 
 
 class ContextDecision(BaseModel):

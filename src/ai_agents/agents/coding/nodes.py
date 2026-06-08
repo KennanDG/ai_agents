@@ -11,6 +11,8 @@ from langchain_openai import ChatOpenAI
 from ai_agents.agents.coding.utils.constants import (
     MAX_FILES_TO_INSPECT,
     MAX_PATCH_ATTEMPTS,
+    MAX_REPO_NAVIGATION_FILES,
+    MAX_REPO_NAVIGATION_FOLLOWUP_RESULTS,
     VALIDATION_PROFILE_NAME,
 )
 
@@ -25,12 +27,17 @@ from ai_agents.agents.coding.prompts import (
     CONTEXT_SELECTOR_SYSTEM_PROMPT,
     PATCHER_SYSTEM_PROMPT,
     PLANNER_SYSTEM_PROMPT,
+    REPO_NAVIGATOR_SYSTEM_PROMPT,
     REPORTER_SYSTEM_PROMPT,
+    SKILL_ROUTER_SYSTEM_PROMPT,
     build_context_selector_user_prompt,
     build_patcher_user_prompt,
     build_planner_user_prompt,
+    build_repo_navigator_user_prompt,
     build_reporter_user_prompt,
+    build_skill_router_user_prompt
 )
+
 
 from ai_agents.agents.coding.registry import SkillRegistry, route_skill
 from ai_agents.agents.coding.runtime import allow_write as resolve_allow_write
@@ -39,7 +46,9 @@ from ai_agents.agents.coding.schemas import (
     ContextDecision,
     PatchDecision,
     PlanDecision,
+    RepoNavigationDecision,
     ReportDecision,
+    SkillRouteDecision
 )
 
 from ai_agents.agents.coding.utils.search import (
@@ -96,7 +105,7 @@ reasoning_model = ChatOpenAI(
 
 
 
-
+#################################### Helpers ####################################
 def _dump_search_request(search_request: object) -> dict[str, object]:
     """Serialize Pydantic search request models into plain state dicts."""
 
@@ -110,6 +119,7 @@ def _dump_search_request(search_request: object) -> dict[str, object]:
         return dict(search_request)
 
     return {}
+
 
 
 def _planned_search_requests(decision: PlanDecision, request: str) -> list[dict[str, object]]:
@@ -127,6 +137,179 @@ def _planned_search_requests(decision: PlanDecision, request: str) -> list[dict[
 
     return derive_search_requests(request)
 
+
+
+def _search_requests_from_state(state: CodingAgentState) -> list[dict[str, object]]:
+    search_requests = list(state.get("search_requests") or [])
+
+    if search_requests:
+        return search_requests
+
+    # Fallback
+    search_requests = legacy_queries_to_search_requests(state.get("search_queries", []))
+
+    if search_requests:
+        return search_requests
+
+    return derive_search_requests(state["user_request"]) # Extra fallback
+
+
+
+def _format_search_result_dicts(results: list[dict[str, object]]) -> str:
+    lines: list[str] = []
+
+    for result in results:
+        path = str(result.get("path", "")).strip()
+        if not path:
+            continue
+
+        line_no = result.get("line_no") or 1
+        snippet = str(result.get("snippet", "")).strip()
+        score = result.get("score", 0.0)
+        reason = str(result.get("reason", "")).strip()
+
+        try:
+            score_text = f"{float(score):.1f}"
+        except (TypeError, ValueError):
+            score_text = "0.0"
+
+        lines.append(f"{path}:{line_no}: {snippet} [score={score_text}; {reason}]")
+
+    return "\n".join(lines)
+
+
+
+def _repo_navigation_path_reasons(
+    decision: RepoNavigationDecision,
+    search_results: list[dict[str, object]],
+) -> dict[str, str]:
+    reasons = {
+        item.path.strip(): item.reason.strip()
+        for item in decision.files_to_inspect
+        if item.path.strip()
+    }
+
+    for result in search_results:
+        path = str(result.get("path", "")).strip()
+        if not path or path in reasons:
+            continue
+
+        reason = str(result.get("reason", "")).strip()
+        score = result.get("score", 0.0)
+        try:
+            reason = f"Ranked search fallback: {reason} (score={float(score):.1f})"
+        except (TypeError, ValueError):
+            reason = f"Ranked search fallback: {reason}"
+
+        reasons[path] = reason
+
+    return reasons
+
+
+
+
+def _route_with_fallback(
+    *,
+    state: CodingAgentState,
+    registry: SkillRegistry,
+    error: str | None = None,
+) -> CodingAgentState:
+    errors = list(state.get("errors", []))
+    if error:
+        errors.append(error)
+
+    selected_skill = route_skill(
+        state["user_request"],
+        registry.list_names(),
+        default_skill=registry.default_skill_name(),
+    )
+    skill = registry.get(selected_skill)
+
+    return {
+        "selected_skill": skill.name,
+        "skill_instructions": skill.instructions,
+        "route_confidence": 0.0,
+        "route_reason": "Deterministic fallback route was used.",
+        "route_alternatives": [],
+        "errors": errors,
+        "status": "routed",
+    }
+
+
+
+#################################### Nodes ####################################
+
+def route_node(state: CodingAgentState) -> CodingAgentState:
+    registry = SkillRegistry().load()
+
+    try:
+        default_skill = registry.default_skill_name()
+    except ValueError as exc:
+        return {
+            "selected_skill": "",
+            "skill_instructions": "",
+            "route_confidence": 0.0,
+            "route_reason": str(exc),
+            "route_alternatives": [],
+            "errors": [*state.get("errors", []), str(exc)],
+            "status": "route_failed",
+        }
+
+    try:
+        decision: SkillRouteDecision = invoke_parsed_decision(
+            model=model,
+            schema=SkillRouteDecision,
+            node_name="route",
+            state=state,
+            system_prompt=SKILL_ROUTER_SYSTEM_PROMPT,
+            user_prompt=build_skill_router_user_prompt(
+                request=state["user_request"],
+                skill_catalog=registry.router_catalog(),
+            ),
+        )
+
+    except Exception as exc:
+        return _route_with_fallback(
+            state=state,
+            registry=registry,
+            error=f"LLM skill routing failed; used fallback router: {exc}",
+        )
+
+    selected_skill = decision.selected_skill.strip()
+
+    if not registry.has(selected_skill):
+        selected_skill = route_skill(
+            state["user_request"],
+            registry.list_names(),
+            default_skill=default_skill,
+        )
+        route_reason = (
+            f"LLM selected an unknown skill; used fallback route. "
+            f"LLM reason: {decision.reason}"
+        )
+        confidence = 0.0
+    else:
+        route_reason = decision.reason
+        confidence = decision.confidence
+
+    skill = registry.get(selected_skill)
+    alternatives = [
+        {
+            "skill_name": item.skill_name,
+            "reason": item.reason,
+        }
+        for item in decision.alternatives
+        if registry.has(item.skill_name) and item.skill_name != selected_skill
+    ][:3]
+
+    return {
+        "selected_skill": skill.name,
+        "skill_instructions": skill.instructions,
+        "route_confidence": confidence,
+        "route_reason": route_reason,
+        "route_alternatives": alternatives,
+        "status": "routed",
+    }
 
 
 
@@ -180,16 +363,132 @@ def plan_node(state: CodingAgentState) -> CodingAgentState:
 
 
 
-def route_node(state: CodingAgentState) -> CodingAgentState:
-    selected_skill = route_skill(state["user_request"])
-    registry = SkillRegistry().load()
-    skill = registry.get(selected_skill)
+def repo_navigator_node(
+    state: CodingAgentState,
+    cfg: CodingAgentSettings = default_settings,
+) -> CodingAgentState:
+    """Read-only sub-agent that chooses the most useful repo files to inspect."""
+
+    repo_root = resolve_repo_root(state, cfg)
+    errors = list(state.get("errors", []))
+    search_requests = _search_requests_from_state(state)
+    search_result_dicts = list(state.get("search_results") or [])
+
+    try:
+        root_files = filter_context_paths(
+            list_files(repo_root, ".", max_depth=6)
+        )[: cfg.max_search_results]
+    except Exception as exc:
+        return {
+            "errors": [*errors, f"Repo navigation failed while listing files: {exc}"],
+            "status": "repo_navigation_failed",
+        }
+
+    if not search_result_dicts and search_requests:
+        try:
+            search_results = search_repository(
+                repo_root,
+                search_requests,
+                max_results=cfg.max_search_results,
+            )
+            search_result_dicts = [result.to_dict() for result in search_results]
+        except Exception as exc:
+            errors.append(f"Repo navigation search failed: {exc}")
+
+    try:
+        decision: RepoNavigationDecision = invoke_parsed_decision(
+            model=reasoning_model,
+            schema=RepoNavigationDecision,
+            node_name="repo_navigator",
+            state=state,
+            system_prompt=REPO_NAVIGATOR_SYSTEM_PROMPT,
+            user_prompt=build_repo_navigator_user_prompt(
+                request=state["user_request"],
+                selected_skill=state.get("selected_skill"),
+                skill_instructions=skill_instructions_for_llm(
+                    state.get("skill_instructions", "")
+                ),
+                plan=bullets(state.get("plan", [])),
+                repository_files="\n".join(root_files),
+                search_requests=bullets([str(item) for item in search_requests]),
+                ranked_search_results=_format_search_result_dicts(search_result_dicts),
+                web_results=str(state.get("web_search_results", "")),
+            ),
+        )
+
+    except Exception as exc:
+        errors.append(
+            "Repo navigator LLM failed; using ranked search results as navigation fallback: "
+            f"{exc}"
+        )
+        fallback_paths = paths_from_ranked_results(search_result_dicts)[:MAX_REPO_NAVIGATION_FILES]
+        fallback_files = [
+            {"path": path, "reason": "Ranked search fallback after repo navigator failure."}
+            for path in fallback_paths
+        ]
+        return {
+            "search_requests": search_requests,
+            "search_results": search_result_dicts,
+            "repo_navigation_summary": "Repo navigator failed; using ranked search fallback.",
+            "repo_navigation_files": fallback_files,
+            "repo_navigation_confidence": 0.0,
+            "repo_navigation_missing_context": ["Repo navigator LLM decision failed."],
+            "repo_navigation_search_requests": [],
+            "errors": errors,
+            "status": "repo_navigated" if fallback_files else "repo_navigation_failed",
+        }
+
+    additional_search_requests = [
+        item
+        for item in (_dump_search_request(item) for item in decision.additional_search_requests)
+        if item
+    ]
+
+    if additional_search_requests:
+        try:
+            followup_results = search_repository(
+                repo_root,
+                additional_search_requests,
+                max_results=MAX_REPO_NAVIGATION_FOLLOWUP_RESULTS,
+            )
+            search_result_dicts.extend(result.to_dict() for result in followup_results)
+        except Exception as exc:
+            errors.append(f"Repo navigator follow-up search failed: {exc}")
+
+    path_reasons = _repo_navigation_path_reasons(decision, search_result_dicts)
+    selected_paths = [
+        item.path.strip()
+        for item in decision.files_to_inspect
+        if item.path.strip()
+    ]
+
+    if additional_search_requests:
+        selected_paths.extend(paths_from_ranked_results(search_result_dicts))
+
+    if not selected_paths:
+        selected_paths = paths_from_ranked_results(search_result_dicts)
+
+    selected_paths = dedupe(filter_context_paths(selected_paths))[:MAX_REPO_NAVIGATION_FILES]
+    navigation_files = [
+        {
+            "path": path,
+            "reason": path_reasons.get(path, "Selected by repo navigator."),
+        }
+        for path in selected_paths
+    ]
 
     return {
-        "selected_skill": skill.name,
-        "skill_instructions": skill.instructions,
-        "status": "routed",
+        "search_requests": search_requests,
+        "search_results": search_result_dicts,
+        "repo_navigation_summary": decision.task_summary,
+        "repo_navigation_files": navigation_files,
+        "repo_navigation_confidence": decision.confidence,
+        "repo_navigation_missing_context": decision.missing_context,
+        "repo_navigation_search_requests": additional_search_requests,
+        "errors": errors,
+        "status": "repo_navigated" if navigation_files else "repo_navigation_failed",
     }
+
 
 
 
@@ -204,7 +503,7 @@ def gather_context_node(
     files_inspected: list[str] = []
 
     try:
-        root_files = filter_context_paths(list_files(repo_root, ".", max_depth=2))[: cfg.max_search_results]
+        root_files = filter_context_paths(list_files(repo_root, ".", max_depth=6))[: cfg.max_search_results]
         context.append("Repository files:\n" + "\n".join(root_files))
 
     except Exception as exc:
@@ -214,16 +513,16 @@ def gather_context_node(
         }
 
     search_blocks: list[str] = []
-    search_result_dicts: list[dict[str, object]] = []
-    search_requests = list(state.get("search_requests") or [])
+    search_result_dicts: list[dict[str, object]] = list(state.get("search_results") or [])
+    search_requests = _search_requests_from_state(state)
 
-    if not search_requests:
-        search_requests = legacy_queries_to_search_requests(state.get("search_queries", []))
+    if search_result_dicts:
+        search_blocks.append(
+            "Ranked repository search results:\n"
+            + _format_search_result_dicts(search_result_dicts)
+        )
 
-    if not search_requests:
-        search_requests = derive_search_requests(state["user_request"])
-
-    if search_requests:
+    elif search_requests:
         try:
             search_results = search_repository(
                 repo_root,
@@ -243,38 +542,72 @@ def gather_context_node(
 
     context.extend(search_blocks)
 
+
+    repo_navigation_summary = state.get("repo_navigation_summary")
+    repo_navigation_files = list(state.get("repo_navigation_files") or [])
+    repo_navigation_missing = list(state.get("repo_navigation_missing_context") or [])
+
+    if repo_navigation_summary or repo_navigation_files:
+        nav_lines = ["# Repo navigator"]
+
+        if repo_navigation_summary:
+            nav_lines.append(f"Summary: {repo_navigation_summary}")
+
+        nav_lines.append(
+            f"Confidence: {state.get('repo_navigation_confidence', 0.0)}"
+        )
+
+        if repo_navigation_files:
+            nav_lines.append("Files selected:")
+            for item in repo_navigation_files:
+                path = str(item.get("path", "")).strip()
+                reason = str(item.get("reason", "")).strip()
+                if path:
+                    nav_lines.append(f"- {path}: {reason}")
+
+        if repo_navigation_missing:
+            nav_lines.append("Missing context:")
+            nav_lines.extend(f"- {item}" for item in repo_navigation_missing)
+
+        context.append("\n".join(nav_lines))
+
+
     web_results = state.get("web_search_results")
 
     if web_results:
         context.append(f"\n\n# Web search results:\n{web_results}")
 
-    try:
-        decision: ContextDecision = invoke_parsed_decision(
-            model=model,
-            schema=ContextDecision,
-            node_name="context_selector",
-            state=state,
-            system_prompt=CONTEXT_SELECTOR_SYSTEM_PROMPT,
-            user_prompt=build_context_selector_user_prompt(
-                request=state["user_request"],
-                selected_skill=state.get("selected_skill"),
-                skill_instructions=skill_instructions_for_llm(
-                    state.get("skill_instructions", "")
+
+    candidate_paths = filter_context_paths(
+        [str(item.get("path", "")).strip() for item in repo_navigation_files]
+    )
+
+    if not candidate_paths:
+        try:
+            decision: ContextDecision = invoke_parsed_decision(
+                model=model,
+                schema=ContextDecision,
+                node_name="context_selector",
+                state=state,
+                system_prompt=CONTEXT_SELECTOR_SYSTEM_PROMPT,
+                user_prompt=build_context_selector_user_prompt(
+                    request=state["user_request"],
+                    selected_skill=state.get("selected_skill"),
+                    skill_instructions=skill_instructions_for_llm(
+                        state.get("skill_instructions", "")
+                    ),
+                    available_context="\n".join(context),
                 ),
-                available_context="\n".join(context),
-            ),
-        )
+            )
 
-        candidate_paths = filter_context_paths([item.path for item in decision.files_to_inspect])
+            candidate_paths = filter_context_paths([item.path for item in decision.files_to_inspect])
 
-        if not candidate_paths:
-            candidate_paths = paths_from_ranked_results(search_result_dicts)
+            if not candidate_paths:
+                candidate_paths = paths_from_ranked_results(search_result_dicts)
 
-
-    except Exception as exc:
-        errors.append(f"LLM context selection failed; using search-derived context only: {exc}")
-        candidate_paths = paths_from_ranked_results(search_result_dicts) or paths_from_search_results(search_blocks)
-
+        except Exception as exc:
+            errors.append(f"LLM context selection failed; using search-derived context only: {exc}")
+            candidate_paths = paths_from_ranked_results(search_result_dicts) or paths_from_search_results(search_blocks)
 
     for path in dedupe(filter_context_paths(candidate_paths))[:MAX_FILES_TO_INSPECT]:
         try:
@@ -584,6 +917,8 @@ Errors:
         return {"report": report, "status": "reported"}
 
 
+
+
 def web_search_node(state: CodingAgentState) -> CodingAgentState:
     """
     Perform web search if the selected skill is web_search.
@@ -611,6 +946,8 @@ def web_search_node(state: CodingAgentState) -> CodingAgentState:
             "errors": [*state.get("errors", []), f"Web search failed: {exc}"],
             "status": "web_search_failed",
         }
+
+
 
 
 def gmail_access_node(state: CodingAgentState) -> CodingAgentState:
