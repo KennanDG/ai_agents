@@ -309,6 +309,7 @@ def build_repo_navigator_user_prompt(
     search_requests: str,
     ranked_search_results: str,
     web_results: str,
+    long_term_memories: str,
 ) -> str:
     return dedent(
         f"""
@@ -337,6 +338,9 @@ def build_repo_navigator_user_prompt(
 
         # Web search results, if any:
         {web_results[:4_000] if web_results else "None"}
+
+        # Relevant long-term coding memories from previous runs, if any:
+        {long_term_memories[:4_000] if long_term_memories else "None"}
 
         # Output guidance:
         - Return the fewest files needed for safe implementation.

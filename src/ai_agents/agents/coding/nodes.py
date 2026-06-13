@@ -17,6 +17,7 @@ from ai_agents.agents.coding.utils.constants import (
 )
 
 from ai_agents.agents.coding.llm import invoke_parsed_decision
+from ai_agents.agents.coding.memory import recall_coding_memories, remember_coding_run
 from ai_agents.agents.coding.utils.patch import (
     apply_exact_replace,
     build_patch_context,
@@ -239,6 +240,14 @@ def _route_with_fallback(
 
 #################################### Nodes ####################################
 
+def recall_memory_node(state: CodingAgentState, runtime) -> CodingAgentState:
+    return recall_coding_memories(state, runtime)
+
+
+def remember_run_node(state: CodingAgentState, runtime) -> CodingAgentState:
+    return remember_coding_run(state, runtime)
+
+
 def route_node(state: CodingAgentState) -> CodingAgentState:
     registry = SkillRegistry().load()
 
@@ -324,6 +333,14 @@ def plan_node(state: CodingAgentState) -> CodingAgentState:
             f"{state.get('selected_skill')}\n\n"
             "Skill guidance for planning:\n"
             f"{skill_instructions_for_llm(state.get('skill_instructions', ''))}"
+        )
+
+    long_term_memories = state.get("long_term_memories", [])
+
+    if long_term_memories:
+        planner_prompt += (
+            "\n\nRelevant long-term coding memories from previous runs:\n"
+            f"{bullets(long_term_memories)}"
         )
 
     try:
@@ -413,6 +430,7 @@ def repo_navigator_node(
                 search_requests=bullets([str(item) for item in search_requests]),
                 ranked_search_results=_format_search_result_dicts(search_result_dicts),
                 web_results=str(state.get("web_search_results", "")),
+                long_term_memories=bullets(state.get("long_term_memories", [])),
             ),
         )
 
@@ -542,6 +560,13 @@ def gather_context_node(
 
     context.extend(search_blocks)
 
+    long_term_memories = state.get("long_term_memories", [])
+    
+    if long_term_memories:
+        context.append(
+            "# Relevant long-term coding memories from previous runs\n"
+            + bullets(long_term_memories)
+        )
 
     repo_navigation_summary = state.get("repo_navigation_summary")
     repo_navigation_files = list(state.get("repo_navigation_files") or [])
@@ -861,6 +886,9 @@ def report_node(state: CodingAgentState) -> CodingAgentState:
         returncode = result.get("returncode")
         validation_lines.append(f"- `{command}` -> exit code {returncode}")
 
+    all_errors = [*state.get("errors", []), *state.get("memory_errors", [])]
+    errors_text = bullets(all_errors) if all_errors else "None"
+
     try:
         decision: ReportDecision = invoke_parsed_decision(
             model=model,
@@ -882,9 +910,7 @@ def report_node(state: CodingAgentState) -> CodingAgentState:
                 validation=chr(10).join(validation_lines)
                 if validation_lines
                 else "No validation commands were run.",
-                errors=bullets(state.get("errors", []))
-                if state.get("errors")
-                else "None",
+                errors=errors_text,
             ),
         )
 
@@ -912,7 +938,7 @@ Validation:
 {chr(10).join(validation_lines) if validation_lines else "No validation commands were run."}
 
 Errors:
-{bullets(state.get("errors", [])) if state.get("errors") else "None"}
+{errors_text}
 """.strip()
         return {"report": report, "status": "reported"}
 
