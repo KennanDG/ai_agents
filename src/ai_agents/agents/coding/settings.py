@@ -3,6 +3,9 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -58,9 +61,9 @@ class CodingAgentSettings:
     )
     memory_embedding_model: str = os.getenv(
         "EMBEDDING_MODEL",
-        "jina-embeddings-v2-base-en",
+        "google_genai:gemini-embedding-2",
     )
-    memory_embedding_dims: int = _env_int("CODING_AGENT_MEMORY_EMBEDDING_DIMS", 1536)
+    memory_embedding_dims: int = _env_int("CODING_AGENT_MEMORY_EMBEDDING_DIMS", 768)
     memory_index_fields: tuple[str, ...] = _env_csv(
         "CODING_AGENT_MEMORY_INDEX_FIELDS",
         ("text", "request", "summary"),

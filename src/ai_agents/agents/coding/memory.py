@@ -12,18 +12,25 @@ from ai_agents.agents.coding.settings import CodingAgentSettings, settings as de
 from ai_agents.agents.coding.state import CodingAgentState
 from ai_agents.agents.coding.utils.text import bullets, truncate
 
-try:  # Optional until persistent memory is enabled.
+try:  
     from langchain.embeddings import init_embeddings
-except ImportError:  # pragma: no cover - depends on optional runtime package versions.
-    init_embeddings = None  # type: ignore[assignment]
+except ImportError:  
+    init_embeddings = None 
 
 
-try:  # Optional until persistent memory is enabled.
+try:  
     from langgraph.checkpoint.postgres import PostgresSaver
     from langgraph.store.postgres import PostgresStore
-except ImportError:  # pragma: no cover - handled at runtime with a clear error.
-    PostgresSaver = None  # type: ignore[assignment,misc]
-    PostgresStore = None  # type: ignore[assignment,misc]
+except ImportError:  
+    PostgresSaver = None  
+    PostgresStore = None  
+
+
+
+try:
+    from langchain_google_genai import GoogleGenerativeAIEmbeddings
+except ImportError:
+    GoogleGenerativeAIEmbeddings = None 
 
 
 @dataclass(frozen=True)
@@ -70,6 +77,24 @@ def _memory_index_config(cfg: CodingAgentSettings) -> dict[str, Any] | None:
     if not cfg.memory_semantic_enabled:
         return None
 
+    model_name = cfg.memory_embedding_model
+
+    if model_name.startswith("google_genai:"):
+        if GoogleGenerativeAIEmbeddings is None:
+            raise RuntimeError(
+                "Google semantic memory is enabled, but langchain-google-genai "
+                "is not installed. Run: uv add langchain-google-genai"
+            )
+
+        return {
+            "embed": GoogleGenerativeAIEmbeddings(
+                model=model_name.split(":", 1)[1],
+                output_dimensionality=cfg.memory_embedding_dims,
+            ),
+            "dims": cfg.memory_embedding_dims,
+            "fields": list(cfg.memory_index_fields),
+        }
+
     if init_embeddings is None:
         raise RuntimeError(
             "Semantic memory is enabled, but langchain.embeddings.init_embeddings "
@@ -77,14 +102,13 @@ def _memory_index_config(cfg: CodingAgentSettings) -> dict[str, Any] | None:
         )
 
     return {
-        "embed": init_embeddings(cfg.memory_embedding_model),
+        "embed": init_embeddings(model_name),
         "dims": cfg.memory_embedding_dims,
         "fields": list(cfg.memory_index_fields),
     }
 
 
-
-
+@contextmanager
 def coding_agent_persistence(
     cfg: CodingAgentSettings = default_settings,
     *,
@@ -113,6 +137,7 @@ def coding_agent_persistence(
 
     with ExitStack() as stack:
         checkpointer = stack.enter_context(PostgresSaver.from_conn_string(cfg.memory_db_uri))
+        
         if index_config is None:
             store_context = PostgresStore.from_conn_string(cfg.memory_db_uri)
         else:
@@ -120,6 +145,7 @@ def coding_agent_persistence(
                 cfg.memory_db_uri,
                 index=index_config,
             )
+
         store = stack.enter_context(store_context)
 
         if setup_resources:

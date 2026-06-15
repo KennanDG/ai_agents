@@ -85,8 +85,8 @@ load_dotenv()
 OPEN_ROUTER_API_KEY=os.environ["OPEN_ROUTER_API_KEY"]
 OPEN_ROUTER_URL="https://openrouter.ai/api/v1"
 
-DOCKER_API_KEY=os.environ["DOCKER_API_KEY"]
-DOCKER_URL="https://api.deepseek.com"
+DEEPSEEK_API_KEY=os.environ["DEEPSEEK_API_KEY"]
+DEEPSEEK="https://api.deepseek.com"
 
 
 model = ChatGroq(

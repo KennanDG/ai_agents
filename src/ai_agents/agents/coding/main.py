@@ -201,10 +201,14 @@ def run_coding_agent(
             checkpointer=persistence.checkpointer,
             store=persistence.store,
         )
+
         result = graph.invoke(initial_state, config=config, context=runtime_context)
 
     result["thread_id"] = resolved_thread_id
+
     return result
+
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the lightweight coding agent.")
