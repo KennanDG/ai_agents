@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+from typing import Any
+
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import RetryPolicy
 
-
+from ai_agents.agents.coding.memory import CodingAgentRuntimeContext
 from ai_agents.agents.coding.nodes import (
     gather_context_node,
     gmail_access_node,
     patch_node,
     plan_node,
+    recall_memory_node,
+    remember_run_node,
     repo_navigator_node,
     report_node,
     route_node,
@@ -26,8 +30,12 @@ from ai_agents.agents.coding.state import CodingAgentState
 
 
 
-def build_coding_agent_graph():
-    builder = StateGraph(CodingAgentState)
+def build_coding_agent_graph(
+    *,
+    checkpointer: Any | None = None,
+    store: Any | None = None,
+):
+    builder = StateGraph(CodingAgentState, context_schema=CodingAgentRuntimeContext)
     transient_retry = RetryPolicy(
         max_attempts=3,
         initial_interval=1.0,
@@ -36,17 +44,20 @@ def build_coding_agent_graph():
     )
 
     builder.add_node("route", route_node, retry_policy=transient_retry)
+    builder.add_node("recall_memory", recall_memory_node, retry_policy=transient_retry)
     builder.add_node("plan", plan_node, retry_policy=transient_retry)
     builder.add_node("repo_navigator", repo_navigator_node, retry_policy=transient_retry)
     builder.add_node("gather_context", gather_context_node, retry_policy=transient_retry)
     builder.add_node("patch", patch_node, retry_policy=transient_retry)
     builder.add_node("validate", validate_node, retry_policy=transient_retry)
     builder.add_node("report", report_node, retry_policy=transient_retry)
+    builder.add_node("remember_run", remember_run_node, retry_policy=transient_retry)
     builder.add_node("web_search", web_search_node, retry_policy=transient_retry)
     builder.add_node("gmail_access", gmail_access_node, retry_policy=transient_retry)
 
     builder.add_edge(START, "route")
-    builder.add_edge("route", "plan")
+    builder.add_edge("route", "recall_memory")
+    builder.add_edge("recall_memory", "plan")
     builder.add_conditional_edges(
         "plan",
         route_after_plan,
@@ -84,6 +95,7 @@ def build_coding_agent_graph():
             "report": "report",
         },
     )
-    builder.add_edge("report", END)
+    builder.add_edge("report", "remember_run")
+    builder.add_edge("remember_run", END)
 
-    return builder.compile()
+    return builder.compile(checkpointer=checkpointer, store=store)

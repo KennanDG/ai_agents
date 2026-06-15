@@ -1,15 +1,20 @@
 from __future__ import annotations
 
-import os
 import argparse
-from pathlib import Path
+import os
+from dataclasses import replace
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
+from uuid import uuid4
+
 from langchain_core.runnables import RunnableConfig
 from langsmith import traceable
 from dotenv import load_dotenv
 
 from ai_agents.agents.coding.graph import build_coding_agent_graph
+from ai_agents.agents.coding.memory import CodingAgentRuntimeContext, coding_agent_persistence
+from ai_agents.agents.coding.settings import settings as default_settings
 from ai_agents.agents.coding.utils.text import bullets
 
 load_dotenv()
@@ -58,7 +63,10 @@ def render_markdown_report(result: dict[str, Any]) -> str:
         path = item.get("path", "")
         reason = item.get("reason", "")
         write_result = item.get("write_result", "")
-        file_change_lines.append(f"- `{path}` — {write_result}" + (f"\n  - Reason: {reason}" if reason else ""))
+        file_change_lines.append(
+            f"- `{path}` — {write_result}"
+            + (f"\n  - Reason: {reason}" if reason else "")
+        )
 
     return f"""# Coding Agent Run Report
 
@@ -79,6 +87,20 @@ def render_markdown_report(result: dict[str, Any]) -> str:
 ## Search Queries
 
 {bullets(result.get("search_queries", []))}
+
+## Memory
+
+- Enabled: `{bool(result.get("memory_enabled", False))}`
+- Namespace: `{result.get("memory_namespace", "none")}`
+- Saved run memory: `{bool(result.get("memory_saved", False))}`
+
+### Retrieved Long-Term Memories
+
+{bullets(result.get("long_term_memories", []))}
+
+### Memory Errors
+
+{bullets(result.get("memory_errors", []))}
 
 ## Files Inspected
 
@@ -143,9 +165,26 @@ def run_coding_agent(
     workspace_root: str | Path | None = None,
     *,
     allow_write: bool = False,
+    thread_id: str | None = None,
+    memory_user_id: str | None = None,
+    memory_namespace: str | None = None,
+    memory_enabled: bool | None = None,
+    setup_memory: bool | None = None,
 ) -> dict:
+    cfg = default_settings
     
-    graph = build_coding_agent_graph()
+    if memory_enabled is not None:
+        cfg = replace(cfg, memory_enabled=memory_enabled)
+
+    if thread_id:
+        resolved_thread_id = thread_id
+    else:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        resolved_thread_id = f"coding-run-{timestamp}-{uuid4().hex[:8]}"
+    runtime_context = CodingAgentRuntimeContext(
+        user_id=memory_user_id or cfg.memory_user_id,
+        memory_namespace=memory_namespace or cfg.memory_namespace,
+    )
 
     initial_state = {
         "user_request": user_request,
@@ -153,9 +192,22 @@ def run_coding_agent(
         "workspace_root": str(workspace_root) if workspace_root else None,
         "allow_write": allow_write,
         "errors": [],
+        "memory_errors": [],
     }
+    config: RunnableConfig = {"configurable": {"thread_id": resolved_thread_id}}
 
-    return graph.invoke(initial_state)
+    with coding_agent_persistence(cfg, setup=setup_memory) as persistence:
+        graph = build_coding_agent_graph(
+            checkpointer=persistence.checkpointer,
+            store=persistence.store,
+        )
+
+        result = graph.invoke(initial_state, config=config, context=runtime_context)
+
+    result["thread_id"] = resolved_thread_id
+
+    return result
+
 
 
 def main() -> None:
@@ -166,13 +218,19 @@ def main() -> None:
     parser.add_argument(
         "--workspace-root",
         default=".",
-        help="Project root used for validation commands. Defaults to nearest parent containing pyproject.toml.",
+        help=(
+            "Project root used for validation commands. Defaults to nearest parent "
+            "containing pyproject.toml."
+        ),
     )
 
     parser.add_argument(
         "--write",
         action="store_true",
-        help="Allow the agent to write generated file changes. Without this, it runs in dry-run mode.",
+        help=(
+            "Allow the agent to write generated file changes. Without this, it runs "
+            "in dry-run mode."
+        ),
     )
 
     parser.add_argument(
@@ -187,11 +245,51 @@ def main() -> None:
         help="Optional Markdown report path. Implies --markdown-report.",
     )
 
+    parser.add_argument(
+        "--thread-id",
+        default=None,
+        help="Optional LangGraph checkpoint thread id. Reuse it to resume the same thread.",
+    )
+
+    parser.add_argument(
+        "--memory-user-id",
+        default=None,
+        help="User id segment for cross-thread coding memory namespaces.",
+    )
+
+    parser.add_argument(
+        "--memory-namespace",
+        default=None,
+        help="Namespace segment for grouping coding memories, such as dev or personal.",
+    )
+
+    parser.add_argument(
+        "--setup-memory",
+        action="store_true",
+        help="Run Postgres checkpointer/store setup migrations before invoking the graph.",
+    )
+
+    parser.add_argument(
+        "--no-memory",
+        action="store_true",
+        help="Disable persistent checkpointer/store even when CODING_AGENT_MEMORY_DB_URI is set.",
+    )
+
     parser.add_argument("request", help="Coding task or bug report")
 
     args = parser.parse_args()
 
-    result = run_coding_agent(args.request, args.repo_root, args.workspace_root, allow_write=args.write)
+    result = run_coding_agent(
+        args.request,
+        args.repo_root,
+        args.workspace_root,
+        allow_write=args.write,
+        thread_id=args.thread_id,
+        memory_user_id=args.memory_user_id,
+        memory_namespace=args.memory_namespace,
+        memory_enabled=False if args.no_memory else None,
+        setup_memory=True if args.setup_memory else None,
+    )
 
     if args.markdown_report or args.report_path:
         report_path = write_markdown_report(result, args.repo_root, args.report_path)

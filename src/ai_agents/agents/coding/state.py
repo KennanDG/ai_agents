@@ -36,6 +36,11 @@ class CodingAgentState(TypedDict, total=False):
     search_requests: list[dict[str, Any]]
     search_queries: list[str]  # legacy fallback while migrating to structured search
     search_results: list[dict[str, Any]]
+    long_term_memories: list[str]
+    memory_enabled: bool
+    memory_namespace: str
+    memory_saved: bool
+    memory_errors: list[str]
     repo_navigation_summary: str
     repo_navigation_files: list[dict[str, str]]
     repo_navigation_confidence: float
