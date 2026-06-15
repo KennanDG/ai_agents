@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Any, Iterator
 from uuid import uuid4
 
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.store.base import BaseStore
+
 from ai_agents.agents.coding.settings import CodingAgentSettings, settings as default_settings
 from ai_agents.agents.coding.state import CodingAgentState
 from ai_agents.agents.coding.utils.text import bullets, truncate
@@ -44,8 +47,8 @@ class CodingAgentRuntimeContext:
 
 @dataclass(frozen=True)
 class CodingAgentPersistence:
-    checkpointer: Any | None = None
-    store: Any | None = None
+    checkpointer: BaseCheckpointSaver | None = None
+    store: BaseStore | None = None
 
 
 
@@ -157,7 +160,7 @@ def coding_agent_persistence(
 
 
 
-def _runtime_store(runtime: Any) -> Any | None:
+def _runtime_store(runtime: Any) -> BaseStore | None:
     return getattr(runtime, "store", None) if runtime is not None else None
 
 
