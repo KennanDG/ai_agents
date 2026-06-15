@@ -4,6 +4,8 @@ from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import RetryPolicy
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.store.base import BaseStore
 
 from ai_agents.agents.coding.memory import CodingAgentRuntimeContext
 from ai_agents.agents.coding.nodes import (
@@ -32,8 +34,8 @@ from ai_agents.agents.coding.state import CodingAgentState
 
 def build_coding_agent_graph(
     *,
-    checkpointer: Any | None = None,
-    store: Any | None = None,
+    checkpointer: BaseCheckpointSaver | None = None,
+    store: BaseStore | None = None,
 ):
     builder = StateGraph(CodingAgentState, context_schema=CodingAgentRuntimeContext)
     transient_retry = RetryPolicy(
