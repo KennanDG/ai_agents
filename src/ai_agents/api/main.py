@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from ai_agents.api.routers.health import router as health_router
 from ai_agents.api.routers.rag import router as rag_router
+from ai_agents.api.routers.coding_agent import router as coding_agent_router
 from ai_agents.api.auth import ApiKeyMiddleware
 
 
@@ -16,8 +17,11 @@ def create_app() -> FastAPI:
     app.add_middleware(ApiKeyMiddleware)
     app.include_router(health_router)
     app.include_router(rag_router)
+    app.include_router(coding_agent_router)
 
     return app
 
 
 app = create_app()
+
+
