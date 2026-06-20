@@ -1,0 +1,112 @@
+@import "tailwindcss";
+
+@theme {
+  --color-canvas: #090b10;
+  --color-panel: #0d1016;
+  --color-panel-soft: #11141b;
+  --color-surface: #151922;
+  --color-line: #222732;
+  --color-line-strong: #333a48;
+  --color-hover: #171c25;
+  --color-selected: #18202d;
+  --color-accent: #6d5dfc;
+  --color-accent-light: #9b90ff;
+  --color-ink: #f1f3f8;
+  --color-ink-soft: #c5cad5;
+  --color-muted: #8b92a3;
+  --color-faint: #5f6675;
+  --shadow-glow: 0 0 20px rgb(109 93 252 / 0.2);
+}
+
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color-scheme: dark;
+  background: var(--color-canvas);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+button,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--color-accent-light);
+  outline-offset: 2px;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: #343a46;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@layer components {
+  .activity-button {
+    @apply relative grid size-9 place-items-center rounded-md text-faint transition-colors hover:bg-hover hover:text-ink-soft;
+  }
+
+  .activity-button-active {
+    @apply bg-selected text-accent-light;
+  }
+
+  .activity-button-active::before {
+    content: "";
+    @apply absolute -left-2 h-5 w-0.5 rounded-full bg-accent-light;
+  }
+
+  .icon-button {
+    @apply grid size-6 place-items-center rounded text-faint transition-colors hover:bg-hover hover:text-ink-soft;
+  }
+
+  .message-user {
+    @apply ml-5 rounded-lg border border-line bg-surface p-3;
+  }
+
+  .message-agent {
+    @apply border-l-2 border-accent/60 pl-3;
+  }
+
+  .primary-button {
+    @apply inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-3 text-[10px] font-semibold text-white transition-colors hover:bg-accent-light;
+  }
+
+  .secondary-button {
+    @apply inline-flex h-7 items-center gap-1.5 rounded-md border border-line-strong px-3 text-[10px] font-medium text-muted transition-colors hover:bg-hover hover:text-ink-soft;
+  }
+
+  .output-tab {
+    @apply relative h-full text-[10px] font-medium text-faint hover:text-ink-soft;
+  }
+
+  .output-tab-active {
+    @apply text-ink-soft after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-accent-light;
+  }
+}
