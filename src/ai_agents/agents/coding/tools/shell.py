@@ -13,6 +13,10 @@ ALLOWED_COMMAND_PREFIXES = (
     "uv run ruff format --check",
     "python -m pytest",
     "python -m compileall",
+    "npx tsc",
+    "npm run typecheck",
+    "npm run build",
+    "npx tailwindcss",
 )
 
 BLOCKED_COMMANDS = {"sudo", "rm", "rmdir", "del", "format", "shutdown", "reboot", "mkfs", "chmod", "chown"}

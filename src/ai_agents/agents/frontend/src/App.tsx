@@ -14,7 +14,7 @@ function App() {
   );
 
   return (
-    <main className="flex h-screen min-h-[700px] min-w-[1100px] overflow-hidden bg-canvas text-ink">
+    <main className="flex h-screen min-h-175 min-w-275 overflow-hidden bg-canvas text-ink">
       <ActivityBar />
       <Sidebar changes={fileChanges} activePath={activePath} onSelect={setActivePath} />
       <TaskPanel messages={messages} />
