@@ -1,42 +1,292 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { ActivityBar } from "./components/ActivityBar";
 import { DiffPanel } from "./components/DiffPanel";
 import { OutputPanel } from "./components/OutputPanel";
 import { Sidebar } from "./components/Sidebar";
 import { TaskPanel } from "./components/TaskPanel";
-import { fileChanges, messages } from "./data/mockSession";
-import { createCodingAgentSocket, type CodingAgentServerEvent, } from "./lib/codingAgentSocket";
+import { createCodingAgentSocket, type CodingAgentRunResult, type CodingAgentServerEvent } from "./lib/codingAgentSocket";
+import { fetchRepositoryFile, fetchRepositoryTree } from "./lib/repositoryApi";
+import type { AgentMessage, AgentRunState, ChangeStatus, FileChange, RepositoryFile, RepositoryTreeEntry } from "./types";
 
-function App() {
-  const [activePath, setActivePath] = useState(fileChanges[0].path);
-  const [agentEvents, setAgentEvents] = useState<CodingAgentServerEvent[]>([]);
+const apiBaseUrl = import.meta.env.VITE_AI_AGENTS_API_BASE ?? "http://localhost:8000";
+const apiKey = import.meta.env.VITE_AI_AGENTS_API_KEY ?? "";
+const configuredRepoRoot = import.meta.env.VITE_CODING_AGENT_REPO_ROOT ?? ".";
+const configuredWorkspaceRoot = import.meta.env.VITE_CODING_AGENT_WORKSPACE_ROOT ?? configuredRepoRoot;
+
+const initialRunState: AgentRunState = {
+  status: "connecting",
+  plan: [],
+  completedNodes: [],
+  filesInspected: [],
+  fileChanges: [],
+  diffs: [],
+  validationCommands: [],
+  validationResults: [],
+  errors: [],
+  logs: [],
+};
+
+const nowLabel = () => {
+  return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date());
+}
+
+const asStringArray = (value: unknown): string[] | undefined => {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : undefined;
+}
+
+const asRecordArray = (value: unknown): Record<string, unknown>[] | undefined => {
+  return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object") : undefined;
+}
+
+const languageFromPath = (path: string) => {
+  const extension = path.split(".").at(-1)?.toLowerCase();
+  switch (extension) {
+    case "css":
+      return "css";
+    case "html":
+      return "html";
+    case "js":
+    case "jsx":
+      return "javascript";
+    case "json":
+      return "json";
+    case "md":
+      return "markdown";
+    case "py":
+      return "python";
+    case "ts":
+    case "tsx":
+      return "typescript";
+    case "yml":
+    case "yaml":
+      return "yaml";
+    default:
+      return "plaintext";
+  }
+}
+
+
+const asChangeStatus = (value: unknown): ChangeStatus => {
+  return value === "added" || value === "deleted" || value === "modified" ? value : "modified";
+}
+
+
+const asFileChanges = (value: unknown): FileChange[] | undefined => {
+  if (!Array.isArray(value)) return undefined;
+
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+
+    const record = item as Record<string, unknown>;
+    const path = record.path ?? record.file_path ?? record.file;
+    if (typeof path !== "string") return [];
+
+    return [{
+      path,
+      status: asChangeStatus(record.status),
+      additions: typeof record.additions === "number" ? record.additions : 0,
+      deletions: typeof record.deletions === "number" ? record.deletions : 0,
+      language: typeof record.language === "string" ? record.language : languageFromPath(path),
+      original: typeof record.original === "string" ? record.original : typeof record.before === "string" ? record.before : "",
+      modified: typeof record.modified === "string" ? record.modified : typeof record.after === "string" ? record.after : "",
+    }];
+  });
+}
+
+
+const mergeResult = (state: AgentRunState, result: CodingAgentRunResult): AgentRunState => {
+  return {
+    ...state,
+    threadId: result.thread_id,
+    selectedSkill: result.selected_skill,
+    routeConfidence: result.route_confidence,
+    routeReason: result.route_reason,
+    plan: result.plan ?? state.plan,
+    filesInspected: result.files_inspected ?? state.filesInspected,
+    patchSummary: result.patch_summary,
+    fileChanges: asFileChanges(result.file_changes) ?? state.fileChanges,
+    diffs: result.diffs ?? state.diffs,
+    validationCommands: result.validation_commands ?? state.validationCommands,
+    validationResults: result.validation_results ?? state.validationResults,
+    report: result.report,
+    errors: result.errors ?? state.errors,
+  };
+}
+
+
+const runReducer = (state: AgentRunState, event: CodingAgentServerEvent): AgentRunState => {
+  switch (event.type) {
+    case "session.ready":
+      return {
+        ...state,
+        status: "ready",
+        logs: [...state.logs, `[socket] ${event.payload.message}`],
+      };
+
+    case "run.started":
+      return {
+        ...initialRunState,
+        status: "running",
+        runId: event.run_id,
+        threadId: event.thread_id,
+        logs: [
+          `[run] started ${event.thread_id}`,
+          `[repo] ${event.payload.repo_root}`,
+          `[mode] ${event.payload.allow_write ? "write" : "read-only"}`,
+        ],
+      };
+
+    case "node.completed": {
+      const payload = event.payload;
+      const plan = asStringArray(payload.plan) ?? state.plan;
+      const filesInspected = asStringArray(payload.files_inspected) ?? state.filesInspected;
+      const fileChanges = asFileChanges(payload.file_changes) ?? state.fileChanges;
+      const diffs = asStringArray(payload.diffs) ?? state.diffs;
+      const validationCommands = asStringArray(payload.validation_commands) ?? state.validationCommands;
+      const validationResults = asRecordArray(payload.validation_results) ?? state.validationResults;
+      const errors = asStringArray(payload.errors) ?? state.errors;
+
+      return {
+        ...state,
+        runId: event.run_id,
+        threadId: event.thread_id,
+        plan,
+        filesInspected,
+        fileChanges,
+        diffs,
+        validationCommands,
+        validationResults,
+        errors,
+        selectedSkill: typeof payload.selected_skill === "string" ? payload.selected_skill : state.selectedSkill,
+        routeConfidence: typeof payload.route_confidence === "number" ? payload.route_confidence : state.routeConfidence,
+        routeReason: typeof payload.route_reason === "string" ? payload.route_reason : state.routeReason,
+        patchSummary: typeof payload.patch_summary === "string" ? payload.patch_summary : state.patchSummary,
+        report: typeof payload.report === "string" ? payload.report : state.report,
+        completedNodes: [...state.completedNodes, event.node],
+        logs: [...state.logs, `[node] completed ${event.node}`],
+      };
+    }
+
+    case "run.completed":
+      return {
+        ...mergeResult(state, event.payload),
+        status: "completed",
+        runId: event.run_id,
+        threadId: event.thread_id,
+        logs: [...state.logs, `[run] completed ${event.thread_id}`],
+      };
+
+    case "run.failed":
+      return {
+        ...state,
+        status: "failed",
+        runId: event.run_id,
+        threadId: event.thread_id,
+        errors: [...state.errors, event.payload.error],
+        logs: [...state.logs, `[error] ${event.payload.error}`],
+      };
+
+    case "pong":
+      return { ...state, logs: [...state.logs, "[socket] pong"] };
+
+    default:
+      return state;
+  }
+}
+
+
+const App = () => {
+  const [run, dispatchRun] = useReducer(runReducer, initialRunState);
+  const [messages, setMessages] = useState<AgentMessage[]>([]);
+  const [repoRoot, setRepoRoot] = useState(configuredRepoRoot);
+  const [repoEntries, setRepoEntries] = useState<RepositoryTreeEntry[]>([]);
+  const [repoLoading, setRepoLoading] = useState(false);
+  const [repoError, setRepoError] = useState<string | null>(null);
+  const [activePath, setActivePath] = useState<string | null>(null);
+  const [activeFile, setActiveFile] = useState<RepositoryFile | null>(null);
+  const [fileLoading, setFileLoading] = useState(false);
+  const [fileError, setFileError] = useState<string | null>(null);
   const socketRef = useRef<ReturnType<typeof createCodingAgentSocket> | null>(null);
 
+  const repoName = useMemo(() => repoRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? "repository", [repoRoot]);
   const activeChange = useMemo(
-    () => fileChanges.find((change) => change.path === activePath) ?? fileChanges[0],
-    [activePath],
+    () => run.fileChanges.find((change) => change.path === activePath && (change.original || change.modified)) ?? null,
+    [activePath, run.fileChanges],
   );
 
-  useEffect(() => {
-    const apiBaseUrl = import.meta.env.VITE_AI_AGENTS_API_BASE ?? "http://localhost:8000";
-    const apiKey = import.meta.env.VITE_AI_AGENTS_API_KEY;
+  const refreshRepository = useCallback(async () => {
+    setRepoLoading(true);
+    setRepoError(null);
 
-    if (!apiKey) {
-      console.warn("VITE_AI_AGENTS_API_KEY is not configured.");
+    try {
+      const tree = await fetchRepositoryTree({ apiBaseUrl, apiKey, repoRoot: configuredRepoRoot });
+      setRepoRoot(tree.repo_root);
+      setRepoEntries(tree.entries);
+
+      const firstFile = tree.entries.find((entry) => entry.kind === "file");
+      setActivePath((current) => current ?? firstFile?.path ?? null);
+    } catch (error) {
+      setRepoError(error instanceof Error ? error.message : "Failed to load repository.");
+    } finally {
+      setRepoLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshRepository();
+  }, [refreshRepository]);
+
+  useEffect(() => {
+    if (!activePath) {
+      setActiveFile(null);
       return;
     }
 
+    const abortController = new AbortController();
+    setActiveFile(null);
+    setFileLoading(true);
+    setFileError(null);
+
+    fetchRepositoryFile({ apiBaseUrl, apiKey, repoRoot, path: activePath })
+      .then((file) => {
+        if (!abortController.signal.aborted) setActiveFile(file);
+      })
+      .catch((error) => {
+        if (!abortController.signal.aborted) setFileError(error instanceof Error ? error.message : "Failed to load file.");
+      })
+      .finally(() => {
+        if (!abortController.signal.aborted) setFileLoading(false);
+      });
+
+    return () => abortController.abort();
+  }, [activePath, repoRoot]);
+
+  useEffect(() => {
     const client = createCodingAgentSocket({
       apiBaseUrl,
       apiKey,
       onEvent: (event) => {
-        setAgentEvents((current) => [...current, event]);
+        dispatchRun(event);
+
+        if (event.type === "run.completed" && event.payload.report) {
+          setMessages((current) => [
+            ...current,
+            { id: crypto.randomUUID(), role: "agent", body: event.payload.report ?? "Run completed.", time: nowLabel() },
+          ]);
+        }
+
+        if (event.type === "run.failed") {
+          setMessages((current) => [
+            ...current,
+            { id: crypto.randomUUID(), role: "agent", body: event.payload.error, time: nowLabel() },
+          ]);
+        }
       },
       onOpen: () => {
         console.log("Coding agent socket connected.");
       },
       onClose: () => {
-        console.log("Coding agent socket closed.");
+        dispatchRun({ type: "run.failed", payload: { error: "Coding agent socket closed." } });
       },
       onError: (event) => {
         console.error("Coding agent socket error.", event);
@@ -51,14 +301,36 @@ function App() {
     };
   }, []);
 
+  const submitPrompt = (prompt: string) => {
+    setMessages((current) => [...current, { id: crypto.randomUUID(), role: "user", body: prompt, time: nowLabel() }]);
+
+    socketRef.current?.run({
+      request: prompt,
+      repo_root: repoRoot,
+      workspace_root: configuredWorkspaceRoot === configuredRepoRoot ? repoRoot : configuredWorkspaceRoot,
+      allow_write: true,
+      memory_enabled: true,
+    });
+  }
+
   return (
     <main className="flex h-screen min-h-175 min-w-275 overflow-hidden bg-canvas text-ink">
       <ActivityBar />
-      <Sidebar changes={fileChanges} activePath={activePath} onSelect={setActivePath} />
-      <TaskPanel messages={messages} />
+      <Sidebar
+        repoName={repoName}
+        repoRoot={repoRoot}
+        entries={repoEntries}
+        changes={run.fileChanges}
+        activePath={activePath}
+        isLoading={repoLoading}
+        error={repoError}
+        onSelect={setActivePath}
+        onRefresh={refreshRepository}
+      />
+      <TaskPanel messages={messages} run={run} onSubmit={submitPrompt} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <DiffPanel change={activeChange} />
-        <OutputPanel />
+        <DiffPanel file={activeFile} change={activeChange} isLoading={fileLoading} error={fileError} />
+        <OutputPanel run={run} />
       </div>
     </main>
   );

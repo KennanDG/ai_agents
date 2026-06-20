@@ -86,25 +86,57 @@ type CodingAgentSocketOptions = {
   onError?: (event: Event) => void;
 };
 
-export function createCodingAgentSocket(options: CodingAgentSocketOptions) {
-  const url = new URL("/coding-agent/ws", options.apiBaseUrl);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.searchParams.set("api_key", options.apiKey);
 
-  const socket = new WebSocket(url);
+
+
+const makeSocketUrl = (apiBaseUrl: string, apiKey?: string) => {
+  const url = new URL("/coding-agent/ws", apiBaseUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  if (apiKey) url.searchParams.set("api_key", apiKey);
+  return url;
+}
+
+
+export const createCodingAgentSocket = (options: CodingAgentSocketOptions) => {
+  const socket = new WebSocket(makeSocketUrl(options.apiBaseUrl, options.apiKey));
+  const pendingMessages: string[] = [];
+
+  const sendMessage = (message: unknown) => {
+    const serialized = JSON.stringify(message);
+
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(serialized);
+      return;
+    }
+
+    pendingMessages.push(serialized);
+  }
+
 
   socket.addEventListener("open", () => {
+    while (pendingMessages.length > 0) {
+      const message = pendingMessages.shift();
+      if (message) socket.send(message);
+    }
+
     options.onOpen?.();
   });
 
+
   socket.addEventListener("message", (message) => {
-    const event = JSON.parse(message.data) as CodingAgentServerEvent;
-    options.onEvent(event);
+    try {
+      const event = JSON.parse(message.data) as CodingAgentServerEvent;
+      options.onEvent(event);
+    } catch (error) {
+      console.error("Failed to parse coding agent WebSocket event.", error);
+    }
   });
+
 
   socket.addEventListener("close", () => {
     options.onClose?.();
   });
+
 
   socket.addEventListener("error", (event) => {
     options.onError?.(event);
@@ -114,21 +146,17 @@ export function createCodingAgentSocket(options: CodingAgentSocketOptions) {
     socket,
 
     run(request: CodingAgentRunRequest) {
-      socket.send(
-        JSON.stringify({
-          type: "run.request",
-          payload: request,
-        }),
-      );
+      sendMessage({
+        type: "run.request",
+        payload: request,
+      });
     },
 
     ping() {
-      socket.send(
-        JSON.stringify({
-          type: "ping",
-          payload: {},
-        }),
-      );
+      sendMessage({
+        type: "ping",
+        payload: {},
+      });
     },
 
     close() {
@@ -136,4 +164,5 @@ export function createCodingAgentSocket(options: CodingAgentSocketOptions) {
     },
   };
 }
+
 

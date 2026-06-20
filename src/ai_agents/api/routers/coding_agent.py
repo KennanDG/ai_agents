@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import asyncio
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -7,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 from langchain_core.runnables import RunnableConfig
 from pydantic import ValidationError
@@ -24,11 +25,196 @@ from ai_agents.api.schemas import (
     CodingAgentRunRequest,
     CodingAgentRunResult,
     CodingAgentServerEvent,
+    RepositoryFileResponse,
+    RepositoryTreeEntry,
+    RepositoryTreeResponse,
 )
+
+
+IGNORED_REPOSITORY_DIRS = {
+    ".git",
+    ".hg",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+}
+
+MAX_REPOSITORY_FILE_BYTES = 1_000_000
+
+#TODO: Add c++, Rust, and java files
+LANGUAGE_BY_EXTENSION = {
+    ".css": "css",
+    ".html": "html",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".json": "json",
+    ".md": "markdown",
+    ".py": "python",
+    ".sql": "sql",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    # ".txt": "plaintext",
+    ".toml": "toml",
+    ".yml": "yaml",
+    ".yaml": "yaml",
+}
+
+
 
 router = APIRouter(prefix="/coding-agent", tags=["coding-agent"])
 
 
+
+
+#############################################################################
+############################## Repository Tree ##############################
+#############################################################################
+def _resolve_repo_root(repo_root: str) -> Path:
+    root = Path(repo_root).expanduser().resolve()
+
+    if not root.exists():
+        raise HTTPException(status_code=404, detail="Repository root does not exist.")
+
+    if not root.is_dir():
+        raise HTTPException(status_code=400, detail="Repository root must be a directory.")
+
+    return root
+
+
+
+def _resolve_repo_file(root: Path, relative_path: str) -> Path:
+    target = (root / relative_path).resolve()
+
+    if target != root and root not in target.parents:
+        raise HTTPException(status_code=400, detail="File path escapes repository root.")
+
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Repository file does not exist.")
+
+    if not target.is_file():
+        raise HTTPException(status_code=400, detail="Path is not a file.")
+
+    return target
+
+
+
+def _repository_language(path: Path) -> str:
+    return LANGUAGE_BY_EXTENSION.get(path.suffix.lower(), "plaintext")
+
+
+def _is_ignored_repository_dir(name: str) -> bool:
+    return name in IGNORED_REPOSITORY_DIRS or name.endswith(".egg-info")
+
+
+
+
+@router.get("/repository/tree", response_model=RepositoryTreeResponse)
+def repository_tree(
+    repo_root: str = Query(".", description="Absolute or service-relative repository root."),
+    max_depth: int = Query(8, ge=1, le=32),
+    max_entries: int = Query(1500, ge=1, le=5000),
+) -> RepositoryTreeResponse:
+    
+    root = _resolve_repo_root(repo_root)
+    entries: list[RepositoryTreeEntry] = []
+
+    for current_dir, dir_names, file_names in os.walk(root):
+        current_path = Path(current_dir)
+        relative_dir = current_path.relative_to(root)
+        current_depth = len(relative_dir.parts)
+
+        dir_names[:] = [
+            name for name in sorted(dir_names) if not _is_ignored_repository_dir(name)
+        ]
+
+        if current_depth >= max_depth:
+            dir_names[:] = []
+
+        for directory_name in dir_names:
+            directory_path = current_path / directory_name
+            relative_path = directory_path.relative_to(root).as_posix()
+
+            entries.append(
+                RepositoryTreeEntry(
+                    path=relative_path,
+                    name=directory_name,
+                    kind="directory",
+                    depth=current_depth,
+                )
+            )
+
+            if len(entries) >= max_entries:
+                return RepositoryTreeResponse(repo_root=str(root), entries=entries)
+
+        for file_name in sorted(file_names):
+            file_path = current_path / file_name
+
+            try:
+                size = file_path.stat().st_size
+            except OSError:
+                continue
+
+            relative_path = file_path.relative_to(root).as_posix()
+
+            entries.append(
+                RepositoryTreeEntry(
+                    path=relative_path,
+                    name=file_name,
+                    kind="file",
+                    depth=current_depth,
+                    size=size,
+                )
+            )
+
+            if len(entries) >= max_entries:
+                return RepositoryTreeResponse(repo_root=str(root), entries=entries)
+
+    return RepositoryTreeResponse(repo_root=str(root), entries=entries)
+
+
+
+@router.get("/repository/file", response_model=RepositoryFileResponse)
+def repository_file(
+    path: str = Query(..., min_length=1),
+    repo_root: str = Query(".", description="Absolute or service-relative repository root."),
+) -> RepositoryFileResponse:
+    
+    root = _resolve_repo_root(repo_root)
+    file_path = _resolve_repo_file(root, path)
+    size = file_path.stat().st_size
+
+    if size > MAX_REPOSITORY_FILE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File is too large to preview. Limit is {MAX_REPOSITORY_FILE_BYTES} bytes.",
+        )
+
+    raw = file_path.read_bytes()
+    if b"\0" in raw[:4096]:
+        raise HTTPException(status_code=415, detail="Binary files cannot be previewed.")
+
+    return RepositoryFileResponse(
+        repo_root=str(root),
+        path=path,
+        language=_repository_language(file_path),
+        content=raw.decode("utf-8", errors="replace"),
+        size=size,
+    )
+
+
+
+
+
+#######################################################################
+############################## WebSocket ##############################
+#######################################################################
 def _new_thread_id() -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     return f"coding-run-{timestamp}-{uuid4().hex[:8]}"

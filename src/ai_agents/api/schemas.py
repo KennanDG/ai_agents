@@ -73,6 +73,26 @@ class CodingAgentServerEvent(BaseModel):
 
 
 
+class RepositoryTreeEntry(BaseModel):
+    path: str
+    name: str
+    kind: Literal["file", "directory"]
+    depth: int = 0
+    size: int | None = None
+
+
+class RepositoryTreeResponse(BaseModel):
+    repo_root: str
+    entries: List[RepositoryTreeEntry] = Field(default_factory=list)
+
+
+class RepositoryFileResponse(BaseModel):
+    repo_root: str
+    path: str
+    language: str = "plaintext"
+    content: str
+    size: int
+
 
 
 
