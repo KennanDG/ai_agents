@@ -6,6 +6,7 @@ interface TaskPanelProps {
   messages: AgentMessage[];
   run: AgentRunState;
   onSubmit: (prompt: string) => void;
+  allowWrite: boolean;
 }
 
 const statusClass = {
@@ -17,7 +18,7 @@ const statusClass = {
   failed: "border-rose-500/20 bg-rose-500/8 text-rose-300",
 };
 
-export const TaskPanel = ({ messages, run, onSubmit }: TaskPanelProps) => {
+export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProps) => {
   const [prompt, setPrompt] = useState("");
   const isRunning = run.status === "running";
 
@@ -31,14 +32,14 @@ export const TaskPanel = ({ messages, run, onSubmit }: TaskPanelProps) => {
   }
 
   return (
-    <section className="flex min-h-0 w-90 shrink-0 flex-col border-r border-line bg-panel-soft">
-      <div className="flex h-12 items-center gap-2 border-b border-line px-4">
+    <section className="flex min-h-0 flex-1 flex-col bg-panel-soft">
+      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-4">
         <Sparkles size={15} className="text-accent-light" />
         <h1 className="text-xs font-semibold text-ink">Agent session</h1>
         <span className={`ml-auto rounded-full border px-2 py-0.5 text-[9px] font-medium uppercase ${statusClass[run.status]}`}>{run.status}</span>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         <div className="mb-5 rounded-lg border border-line bg-surface p-3">
           <div className="mb-2.5 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-muted">
             <ShieldCheck size={13} /> Plan
@@ -75,13 +76,15 @@ export const TaskPanel = ({ messages, run, onSubmit }: TaskPanelProps) => {
                 <span>·</span>
                 <time>{message.time}</time>
               </div>
-              <p className="whitespace-pre-wrap text-xs leading-5 text-ink-soft">{message.body}</p>
+              <p className="whitespace-pre-wrap wrap-break-word text-xs leading-5 text-ink-soft">
+                {message.body}
+              </p>
             </article>
           ))}
         </div>
       </div>
 
-      <form className="border-t border-line p-3" onSubmit={handleSubmit}>
+      <form className="shrink-0 border-t border-line p-3" onSubmit={handleSubmit}>
         <div className="rounded-lg border border-line-strong bg-surface p-2.5 focus-within:border-accent/70 focus-within:ring-1 focus-within:ring-accent/20">
           <label htmlFor="agent-prompt" className="sr-only">Message the coding agent</label>
           <textarea
@@ -94,7 +97,7 @@ export const TaskPanel = ({ messages, run, onSubmit }: TaskPanelProps) => {
           />
           <div className="mt-2 flex items-center">
             <button type="button" className="icon-button" aria-label="Attach context" title="Attach context"><Paperclip size={14} /></button>
-            <span className="ml-1 text-[9px] text-faint">{isRunning ? "Agent running" : "Write mode"}</span>
+            <span className="ml-1 text-[9px] text-faint">{isRunning ? "Agent running" : allowWrite ? "Write mode" : "Read mode"}</span>
             <button
               type="submit"
               disabled={!prompt.trim() || isRunning}

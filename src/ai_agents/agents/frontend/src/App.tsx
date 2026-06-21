@@ -316,8 +316,9 @@ const App = () => {
   }
 
   return (
-    <main className="flex h-screen min-h-175 min-w-275 overflow-hidden bg-canvas text-ink">
+    <main className="flex h-dvh min-h-0 min-w-0 overflow-hidden bg-canvas text-ink">
       <ActivityBar />
+
       <Sidebar
         repoName={repoName}
         repoRoot={repoRoot}
@@ -329,20 +330,34 @@ const App = () => {
         onSelect={setActivePath}
         onRefresh={refreshRepository}
       />
-      <div className="flex flex-col bg-panel-soft">
-        <div className="flex items-center gap-3 border-b border-line px-3 py-2">
-          <label className="flex items-center gap-1.5 text-xs text-ink-soft cursor-pointer">
-            <input type="checkbox" checked={allowWrite} onChange={() => setAllowWrite(!allowWrite)} className="accent-accent" />
+
+      <div className="flex min-h-0 w-90 shrink-0 flex-col border-r border-line bg-panel-soft">
+        <div className="flex shrink-0 items-center gap-3 border-b border-line px-3 py-2">
+          <label className="flex cursor-pointer items-center gap-1.5 text-xs text-ink-soft">
+            <input
+              type="checkbox"
+              checked={allowWrite}
+              onChange={() => setAllowWrite(!allowWrite)}
+              className="accent-accent"
+            />
             Allow Write
           </label>
-          <label className="flex items-center gap-1.5 text-xs text-ink-soft cursor-pointer">
-            <input type="checkbox" checked={memoryEnabled} onChange={() => setMemoryEnabled(!memoryEnabled)} className="accent-accent" />
+
+          <label className="flex cursor-pointer items-center gap-1.5 text-xs text-ink-soft">
+            <input
+              type="checkbox"
+              checked={memoryEnabled}
+              onChange={() => setMemoryEnabled(!memoryEnabled)}
+              className="accent-accent"
+            />
             Memory Enabled
           </label>
         </div>
-        <TaskPanel messages={messages} run={run} onSubmit={submitPrompt} />
+
+        <TaskPanel messages={messages} run={run} onSubmit={submitPrompt} allowWrite={allowWrite} />
       </div>
-      <div className="flex min-w-0 flex-1 flex-col">
+
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <DiffPanel file={activeFile} change={activeChange} isLoading={fileLoading} error={fileError} />
         <OutputPanel run={run} />
       </div>
