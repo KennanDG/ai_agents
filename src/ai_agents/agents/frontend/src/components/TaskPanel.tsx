@@ -1,5 +1,5 @@
 import { ArrowUp, Check, Circle, Paperclip, ShieldCheck, Sparkles } from "lucide-react";
-import { type SubmitEvent, useState } from "react";
+import { type ChangeEvent, type SubmitEvent, useRef, useState } from "react";
 import type { AgentMessage, AgentRunState } from "../types";
 
 interface TaskPanelProps {
@@ -20,6 +20,8 @@ const statusClass = {
 
 export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProps) => {
   const [prompt, setPrompt] = useState("");
+  const [attachedFiles, setAttachedFiles] = useState<{ name: string; content: string }[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const isRunning = run.status === "running";
 
   const handleSubmit = (event: SubmitEvent<HTMLFormElement>) => {
@@ -27,9 +29,53 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProp
     const trimmed = prompt.trim();
     if (!trimmed || isRunning) return;
 
-    onSubmit(trimmed);
+    let finalPrompt = trimmed;
+    if (attachedFiles.length > 0) {
+      const fileContents = attachedFiles.map(f => `--- ${f.name} ---\n${f.content}`).join('\n');
+      finalPrompt += '\n\nAttached files:\n' + fileContents;
+    }
+
+    onSubmit(finalPrompt);
     setPrompt("");
+    setAttachedFiles([]);
   }
+
+  const handleAttachClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+
+    const fileList: File[] = [];
+    for (let i = 0; i < files.length; i++) {
+      fileList.push(files[i]);
+    }
+
+    Promise.all(
+      fileList.map(
+        (file) =>
+          new Promise<{ name: string; content: string }>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+              resolve({ name: file.name, content: (e.target?.result as string) || '' });
+            };
+            reader.onerror = () => {
+              resolve({ name: file.name, content: '' });
+            };
+            reader.readAsText(file);
+          })
+      )
+    ).then((loadedFiles) => {
+      const validFiles = loadedFiles.filter((f) => f.content !== '');
+      if (validFiles.length > 0) {
+        setAttachedFiles((prev) => [...prev, ...validFiles]);
+      }
+    });
+
+    event.target.value = '';
+  };
 
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-panel-soft">
@@ -85,6 +131,13 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProp
       </div>
 
       <form className="shrink-0 border-t border-line p-3" onSubmit={handleSubmit}>
+        <input
+          type="file"
+          ref={fileInputRef}
+          className="sr-only"
+          multiple
+          onChange={handleFileChange}
+        />
         <div className="rounded-lg border border-line-strong bg-surface p-2.5 focus-within:border-accent/70 focus-within:ring-1 focus-within:ring-accent/20">
           <label htmlFor="agent-prompt" className="sr-only">Message the coding agent</label>
           <textarea
@@ -95,8 +148,25 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProp
             placeholder="Ask the agent to change your code…"
             className="w-full resize-none bg-transparent text-xs leading-5 text-ink outline-none placeholder:text-faint"
           />
+          {attachedFiles.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {attachedFiles.map((file, idx) => (
+                <span key={idx} className="inline-flex items-center gap-1 rounded bg-line px-1.5 py-0.5 text-[10px] text-muted">
+                  {file.name}
+                  <button
+                    type="button"
+                    className="text-faint hover:text-ink"
+                    onClick={() => setAttachedFiles(prev => prev.filter((_, i) => i !== idx))}
+                    aria-label="Remove file"
+                  >
+                    &times;
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
           <div className="mt-2 flex items-center">
-            <button type="button" className="icon-button" aria-label="Attach context" title="Attach context"><Paperclip size={14} /></button>
+            <button type="button" className="icon-button" aria-label="Attach context" title="Attach context" onClick={handleAttachClick}><Paperclip size={14} /></button>
             <span className="ml-1 text-[9px] text-faint">{isRunning ? "Agent running" : allowWrite ? "Write mode" : "Read mode"}</span>
             <button
               type="submit"
