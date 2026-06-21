@@ -28,6 +28,7 @@ from ai_agents.api.schemas import (
     RepositoryFileResponse,
     RepositoryTreeEntry,
     RepositoryTreeResponse,
+    CodingAgentAttachedFile
 )
 
 
@@ -47,6 +48,9 @@ IGNORED_REPOSITORY_DIRS = {
 }
 
 MAX_REPOSITORY_FILE_BYTES = 1_000_000
+MAX_ATTACHED_FILES = 10
+MAX_ATTACHMENT_CHARS = 50_000
+MAX_TOTAL_ATTACHMENT_CHARS = 150_000
 
 #TODO: Add c++, Rust, and java files
 LANGUAGE_BY_EXTENSION = {
@@ -111,6 +115,95 @@ def _repository_language(path: Path) -> str:
 
 def _is_ignored_repository_dir(name: str) -> bool:
     return name in IGNORED_REPOSITORY_DIRS or name.endswith(".egg-info")
+
+
+
+def _truncate_text(value: str, max_chars: int) -> tuple[str, bool]:
+    if len(value) <= max_chars:
+        return value, False
+    return value[:max_chars], True
+
+
+
+def _normalize_attached_files(
+    *,
+    request: CodingAgentRunRequest,
+    repo_root: Path,
+) -> tuple[list[CodingAgentAttachedFile], list[str]]:
+    
+    normalized: list[CodingAgentAttachedFile] = []
+    errors: list[str] = []
+    total_chars = 0
+
+    for index, attached in enumerate(request.attached_files[:MAX_ATTACHED_FILES]):
+        name = Path(attached.name).name.strip() or f"attachment-{index + 1}.txt"
+        source = attached.source
+        path = attached.path.strip() if attached.path else None
+        content = attached.content or ""
+
+        if source == "repo":
+            if not path:
+                errors.append(f"Skipped repo attachment {name}: missing repo-relative path.")
+                continue
+
+            try:
+                file_path = _resolve_repo_file(repo_root, path)
+                size = file_path.stat().st_size
+
+                if size > MAX_REPOSITORY_FILE_BYTES:
+                    errors.append(
+                        f"Skipped repo attachment {path}: file is too large "
+                        f"({size} bytes)."
+                    )
+                    continue
+
+                raw = file_path.read_bytes()
+
+                if b"\0" in raw[:4096]:
+                    errors.append(f"Skipped repo attachment {path}: binary file.")
+                    continue
+
+                content = raw.decode("utf-8", errors="replace")
+                name = file_path.name
+
+            except HTTPException as exc:
+                errors.append(f"Skipped repo attachment {path}: {exc.detail}")
+                continue
+
+        if not content.strip():
+            errors.append(f"Skipped attachment {name}: empty content.")
+            continue
+
+        remaining = MAX_TOTAL_ATTACHMENT_CHARS - total_chars
+        if remaining <= 0:
+            errors.append("Skipped remaining attachments: total attachment context limit reached.")
+            break
+
+        content, truncated_by_file_limit = _truncate_text(
+            content,
+            min(MAX_ATTACHMENT_CHARS, remaining),
+        )
+
+        total_chars += len(content)
+
+        normalized.append(
+            {
+                "name": name,
+                "path": path,
+                "source": source,
+                "mime_type": attached.mime_type,
+                "size": attached.size,
+                "content": content,
+                "truncated": bool(attached.truncated) or truncated_by_file_limit or total_chars >= MAX_TOTAL_ATTACHMENT_CHARS,
+            }
+        )
+
+    if len(request.attached_files) > MAX_ATTACHED_FILES:
+        errors.append(
+            f"Only the first {MAX_ATTACHED_FILES} attached files were included."
+        )
+
+    return normalized, errors
 
 
 
@@ -263,25 +356,40 @@ def _stream_coding_agent_worker(
     loop: asyncio.AbstractEventLoop,
     queue: asyncio.Queue[dict[str, Any] | None],
 ) -> None:
+    
     thread_id = request.thread_id or _new_thread_id()
 
     cfg = default_coding_settings
+
     if request.memory_enabled is not None:
         cfg = replace(cfg, memory_enabled=request.memory_enabled)
 
-    repo_root = str(Path(request.repo_root).expanduser().resolve())
+
+    repo_root_path = Path(request.repo_root).expanduser().resolve()
+    repo_root = str(repo_root_path)
+
     workspace_root = (
         str(Path(request.workspace_root).expanduser().resolve())
         if request.workspace_root
         else None
     )
 
+
+    attached_files, attachment_errors = _normalize_attached_files(
+        request=request,
+        repo_root=repo_root_path,
+    )
+
+
     initial_state: dict[str, Any] = {
         "user_request": request.request,
         "repo_root": repo_root,
         "workspace_root": workspace_root,
         "allow_write": request.allow_write,
-        "errors": [],
+        "attached_files": attached_files,
+        "attached_files_used": [],
+        "attachment_errors": attachment_errors,
+        "errors": [*attachment_errors],
         "memory_errors": [],
     }
 

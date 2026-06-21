@@ -1,13 +1,15 @@
 import { ArrowUp, Check, Circle, Paperclip, ShieldCheck, Sparkles } from "lucide-react";
-import { type ChangeEvent, type SubmitEvent, useRef, useState } from "react";
+import { type ChangeEvent, type SubmitEvent, type DragEvent, useRef, useState } from "react";
 import type { AgentMessage, AgentRunState } from "../types";
+import type { CodingAgentAttachedFile } from "../lib/codingAgentSocket";
 
 interface TaskPanelProps {
   messages: AgentMessage[];
   run: AgentRunState;
-  onSubmit: (prompt: string) => void;
+  onSubmit: (prompt: string, attachedFiles: CodingAgentAttachedFile[]) => void;
   allowWrite: boolean;
 }
+
 
 const statusClass = {
   disconnected: "border-rose-500/20 bg-rose-500/8 text-rose-300",
@@ -18,63 +20,125 @@ const statusClass = {
   failed: "border-rose-500/20 bg-rose-500/8 text-rose-300",
 };
 
+
+const MAX_ATTACHMENT_BYTES = 1_000_000;
+
+
 export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProps) => {
   const [prompt, setPrompt] = useState("");
-  const [attachedFiles, setAttachedFiles] = useState<{ name: string; content: string }[]>([]);
+  const [attachedFiles, setAttachedFiles] = useState<CodingAgentAttachedFile[]>([]);
+  const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isRunning = run.status === "running";
 
+
+
   const handleSubmit = (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
+
     const trimmed = prompt.trim();
     if (!trimmed || isRunning) return;
 
-    let finalPrompt = trimmed;
-    if (attachedFiles.length > 0) {
-      const fileContents = attachedFiles.map(f => `--- ${f.name} ---\n${f.content}`).join('\n');
-      finalPrompt += '\n\nAttached files:\n' + fileContents;
-    }
+    onSubmit(trimmed, attachedFiles);
 
-    onSubmit(finalPrompt);
     setPrompt("");
     setAttachedFiles([]);
-  }
+  };
+
 
   const handleAttachClick = () => {
     fileInputRef.current?.click();
   };
 
-  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files;
+
+  const processFiles = (files: File[]) => {
     if (!files || files.length === 0) return;
 
-    const fileList: File[] = [];
-    for (let i = 0; i < files.length; i++) {
-      fileList.push(files[i]);
-    }
-
     Promise.all(
-      fileList.map(
+      files.map(
         (file) =>
-          new Promise<{ name: string; content: string }>((resolve) => {
+          new Promise<CodingAgentAttachedFile | null>((resolve) => {
+            if (file.size > MAX_ATTACHMENT_BYTES) {
+              resolve(null);
+              return;
+            }
+
             const reader = new FileReader();
-            reader.onload = (e) => {
-              resolve({ name: file.name, content: (e.target?.result as string) || '' });
+
+            reader.onload = (event) => {
+              const content = typeof event.target?.result === "string"
+                ? event.target.result
+                : "";
+
+              if (!content.trim()) {
+                resolve(null);
+                return;
+              }
+
+              resolve({
+                name: file.name,
+                content,
+                source: "upload",
+                mime_type: file.type || null,
+                size: file.size,
+              });
             };
-            reader.onerror = () => {
-              resolve({ name: file.name, content: '' });
-            };
+
+            reader.onerror = () => resolve(null);
             reader.readAsText(file);
           })
       )
     ).then((loadedFiles) => {
-      const validFiles = loadedFiles.filter((f) => f.content !== '');
+      const validFiles = loadedFiles.filter((file): file is CodingAgentAttachedFile => file !== null);
+
       if (validFiles.length > 0) {
         setAttachedFiles((prev) => [...prev, ...validFiles]);
       }
     });
+  };
+  
 
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+    processFiles(Array.from(files));
     event.target.value = '';
+  };
+
+  const dragCounter = useRef(0);
+
+  const handleDragEnter = (e: DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current += 1;
+    if (e.dataTransfer?.types?.includes('Files')) {
+      setIsDragOver(true);
+    }
+  };
+
+  const handleDragLeave = (e: DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current -= 1;
+    if (dragCounter.current === 0) {
+      setIsDragOver(false);
+    }
+  };
+
+  const handleDragOver = (e: DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDrop = (e: DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+    dragCounter.current = 0;
+    const files = e.dataTransfer?.files;
+    if (files && files.length > 0) {
+      processFiles(Array.from(files));
+    }
   };
 
   return (
@@ -138,45 +202,58 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProp
           multiple
           onChange={handleFileChange}
         />
-        <div className="rounded-lg border border-line-strong bg-surface p-2.5 focus-within:border-accent/70 focus-within:ring-1 focus-within:ring-accent/20">
-          <label htmlFor="agent-prompt" className="sr-only">Message the coding agent</label>
-          <textarea
-            id="agent-prompt"
-            rows={3}
-            value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
-            placeholder="Ask the agent to change your code…"
-            className="w-full resize-none bg-transparent text-xs leading-5 text-ink outline-none placeholder:text-faint"
-          />
-          {attachedFiles.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-1">
-              {attachedFiles.map((file, idx) => (
-                <span key={idx} className="inline-flex items-center gap-1 rounded bg-line px-1.5 py-0.5 text-[10px] text-muted">
-                  {file.name}
-                  <button
-                    type="button"
-                    className="text-faint hover:text-ink"
-                    onClick={() => setAttachedFiles(prev => prev.filter((_, i) => i !== idx))}
-                    aria-label="Remove file"
-                  >
-                    &times;
-                  </button>
-                </span>
-              ))}
+        <div
+          onDragOver={handleDragOver}
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          className={`relative ${isDragOver ? "ring-2 ring-accent/30" : ""}`}
+        >
+          <div className="rounded-lg border border-line-strong bg-surface p-2.5 focus-within:border-accent/70 focus-within:ring-1 focus-within:ring-accent/20">
+            <label htmlFor="agent-prompt" className="sr-only">Message the coding agent</label>
+            <textarea
+              id="agent-prompt"
+              rows={3}
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              placeholder="Ask the agent to change your code…"
+              className="w-full resize-none bg-transparent text-xs leading-5 text-ink outline-none placeholder:text-faint"
+            />
+            {attachedFiles.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1">
+                {attachedFiles.map((file, idx) => (
+                  <span key={idx} className="inline-flex items-center gap-1 rounded bg-line px-1.5 py-0.5 text-[10px] text-muted">
+                    {file.name}
+                    <button
+                      type="button"
+                      className="text-faint hover:text-ink"
+                      onClick={() => setAttachedFiles(prev => prev.filter((_, i) => i !== idx))}
+                      aria-label="Remove file"
+                    >
+                      &times;
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="mt-2 flex items-center">
+              <button type="button" className="icon-button" aria-label="Attach context" title="Attach context" onClick={handleAttachClick}><Paperclip size={14} /></button>
+              <span className="ml-1 text-[9px] text-faint">{isRunning ? "Agent running" : allowWrite ? "Write mode" : "Read mode"}</span>
+              <button
+                type="submit"
+                disabled={!prompt.trim() || isRunning}
+                className="ml-auto grid size-7 place-items-center rounded-md bg-accent text-white shadow-glow hover:bg-accent-light disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label="Send prompt"
+              >
+                <ArrowUp size={15} />
+              </button>
+            </div>
+          </div>
+          {isDragOver && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg border-2 border-dashed border-accent/60 bg-accent/10 pointer-events-none">
+              <span className="text-[11px] font-semibold text-accent-light">Drop files to attach</span>
             </div>
           )}
-          <div className="mt-2 flex items-center">
-            <button type="button" className="icon-button" aria-label="Attach context" title="Attach context" onClick={handleAttachClick}><Paperclip size={14} /></button>
-            <span className="ml-1 text-[9px] text-faint">{isRunning ? "Agent running" : allowWrite ? "Write mode" : "Read mode"}</span>
-            <button
-              type="submit"
-              disabled={!prompt.trim() || isRunning}
-              className="ml-auto grid size-7 place-items-center rounded-md bg-accent text-white shadow-glow hover:bg-accent-light disabled:cursor-not-allowed disabled:opacity-50"
-              aria-label="Send prompt"
-            >
-              <ArrowUp size={15} />
-            </button>
-          </div>
         </div>
       </form>
     </section>

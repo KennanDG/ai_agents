@@ -238,6 +238,70 @@ def _route_with_fallback(
 
 
 
+
+def _format_attached_files_for_context(state: CodingAgentState) -> tuple[str, list[str]]:
+    attached_files = list(state.get("attached_files") or [])
+
+    if not attached_files:
+        return "", []
+
+    blocks: list[str] = [
+        "# User-attached files",
+        (
+            "These files are read-only context. Some may not exist in the repository. "
+            "Only edit files under the repository root through normal patch operations."
+        ),
+    ]
+    used: list[str] = []
+
+    for item in attached_files:
+        name = str(item.get("name", "")).strip() or "attachment"
+        source = str(item.get("source", "upload")).strip()
+        path = str(item.get("path", "") or "").strip()
+        content = str(item.get("content", ""))
+        truncated = bool(item.get("truncated", False))
+
+        label = path if source == "repo" and path else name
+        used.append(f"{source}:{label}")
+
+        header = f"Attachment: {label}"
+        if source:
+            header += f" | source={source}"
+        if truncated:
+            header += " | truncated=true"
+
+        blocks.append(
+            f"{header}\n"
+            "```text\n"
+            f"{content}\n"
+            "```"
+        )
+
+    return "\n\n".join(blocks), used
+
+
+
+
+def _attached_file_summary(state: CodingAgentState) -> str:
+    attached_files = list(state.get("attached_files") or [])
+
+    if not attached_files:
+        return ""
+
+    lines: list[str] = []
+
+    for item in attached_files:
+        name = str(item.get("name", "")).strip() or "attachment"
+        source = str(item.get("source", "upload")).strip()
+        path = str(item.get("path", "") or "").strip()
+        content = str(item.get("content", ""))
+        label = path if path else name
+        lines.append(f"- {label} ({source}, {len(content)} chars)")
+
+    return "\n".join(lines)
+
+
+
 #################################### Nodes ####################################
 
 def recall_memory_node(state: CodingAgentState, runtime) -> CodingAgentState:
@@ -342,6 +406,16 @@ def plan_node(state: CodingAgentState) -> CodingAgentState:
             "\n\nRelevant long-term coding memories from previous runs:\n"
             f"{bullets(long_term_memories)}"
         )
+    
+
+    attachment_summary = _attached_file_summary(state)
+
+    if attachment_summary:
+        planner_prompt += (
+            "\n\nUser-attached files available as additional read-only context:\n"
+            f"{attachment_summary}"
+        )
+
 
     try:
         decision: PlanDecision = invoke_parsed_decision(
@@ -431,6 +505,7 @@ def repo_navigator_node(
                 ranked_search_results=_format_search_result_dicts(search_result_dicts),
                 web_results=str(state.get("web_search_results", "")),
                 long_term_memories=bullets(state.get("long_term_memories", [])),
+                attached_file_summary=_attached_file_summary(state),
             ),
         )
 
@@ -515,11 +590,13 @@ def gather_context_node(
     state: CodingAgentState,
     cfg: CodingAgentSettings = default_settings,
 ) -> CodingAgentState:
+    
     repo_root = resolve_repo_root(state, cfg)
     context: list[str] = []
     errors = list(state.get("errors", []))
     files_inspected: list[str] = []
 
+    ################## Workspace repo files ##################
     try:
         root_files = filter_context_paths(list_files(repo_root, ".", max_depth=6))[: cfg.max_search_results]
         context.append("Repository files:\n" + "\n".join(root_files))
@@ -530,6 +607,8 @@ def gather_context_node(
             "status": "context_failed",
         }
 
+
+    ################## Repo search results ##################
     search_blocks: list[str] = []
     search_result_dicts: list[dict[str, object]] = list(state.get("search_results") or [])
     search_requests = _search_requests_from_state(state)
@@ -560,6 +639,8 @@ def gather_context_node(
 
     context.extend(search_blocks)
 
+
+    ################## Long-term memory ##################
     long_term_memories = state.get("long_term_memories", [])
     
     if long_term_memories:
@@ -567,7 +648,17 @@ def gather_context_node(
             "# Relevant long-term coding memories from previous runs\n"
             + bullets(long_term_memories)
         )
+    
 
+    ################## User Attached files ##################
+    attached_context, attached_files_used = _format_attached_files_for_context(state)
+
+    if attached_context:
+        context.append(attached_context)
+
+
+
+    ################## Repo navigation ##################
     repo_navigation_summary = state.get("repo_navigation_summary")
     repo_navigation_files = list(state.get("repo_navigation_files") or [])
     repo_navigation_missing = list(state.get("repo_navigation_missing_context") or [])
@@ -597,6 +688,8 @@ def gather_context_node(
         context.append("\n".join(nav_lines))
 
 
+
+    ################## Web Search Results ##################
     web_results = state.get("web_search_results")
 
     if web_results:
@@ -646,12 +739,12 @@ def gather_context_node(
     return {
         "context": context,
         "files_inspected": files_inspected,
+        "attached_files_used": attached_files_used,
         "search_requests": search_requests,
         "search_results": search_result_dicts,
         "errors": errors,
         "status": "context_gathered" if context else "context_failed",
     }
-
 
 
 

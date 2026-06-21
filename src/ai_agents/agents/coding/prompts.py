@@ -308,8 +308,9 @@ def build_repo_navigator_user_prompt(
     repository_files: str,
     search_requests: str,
     ranked_search_results: str,
-    web_results: str,
-    long_term_memories: str,
+    web_results: str | None,
+    long_term_memories: str | None,
+    attached_file_summary: str | None,
 ) -> str:
     return dedent(
         f"""
@@ -341,6 +342,9 @@ def build_repo_navigator_user_prompt(
 
         # Relevant long-term coding memories from previous runs, if any:
         {long_term_memories[:4_000] if long_term_memories else "None"}
+
+        # User-attached files available as additional read-only context:
+        {attached_file_summary[:4_000] if attached_file_summary else "None"}
 
         # Output guidance:
         - Return the fewest files needed for safe implementation.
