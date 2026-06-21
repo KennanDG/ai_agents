@@ -206,6 +206,8 @@ const App = () => {
   const [activeFile, setActiveFile] = useState<RepositoryFile | null>(null);
   const [fileLoading, setFileLoading] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
+  const [allowWrite, setAllowWrite] = useState(true);
+  const [memoryEnabled, setMemoryEnabled] = useState(true);
   const socketRef = useRef<ReturnType<typeof createCodingAgentSocket> | null>(null);
 
   const repoName = useMemo(() => repoRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? "repository", [repoRoot]);
@@ -308,8 +310,8 @@ const App = () => {
       request: prompt,
       repo_root: repoRoot,
       workspace_root: configuredWorkspaceRoot === configuredRepoRoot ? repoRoot : configuredWorkspaceRoot,
-      allow_write: true,
-      memory_enabled: true,
+      allow_write: allowWrite,
+      memory_enabled: memoryEnabled,
     });
   }
 
@@ -327,7 +329,19 @@ const App = () => {
         onSelect={setActivePath}
         onRefresh={refreshRepository}
       />
-      <TaskPanel messages={messages} run={run} onSubmit={submitPrompt} />
+      <div className="flex flex-col bg-panel-soft">
+        <div className="flex items-center gap-3 border-b border-line px-3 py-2">
+          <label className="flex items-center gap-1.5 text-xs text-ink-soft cursor-pointer">
+            <input type="checkbox" checked={allowWrite} onChange={() => setAllowWrite(!allowWrite)} className="accent-accent" />
+            Allow Write
+          </label>
+          <label className="flex items-center gap-1.5 text-xs text-ink-soft cursor-pointer">
+            <input type="checkbox" checked={memoryEnabled} onChange={() => setMemoryEnabled(!memoryEnabled)} className="accent-accent" />
+            Memory Enabled
+          </label>
+        </div>
+        <TaskPanel messages={messages} run={run} onSubmit={submitPrompt} />
+      </div>
       <div className="flex min-w-0 flex-1 flex-col">
         <DiffPanel file={activeFile} change={activeChange} isLoading={fileLoading} error={fileError} />
         <OutputPanel run={run} />
