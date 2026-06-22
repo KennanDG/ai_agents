@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import os
 import asyncio
+import base64
+import binascii
+import mimetypes
+import re
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,7 +14,9 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
+from langchain_openai import ChatOpenAI
 from pydantic import ValidationError
 
 from ai_agents.agents.coding.graph import build_coding_agent_graph
@@ -28,8 +34,8 @@ from ai_agents.api.schemas import (
     RepositoryFileResponse,
     RepositoryTreeEntry,
     RepositoryTreeResponse,
-    CodingAgentAttachedFile
 )
+
 
 
 IGNORED_REPOSITORY_DIRS = {
@@ -48,9 +54,20 @@ IGNORED_REPOSITORY_DIRS = {
 }
 
 MAX_REPOSITORY_FILE_BYTES = 1_000_000
-MAX_ATTACHED_FILES = 10
+MAX_ATTACHED_FILES = 5
 MAX_ATTACHMENT_CHARS = 50_000
 MAX_TOTAL_ATTACHMENT_CHARS = 150_000
+MAX_ATTACHED_IMAGE_BYTES = 5_000_000
+
+GROQ_API_URL = os.getenv("GROQ_API_URL", "https://api.groq.com/openai/v1")
+VISION_MODEL = os.getenv("VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+
+ALLOWED_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp"}
+
+IMAGE_DATA_URL_RE = re.compile(
+    r"^data:(?P<mime>image/(?:png|jpeg|jpg|webp));base64,(?P<data>[A-Za-z0-9+/=\r\n]+)$",
+    re.IGNORECASE,
+)
 
 #TODO: Add c++, Rust, and java files
 LANGUAGE_BY_EXTENSION = {
@@ -116,94 +133,6 @@ def _repository_language(path: Path) -> str:
 def _is_ignored_repository_dir(name: str) -> bool:
     return name in IGNORED_REPOSITORY_DIRS or name.endswith(".egg-info")
 
-
-
-def _truncate_text(value: str, max_chars: int) -> tuple[str, bool]:
-    if len(value) <= max_chars:
-        return value, False
-    return value[:max_chars], True
-
-
-
-def _normalize_attached_files(
-    *,
-    request: CodingAgentRunRequest,
-    repo_root: Path,
-) -> tuple[list[CodingAgentAttachedFile], list[str]]:
-    
-    normalized: list[CodingAgentAttachedFile] = []
-    errors: list[str] = []
-    total_chars = 0
-
-    for index, attached in enumerate(request.attached_files[:MAX_ATTACHED_FILES]):
-        name = Path(attached.name).name.strip() or f"attachment-{index + 1}.txt"
-        source = attached.source
-        path = attached.path.strip() if attached.path else None
-        content = attached.content or ""
-
-        if source == "repo":
-            if not path:
-                errors.append(f"Skipped repo attachment {name}: missing repo-relative path.")
-                continue
-
-            try:
-                file_path = _resolve_repo_file(repo_root, path)
-                size = file_path.stat().st_size
-
-                if size > MAX_REPOSITORY_FILE_BYTES:
-                    errors.append(
-                        f"Skipped repo attachment {path}: file is too large "
-                        f"({size} bytes)."
-                    )
-                    continue
-
-                raw = file_path.read_bytes()
-
-                if b"\0" in raw[:4096]:
-                    errors.append(f"Skipped repo attachment {path}: binary file.")
-                    continue
-
-                content = raw.decode("utf-8", errors="replace")
-                name = file_path.name
-
-            except HTTPException as exc:
-                errors.append(f"Skipped repo attachment {path}: {exc.detail}")
-                continue
-
-        if not content.strip():
-            errors.append(f"Skipped attachment {name}: empty content.")
-            continue
-
-        remaining = MAX_TOTAL_ATTACHMENT_CHARS - total_chars
-        if remaining <= 0:
-            errors.append("Skipped remaining attachments: total attachment context limit reached.")
-            break
-
-        content, truncated_by_file_limit = _truncate_text(
-            content,
-            min(MAX_ATTACHMENT_CHARS, remaining),
-        )
-
-        total_chars += len(content)
-
-        normalized.append(
-            {
-                "name": name,
-                "path": path,
-                "source": source,
-                "mime_type": attached.mime_type,
-                "size": attached.size,
-                "content": content,
-                "truncated": bool(attached.truncated) or truncated_by_file_limit or total_chars >= MAX_TOTAL_ATTACHMENT_CHARS,
-            }
-        )
-
-    if len(request.attached_files) > MAX_ATTACHED_FILES:
-        errors.append(
-            f"Only the first {MAX_ATTACHED_FILES} attached files were included."
-        )
-
-    return normalized, errors
 
 
 
@@ -308,6 +237,262 @@ def repository_file(
 #######################################################################
 ############################## WebSocket ##############################
 #######################################################################
+def _coerce_message_content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content.strip()
+
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+        return "\n".join(part.strip() for part in parts if part.strip()).strip()
+
+    return str(content).strip()
+
+
+def _is_supported_image_mime(mime_type: str | None) -> bool:
+    if not mime_type:
+        return False
+
+    normalized = mime_type.lower().replace("image/jpg", "image/jpeg")
+    return normalized in ALLOWED_IMAGE_MIME_TYPES
+
+
+def _guess_mime_type(path: Path) -> str | None:
+    guessed, _ = mimetypes.guess_type(path.name)
+    return guessed
+
+
+def _image_data_url(mime_type: str, raw: bytes) -> str:
+    normalized = mime_type.lower().replace("image/jpg", "image/jpeg")
+    encoded = base64.b64encode(raw).decode("ascii")
+    return f"data:{normalized};base64,{encoded}"
+
+
+def _parse_image_data_url(data_url: str) -> tuple[str, bytes]:
+    match = IMAGE_DATA_URL_RE.match(data_url.strip())
+
+    if not match:
+        raise ValueError("expected a base64 data URL for a PNG, JPEG, or WebP image.")
+
+    mime_type = match.group("mime").lower().replace("image/jpg", "image/jpeg")
+    if not _is_supported_image_mime(mime_type):
+        raise ValueError(f"unsupported image MIME type: {mime_type}")
+
+    try:
+        raw = base64.b64decode(match.group("data"), validate=True)
+    except binascii.Error as exc:
+        raise ValueError("invalid base64 image data.") from exc
+
+    if len(raw) > MAX_ATTACHED_IMAGE_BYTES:
+        raise ValueError(
+            f"image is too large ({len(raw)} bytes). Limit is {MAX_ATTACHED_IMAGE_BYTES} bytes."
+        )
+
+    return mime_type, raw
+
+
+def _describe_image_attachment(
+    *,
+    name: str,
+    mime_type: str,
+    data_url: str,
+) -> str:
+    api_key = os.getenv("GROQ_API_KEY")
+    vision_model_name = VISION_MODEL
+
+    if not api_key or not vision_model_name:
+        raise RuntimeError(
+            f"image attachments require GROQ_API_URL and VISION_MODEL."
+        )
+
+    vision_model = ChatOpenAI(
+        model=vision_model_name,
+        api_key=api_key,
+        base_url=GROQ_API_URL,
+        max_retries=2,
+    )
+
+    response = vision_model.invoke(
+        [
+            SystemMessage(
+                content=(
+                    "You convert user-attached images into concise, useful text context "
+                    "for a coding agent. Focus on visible UI, screenshots, diagrams, "
+                    "error messages, labels, tables, layout, code snippets, and other "
+                    "implementation-relevant details. Do not guess hidden data."
+                )
+            ),
+            HumanMessage(
+                content=[
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Describe this uploaded image for downstream coding work. "
+                            f"File name: {name}. MIME type: {mime_type}."
+                        ),
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": data_url},
+                    },
+                ]
+            ),
+        ]
+    )
+
+    description = _coerce_message_content_to_text(response.content)
+    if not description:
+        raise RuntimeError("vision model returned an empty image description.")
+
+    return (
+        f"Image attachment: {name}\n"
+        f"MIME type: {mime_type}\n"
+        "Vision-generated context:\n"
+        f"{description}"
+    )
+
+
+
+def _truncate_text(value: str, max_chars: int) -> tuple[str, bool]:
+    if len(value) <= max_chars:
+        return value, False
+    return value[:max_chars], True
+
+
+
+def _normalize_attached_files(
+    *,
+    request: CodingAgentRunRequest,
+    repo_root: Path,
+) -> tuple[list[dict[str, Any]], list[str]]:
+
+    normalized: list[dict[str, Any]] = []
+    errors: list[str] = []
+    total_chars = 0
+
+    for index, attached in enumerate(request.attached_files[:MAX_ATTACHED_FILES]):
+        name = Path(attached.name).name.strip() or f"attachment-{index + 1}.txt"
+        source = attached.source
+        path = attached.path.strip() if attached.path else None
+        content = attached.content or ""
+        mime_type = attached.mime_type
+
+        if source == "repo":
+            if not path:
+                errors.append(f"Skipped repo attachment {name}: missing repo-relative path.")
+                continue
+
+            try:
+                file_path = _resolve_repo_file(repo_root, path)
+                size = file_path.stat().st_size
+
+                if size > MAX_REPOSITORY_FILE_BYTES:
+                    errors.append(
+                        f"Skipped repo attachment {path}: file is too large "
+                        f"({size} bytes)."
+                    )
+                    continue
+
+                raw = file_path.read_bytes()
+                mime_type = mime_type or _guess_mime_type(file_path)
+                name = file_path.name
+
+                if _is_supported_image_mime(mime_type):
+                    if size > MAX_ATTACHED_IMAGE_BYTES:
+                        errors.append(
+                            f"Skipped image attachment {path}: image is too large "
+                            f"({size} bytes)."
+                        )
+                        continue
+
+                    data_url = _image_data_url(mime_type or "image/png", raw)
+                    content = _describe_image_attachment(
+                        name=name,
+                        mime_type=mime_type or "image/png",
+                        data_url=data_url,
+                    )
+
+                else:
+                    if b"\0" in raw[:4096]:
+                        errors.append(f"Skipped repo attachment {path}: binary file.")
+                        continue
+
+                    content = raw.decode("utf-8", errors="replace")
+
+            except HTTPException as exc:
+                errors.append(f"Skipped repo attachment {path}: {exc.detail}")
+                continue
+            except Exception as exc:
+                errors.append(f"Skipped repo attachment {path}: {exc}")
+                continue
+
+        else:
+            data_url = attached.data_url
+
+            if data_url:
+                try:
+                    parsed_mime_type, raw = _parse_image_data_url(data_url)
+                    mime_type = mime_type or parsed_mime_type
+                    content = _describe_image_attachment(
+                        name=name,
+                        mime_type=parsed_mime_type,
+                        data_url=data_url,
+                    )
+                except Exception as exc:
+                    errors.append(f"Skipped image attachment {name}: {exc}")
+                    continue
+
+            elif _is_supported_image_mime(mime_type):
+                errors.append(
+                    f"Skipped image attachment {name}: missing base64 data_url payload."
+                )
+                continue
+
+        if not content.strip():
+            errors.append(f"Skipped attachment {name}: empty content.")
+            continue
+
+        remaining = MAX_TOTAL_ATTACHMENT_CHARS - total_chars
+
+        if remaining <= 0:
+            errors.append("Skipped remaining attachments: total attachment context limit reached.")
+            break
+
+        content, truncated_by_file_limit = _truncate_text(
+            content,
+            min(MAX_ATTACHMENT_CHARS, remaining),
+        )
+
+        total_chars += len(content)
+
+        normalized.append(
+            {
+                "name": name,
+                "path": path,
+                "source": source,
+                "mime_type": mime_type,
+                "size": attached.size,
+                "content": content,
+                "truncated": (
+                    bool(attached.truncated)
+                    or truncated_by_file_limit
+                    or total_chars >= MAX_TOTAL_ATTACHMENT_CHARS
+                ),
+            }
+        )
+
+    if len(request.attached_files) > MAX_ATTACHED_FILES:
+        errors.append(
+            f"Only the first {MAX_ATTACHED_FILES} attached files were included."
+        )
+
+    return normalized, errors
+
+
 def _new_thread_id() -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     return f"coding-run-{timestamp}-{uuid4().hex[:8]}"
@@ -356,57 +541,23 @@ def _stream_coding_agent_worker(
     loop: asyncio.AbstractEventLoop,
     queue: asyncio.Queue[dict[str, Any] | None],
 ) -> None:
-    
     thread_id = request.thread_id or _new_thread_id()
 
-    cfg = default_coding_settings
-
-    if request.memory_enabled is not None:
-        cfg = replace(cfg, memory_enabled=request.memory_enabled)
-
-
-    repo_root_path = Path(request.repo_root).expanduser().resolve()
-    repo_root = str(repo_root_path)
-
-    workspace_root = (
-        str(Path(request.workspace_root).expanduser().resolve())
-        if request.workspace_root
-        else None
-    )
-
-
-    attached_files, attachment_errors = _normalize_attached_files(
-        request=request,
-        repo_root=repo_root_path,
-    )
-
-
-    initial_state: dict[str, Any] = {
-        "user_request": request.request,
-        "repo_root": repo_root,
-        "workspace_root": workspace_root,
-        "allow_write": request.allow_write,
-        "attached_files": attached_files,
-        "attached_files_used": [],
-        "attachment_errors": attachment_errors,
-        "errors": [*attachment_errors],
-        "memory_errors": [],
-    }
-
-    final_state = dict(initial_state)
-
-    runtime_context = CodingAgentRuntimeContext(
-        user_id=request.memory_user_id or cfg.memory_user_id,
-        memory_namespace=request.memory_namespace or cfg.memory_namespace,
-    )
-
-    config: RunnableConfig = {
-        "configurable": {
-            "thread_id": thread_id,
-        }
-    }
-
     try:
+        cfg = default_coding_settings
+
+        if request.memory_enabled is not None:
+            cfg = replace(cfg, memory_enabled=request.memory_enabled)
+
+        repo_root_path = Path(request.repo_root).expanduser().resolve()
+        repo_root = str(repo_root_path)
+
+        workspace_root = (
+            str(Path(request.workspace_root).expanduser().resolve())
+            if request.workspace_root
+            else None
+        )
+
         _send_threadsafe(
             loop=loop,
             queue=queue,
@@ -421,6 +572,40 @@ def _stream_coding_agent_worker(
                 },
             ),
         )
+
+        try:
+            attached_files, attachment_errors = _normalize_attached_files(
+                request=request,
+                repo_root=repo_root_path,
+            )
+        except Exception as exc:
+            attached_files = []
+            attachment_errors = [f"Attachment normalization failed: {exc}"]
+
+        initial_state: dict[str, Any] = {
+            "user_request": request.request,
+            "repo_root": repo_root,
+            "workspace_root": workspace_root,
+            "allow_write": request.allow_write,
+            "attached_files": attached_files,
+            "attached_files_used": [],
+            "attachment_errors": attachment_errors,
+            "errors": [*attachment_errors],
+            "memory_errors": [],
+        }
+
+        final_state = dict(initial_state)
+
+        runtime_context = CodingAgentRuntimeContext(
+            user_id=request.memory_user_id or cfg.memory_user_id,
+            memory_namespace=request.memory_namespace or cfg.memory_namespace,
+        )
+
+        config: RunnableConfig = {
+            "configurable": {
+                "thread_id": thread_id,
+            }
+        }
 
         with coding_agent_persistence(cfg, setup=request.setup_memory) as persistence:
             graph = build_coding_agent_graph(
@@ -438,8 +623,6 @@ def _stream_coding_agent_worker(
                     continue
 
                 for node_name, node_delta in update.items():
-                    payload: dict[str, Any]
-
                     if isinstance(node_delta, dict):
                         final_state.update(node_delta)
                         payload = node_delta
@@ -587,6 +770,7 @@ async def coding_agent_ws(websocket: WebSocket) -> None:
     except WebSocketDisconnect:
         return
     
+
 
 
     

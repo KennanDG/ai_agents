@@ -21,15 +21,49 @@ const statusClass = {
 };
 
 
-const MAX_ATTACHMENT_BYTES = 1_000_000;
+const MAX_TEXT_ATTACHMENT_BYTES = 1_000_000;
+const MAX_IMAGE_ATTACHMENT_BYTES = 5_000_000;
+
+const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+const TEXT_FILE_EXTENSIONS = /\.(css|csv|html|js|jsx|json|md|py|sql|toml|ts|tsx|txt|xml|ya?ml)$/i;
+
+
+const isSupportedImage = (file: File) => {
+  return IMAGE_MIME_TYPES.has(file.type) || /\.(png|jpe?g|webp)$/i.test(file.name);
+};
+
+
+const isSupportedText = (file: File) => {
+  return file.type.startsWith("text/") || TEXT_FILE_EXTENSIONS.test(file.name);
+};
+
+
+const readAsText = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (event) => resolve(typeof event.target?.result === "string" ? event.target.result : "");
+    reader.onerror = () => reject(new Error(`Failed to read ${file.name}.`));
+    reader.readAsText(file);
+  });
+
+
+const readAsDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (event) => resolve(typeof event.target?.result === "string" ? event.target.result : "");
+    reader.onerror = () => reject(new Error(`Failed to read ${file.name}.`));
+    reader.readAsDataURL(file);
+  });
 
 
 export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProps) => {
   const [prompt, setPrompt] = useState("");
   const [attachedFiles, setAttachedFiles] = useState<CodingAgentAttachedFile[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isRunning = run.status === "running";
+  const dragCounter = useRef(0);
 
 
 
@@ -54,40 +88,66 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProp
   const processFiles = (files: File[]) => {
     if (!files || files.length === 0) return;
 
+    setAttachmentError(null);
+
     Promise.all(
-      files.map(
-        (file) =>
-          new Promise<CodingAgentAttachedFile | null>((resolve) => {
-            if (file.size > MAX_ATTACHMENT_BYTES) {
-              resolve(null);
-              return;
+      files.map(async (file): Promise<CodingAgentAttachedFile | null> => {
+        try {
+          if (isSupportedImage(file)) {
+            if (file.size > MAX_IMAGE_ATTACHMENT_BYTES) {
+              setAttachmentError(`${file.name} is too large. Image uploads are limited to 5 MB.`);
+              return null;
             }
 
-            const reader = new FileReader();
+            const dataUrl = await readAsDataUrl(file);
 
-            reader.onload = (event) => {
-              const content = typeof event.target?.result === "string"
-                ? event.target.result
-                : "";
+            if (!dataUrl.startsWith("data:image/")) {
+              setAttachmentError(`${file.name} could not be read as an image.`);
+              return null;
+            }
 
-              if (!content.trim()) {
-                resolve(null);
-                return;
-              }
-
-              resolve({
-                name: file.name,
-                content,
-                source: "upload",
-                mime_type: file.type || null,
-                size: file.size,
-              });
+            return {
+              name: file.name,
+              content: null,
+              data_url: dataUrl,
+              source: "upload",
+              mime_type: file.type || null,
+              size: file.size,
             };
+          }
 
-            reader.onerror = () => resolve(null);
-            reader.readAsText(file);
-          })
-      )
+
+          if (!isSupportedText(file)) {
+            setAttachmentError(`${file.name} is not a supported text or image attachment.`);
+            return null;
+          }
+
+
+          if (file.size > MAX_TEXT_ATTACHMENT_BYTES) {
+            setAttachmentError(`${file.name} is too large. Text uploads are limited to 1 MB.`);
+            return null;
+          }
+
+          const content = await readAsText(file);
+
+          if (!content.trim()) {
+            setAttachmentError(`${file.name} is empty or could not be read as text.`);
+            return null;
+          }
+
+          return {
+            name: file.name,
+            content,
+            data_url: null,
+            source: "upload",
+            mime_type: file.type || null,
+            size: file.size,
+          };
+        } catch (error) {
+          setAttachmentError(error instanceof Error ? error.message : `Failed to read ${file.name}.`);
+          return null;
+        }
+      })
     ).then((loadedFiles) => {
       const validFiles = loadedFiles.filter((file): file is CodingAgentAttachedFile => file !== null);
 
@@ -97,6 +157,7 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProp
     });
   };
   
+  
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -105,7 +166,7 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProp
     event.target.value = '';
   };
 
-  const dragCounter = useRef(0);
+
 
   const handleDragEnter = (e: DragEvent) => {
     e.preventDefault();
@@ -116,6 +177,8 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProp
     }
   };
 
+
+
   const handleDragLeave = (e: DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -125,10 +188,12 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProp
     }
   };
 
+
   const handleDragOver = (e: DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
   };
+
 
   const handleDrop = (e: DragEvent) => {
     e.preventDefault();
@@ -200,6 +265,7 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProp
           ref={fileInputRef}
           className="sr-only"
           multiple
+          accept=".css,.csv,.html,.js,.jsx,.json,.md,.py,.sql,.toml,.ts,.tsx,.txt,.xml,.yaml,.yml,image/png,image/jpeg,image/webp"
           onChange={handleFileChange}
         />
         <div
@@ -223,7 +289,7 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProp
               <div className="mt-2 flex flex-wrap gap-1">
                 {attachedFiles.map((file, idx) => (
                   <span key={idx} className="inline-flex items-center gap-1 rounded bg-line px-1.5 py-0.5 text-[10px] text-muted">
-                    {file.name}
+                    {file.data_url ? "Image: " : ""}{file.name}
                     <button
                       type="button"
                       className="text-faint hover:text-ink"
@@ -236,6 +302,9 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProp
                 ))}
               </div>
             )}
+            {attachmentError ? (
+              <p className="mt-2 text-[10px] leading-4 text-rose-300">{attachmentError}</p>
+            ) : null}
             <div className="mt-2 flex items-center">
               <button type="button" className="icon-button" aria-label="Attach context" title="Attach context" onClick={handleAttachClick}><Paperclip size={14} /></button>
               <span className="ml-1 text-[9px] text-faint">{isRunning ? "Agent running" : allowWrite ? "Write mode" : "Read mode"}</span>

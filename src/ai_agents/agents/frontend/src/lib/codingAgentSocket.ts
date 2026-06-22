@@ -1,6 +1,7 @@
 export type CodingAgentAttachedFile = {
   name: string;
   content?: string | null;
+  data_url?: string | null;
   path?: string | null;
   source: "upload" | "repo";
   mime_type?: string | null;

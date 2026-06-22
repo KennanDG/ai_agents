@@ -13,6 +13,7 @@ class HealthResponse(BaseModel):
 class CodingAgentAttachedFile(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     content: str | None = None
+    data_url: str | None = Field(default=None, max_length=8_000_000)
 
     # Repo-relative path when the file already exists in the repo.
     # For local uploads, this can stay null.
