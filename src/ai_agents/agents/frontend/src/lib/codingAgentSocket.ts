@@ -1,3 +1,15 @@
+export type CodingAgentAttachedFile = {
+  name: string;
+  content?: string | null;
+  data_url?: string | null;
+  path?: string | null;
+  source: "upload" | "repo";
+  mime_type?: string | null;
+  size?: number | null;
+  truncated?: boolean | null;
+};
+
+
 export type CodingAgentRunRequest = {
   request: string;
   repo_root: string;
@@ -8,7 +20,10 @@ export type CodingAgentRunRequest = {
   memory_namespace?: string | null;
   memory_enabled?: boolean | null;
   setup_memory?: boolean;
+  max_iterations?: number | null;
+  attached_files?: CodingAgentAttachedFile[];
 };
+
 
 export type CodingAgentRunResult = {
   thread_id: string;

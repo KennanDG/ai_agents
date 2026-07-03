@@ -41,6 +41,8 @@ export const Sidebar = ({
   
   const fileEntries = entries.filter((entry) => entry.kind === "file");
   const [openDirs, setOpenDirs] = useState<Set<string>>(new Set());
+  const [showChanges, setShowChanges] = useState(true);
+  const [showFiles, setShowFiles] = useState(true);
   const childrenByParent = useMemo(() => {
     const map = new Map<string, RepositoryTreeEntry[]>();
     for (const entry of entries) {
@@ -121,8 +123,15 @@ export const Sidebar = ({
 
       {changes.length > 0 ? (
         <div className="border-b border-line py-2">
-          <div className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted">Agent changes · {changes.length}</div>
-          {changes.map((change) => {
+          <button
+            type="button"
+            onClick={() => setShowChanges(prev => !prev)}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted hover:bg-hover"
+          >
+            {showChanges ? <ChevronDown size={12} className="text-muted" /> : <ChevronRight size={12} className="text-muted" />}
+            Agent changes · {changes.length}
+          </button>
+          {showChanges && changes.map((change) => {
             const fileName = change.path.split("/").at(-1);
             const folder = change.path.slice(0, -(fileName?.length ?? 0)).replace(/\/$/, "");
 
@@ -150,14 +159,19 @@ export const Sidebar = ({
       ) : null}
 
       <div className="min-h-0 flex-1 overflow-auto py-2">
-        <div className="flex items-center justify-between px-3 py-1.5">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted">Files · {fileEntries.length}</span>
-        </div>
+        <button
+          type="button"
+          onClick={() => setShowFiles(prev => !prev)}
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted hover:bg-hover"
+        >
+          {showFiles ? <ChevronDown size={12} className="text-muted" /> : <ChevronRight size={12} className="text-muted" />}
+          Files · {fileEntries.length}
+        </button>
 
         {isLoading ? <p className="px-3 py-2 text-[11px] text-muted">Loading repository…</p> : null}
         {error ? <p className="px-3 py-2 text-[11px] leading-5 text-rose-300">{error}</p> : null}
 
-        {renderTree(rootEntries)}
+        {showFiles && renderTree(rootEntries)}
       </div>
 
       <div className="border-t border-line p-3 text-[10px] text-faint">

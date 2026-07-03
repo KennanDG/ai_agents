@@ -4,7 +4,14 @@ import { DiffPanel } from "./components/DiffPanel";
 import { OutputPanel } from "./components/OutputPanel";
 import { Sidebar } from "./components/Sidebar";
 import { TaskPanel } from "./components/TaskPanel";
-import { createCodingAgentSocket, type CodingAgentRunResult, type CodingAgentServerEvent } from "./lib/codingAgentSocket";
+
+import {
+  createCodingAgentSocket,
+  type CodingAgentAttachedFile,
+  type CodingAgentRunResult,
+  type CodingAgentServerEvent,
+} from "./lib/codingAgentSocket";
+
 import { fetchRepositoryFile, fetchRepositoryTree } from "./lib/repositoryApi";
 import type { AgentMessage, AgentRunState, ChangeStatus, FileChange, RepositoryFile, RepositoryTreeEntry } from "./types";
 
@@ -38,6 +45,8 @@ const asRecordArray = (value: unknown): Record<string, unknown>[] | undefined =>
   return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object") : undefined;
 }
 
+
+//TODO: Add c++, rust, and java files
 const languageFromPath = (path: string) => {
   const extension = path.split(".").at(-1)?.toLowerCase();
   switch (extension) {
@@ -303,17 +312,33 @@ const App = () => {
     };
   }, []);
 
-  const submitPrompt = (prompt: string) => {
-    setMessages((current) => [...current, { id: crypto.randomUUID(), role: "user", body: prompt, time: nowLabel() }]);
+  const submitPrompt = (prompt: string, attachedFiles: CodingAgentAttachedFile[] = []) => {
+    const attachmentLabel =
+      attachedFiles.length > 0
+        ? `\n\nAttached files:\n${attachedFiles.map((file) => `- ${file.name}`).join("\n")}`
+        : "";
+
+    setMessages((current) => [
+      ...current,
+      {
+        id: crypto.randomUUID(),
+        role: "user",
+        body: prompt + attachmentLabel,
+        time: nowLabel(),
+      },
+    ]);
 
     socketRef.current?.run({
+      thread_id: run.threadId,
       request: prompt,
       repo_root: repoRoot,
       workspace_root: configuredWorkspaceRoot === configuredRepoRoot ? repoRoot : configuredWorkspaceRoot,
       allow_write: allowWrite,
       memory_enabled: memoryEnabled,
+      attached_files: attachedFiles,
+      max_iterations: 3,
     });
-  }
+  };
 
   return (
     <main className="flex h-dvh min-h-0 min-w-0 overflow-hidden bg-canvas text-ink">

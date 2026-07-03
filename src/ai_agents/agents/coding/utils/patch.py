@@ -9,6 +9,7 @@ from ai_agents.agents.coding.utils.text import bullets, truncate
 
 
 def apply_exact_replace(original: str, old: str, new: str, *, path: str) -> str:
+    
     if not old:
         raise ValueError(f"Empty old text for {path}")
 
@@ -23,7 +24,9 @@ def apply_exact_replace(original: str, old: str, new: str, *, path: str) -> str:
     return original.replace(old, new, 1)
 
 
+
 def is_forbidden_write_path(path: str) -> bool:
+    
     parts = set(Path(path).parts)
     forbidden_parts = {
         ".git",
@@ -37,6 +40,7 @@ def is_forbidden_write_path(path: str) -> bool:
         "dist",
         "build",
     }
+
     forbidden_names = {
         ".env",
         ".env.local",
@@ -54,9 +58,14 @@ def is_forbidden_write_path(path: str) -> bool:
 def build_patch_context(state: CodingAgentState) -> str:
     sections = list(state.get("context", []))
 
+    loop_feedback = _format_loop_feedback_for_patch(state)
+    if loop_feedback:
+        sections.append(loop_feedback)
+
     validation_feedback = format_failed_validation_results(
         state.get("validation_results", [])
     )
+
     if validation_feedback:
         sections.append(
             "Previous validation failures. Fix these in the next patch attempt:\n"
@@ -64,13 +73,47 @@ def build_patch_context(state: CodingAgentState) -> str:
         )
 
     recent_errors = state.get("errors", [])[-10:]
+
     if recent_errors:
         sections.append("Prior graph errors:\n" + bullets(recent_errors))
 
     return "\n\n".join(sections)
 
 
+
+def _format_loop_feedback_for_patch(state: CodingAgentState) -> str:
+    
+    lines: list[str] = []
+
+    loop_context_focus = str(state.get("loop_context_focus", "")).strip()
+    progress_reason = str(state.get("progress_reason", "")).strip()
+    remaining_tasks = list(state.get("remaining_tasks") or [])
+    loop_notes = list(state.get("loop_notes") or [])[-5:]
+
+    if loop_context_focus:
+        lines.append("Focus for this retry/context-refresh loop:")
+        lines.append(loop_context_focus)
+
+    if progress_reason:
+        lines.append(f"Progress assessment: {progress_reason}")
+
+    if remaining_tasks:
+        lines.append("Remaining tasks:")
+        lines.append(bullets([str(item) for item in remaining_tasks]))
+
+    if loop_notes:
+        lines.append("Prior loop notes:")
+        lines.append(bullets([str(item) for item in loop_notes]))
+
+    if not lines:
+        return ""
+
+    return "# Retry/context-refresh guidance\n" + "\n".join(lines)
+
+
+
 def format_failed_validation_results(results: list[dict[str, Any]]) -> str:
+    
     lines: list[str] = []
 
     for result in results:
@@ -85,6 +128,7 @@ def format_failed_validation_results(results: list[dict[str, Any]]) -> str:
         command = result.get("command", "unknown command")
         stdout = truncate(str(result.get("stdout", "")), VALIDATION_OUTPUT_MAX_CHARS)
         stderr = truncate(str(result.get("stderr", "")), VALIDATION_OUTPUT_MAX_CHARS)
+        
         lines.append(
             f"Command: {command}\n"
             f"Exit code: {returncode}\n"

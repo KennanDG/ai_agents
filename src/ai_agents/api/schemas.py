@@ -10,19 +10,34 @@ class HealthResponse(BaseModel):
 
 
 ############################## CODING AGENT ##############################
+class CodingAgentAttachedFile(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    content: str | None = None
+    data_url: str | None = Field(default=None, max_length=8_000_000)
+
+    # Repo-relative path when the file already exists in the repo.
+    # For local uploads, this can stay null.
+    path: str | None = None
+
+    source: Literal["upload", "repo"] = "upload"
+    mime_type: str | None = None
+    size: int | None = Field(default=None, ge=0)
+    truncated: bool | None = False
+
+    
 class CodingAgentRunRequest(BaseModel):
-    request: str = Field(..., min_length=1)
-
-    repo_root: str = "."
-    workspace_root: str | None = "."
-
+    request: str
+    repo_root: str
+    workspace_root: str | None = None
     allow_write: bool = False
-
     thread_id: str | None = None
     memory_user_id: str | None = None
     memory_namespace: str | None = None
     memory_enabled: bool | None = None
     setup_memory: bool = False
+    max_iterations: int | None = Field(default=3, ge=1, le=8)
+
+    attached_files: list[CodingAgentAttachedFile] = Field(default_factory=list, max_length=10)
 
 
 class CodingAgentRunResult(BaseModel):
@@ -73,6 +88,9 @@ class CodingAgentServerEvent(BaseModel):
 
 
 
+
+
+############################## REPOSITORY API ##############################
 class RepositoryTreeEntry(BaseModel):
     path: str
     name: str

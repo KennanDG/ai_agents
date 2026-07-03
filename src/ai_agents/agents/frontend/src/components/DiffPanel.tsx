@@ -50,6 +50,16 @@ export const DiffPanel = ({ file, change, isLoading = false, error }: DiffPanelP
             modified={modified}
             language={language}
             theme="vs-dark"
+            beforeMount={(monaco) => {
+              monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
+                noSemanticValidation: true,
+                noSyntaxValidation: false,
+              });
+              monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
+                noSemanticValidation: true,
+                noSyntaxValidation: false,
+              });
+            }}
             options={{
               automaticLayout: true,
               fontFamily: "JetBrains Mono, ui-monospace, SFMono-Regular, monospace",

@@ -39,6 +39,24 @@ def is_lint_command(command: str) -> bool:
 
 
 
+def is_infrastructure_validation_failure(result: dict[str, Any]) -> bool:
+    command = str(result.get("command", ""))
+    stderr = str(result.get("stderr", ""))
+
+    try:
+        returncode = int(result.get("returncode", 0))
+    except (TypeError, ValueError):
+        return False
+
+    return (
+        returncode in {126, 127}
+        or "Executable not found" in stderr
+        or "Command blocked by coding-agent allowlist" in stderr
+    )
+
+
+
+
 def validation_failed_results(results: list[dict[str, Any]]) -> bool:
     """Return True only when a blocking validation command failed.
 
@@ -58,6 +76,9 @@ def validation_failed_results(results: list[dict[str, Any]]) -> bool:
             continue
 
         if is_lint_command(command):
+            continue
+
+        if is_infrastructure_validation_failure(result):
             continue
 
         return True

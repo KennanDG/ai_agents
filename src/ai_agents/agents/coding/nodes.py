@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from typing import Literal
 from dotenv import load_dotenv
+from textwrap import dedent
 
 from langchain_groq import ChatGroq
 from langchain_openai import ChatOpenAI
@@ -41,15 +42,17 @@ from ai_agents.agents.coding.prompts import (
 
 
 from ai_agents.agents.coding.registry import SkillRegistry, route_skill
+from ai_agents.agents.coding.routing import patch_attempts_remaining
 from ai_agents.agents.coding.runtime import allow_write as resolve_allow_write
 from ai_agents.agents.coding.runtime import repo_root as resolve_repo_root
 from ai_agents.agents.coding.schemas import (
     ContextDecision,
     PatchDecision,
     PlanDecision,
+    ProgressDecision,
     RepoNavigationDecision,
     ReportDecision,
-    SkillRouteDecision
+    SkillRouteDecision,
 )
 
 from ai_agents.agents.coding.utils.search import (
@@ -238,6 +241,122 @@ def _route_with_fallback(
 
 
 
+
+def _format_attached_files_for_context(state: CodingAgentState) -> tuple[str, list[str]]:
+    attached_files = list(state.get("attached_files") or [])
+
+    if not attached_files:
+        return "", []
+
+    blocks: list[str] = [
+        "# User-attached files",
+        (
+            "These files are read-only context. Some may not exist in the repository. "
+            "Only edit files under the repository root through normal patch operations."
+        ),
+    ]
+    used: list[str] = []
+
+    for item in attached_files:
+        name = str(item.get("name", "")).strip() or "attachment"
+        source = str(item.get("source", "upload")).strip()
+        path = str(item.get("path", "") or "").strip()
+        content = str(item.get("content", ""))
+        truncated = bool(item.get("truncated", False))
+
+        label = path if source == "repo" and path else name
+        used.append(f"{source}:{label}")
+
+        header = f"Attachment: {label}"
+        if source:
+            header += f" | source={source}"
+        if truncated:
+            header += " | truncated=true"
+
+        blocks.append(
+            f"{header}\n"
+            "```text\n"
+            f"{content}\n"
+            "```"
+        )
+
+    return "\n\n".join(blocks), used
+
+
+
+
+def _attached_file_summary(state: CodingAgentState) -> str:
+    attached_files = list(state.get("attached_files") or [])
+
+    if not attached_files:
+        return ""
+
+    lines: list[str] = []
+
+    for item in attached_files:
+        name = str(item.get("name", "")).strip() or "attachment"
+        source = str(item.get("source", "upload")).strip()
+        path = str(item.get("path", "") or "").strip()
+        content = str(item.get("content", ""))
+        label = path if path else name
+        lines.append(f"- {label} ({source}, {len(content)} chars)")
+
+    return "\n".join(lines)
+
+
+def _format_loop_context_focus(state: CodingAgentState) -> str:
+    """Build focused guidance for context-refresh loops."""
+
+    lines: list[str] = []
+    loop_context_focus = str(state.get("loop_context_focus", "")).strip()
+    progress_reason = str(state.get("progress_reason", "")).strip()
+    remaining_tasks = list(state.get("remaining_tasks") or [])
+    loop_notes = list(state.get("loop_notes") or [])[-5:]
+
+    if loop_context_focus:
+        lines.append(loop_context_focus)
+
+    if progress_reason:
+        lines.append(f"Progress reason: {progress_reason}")
+
+    if remaining_tasks:
+        lines.append("Remaining tasks:")
+        lines.append(bullets([str(item) for item in remaining_tasks]))
+
+    if loop_notes:
+        lines.append("Recent loop notes:")
+        lines.append(bullets([str(item) for item in loop_notes]))
+
+    return "\n".join(lines).strip()
+
+
+def _derive_loop_search_requests(
+    *,
+    state: CodingAgentState,
+    remaining_tasks: list[str],
+    next_iteration_notes: str,
+    reason: str,
+) -> list[dict[str, object]]:
+    """Derive focused search requests when the assessor did not provide any."""
+
+    loop_search_text = "\n".join(
+        item
+        for item in [
+            state.get("user_request", ""),
+            reason,
+            next_iteration_notes,
+            "\n".join(remaining_tasks),
+            "\n".join(str(item) for item in state.get("errors", [])[-5:]),
+        ]
+        if item
+    )
+
+    derived = derive_search_requests(loop_search_text) if loop_search_text else []
+
+    return derived or list(state.get("search_requests") or [])
+
+
+
 #################################### Nodes ####################################
 
 def recall_memory_node(state: CodingAgentState, runtime) -> CodingAgentState:
@@ -246,6 +365,7 @@ def recall_memory_node(state: CodingAgentState, runtime) -> CodingAgentState:
 
 def remember_run_node(state: CodingAgentState, runtime) -> CodingAgentState:
     return remember_coding_run(state, runtime)
+
 
 
 def route_node(state: CodingAgentState) -> CodingAgentState:
@@ -342,6 +462,16 @@ def plan_node(state: CodingAgentState) -> CodingAgentState:
             "\n\nRelevant long-term coding memories from previous runs:\n"
             f"{bullets(long_term_memories)}"
         )
+    
+
+    attachment_summary = _attached_file_summary(state)
+
+    if attachment_summary:
+        planner_prompt += (
+            "\n\nUser-attached files available as additional read-only context:\n"
+            f"{attachment_summary}"
+        )
+
 
     try:
         decision: PlanDecision = invoke_parsed_decision(
@@ -431,6 +561,8 @@ def repo_navigator_node(
                 ranked_search_results=_format_search_result_dicts(search_result_dicts),
                 web_results=str(state.get("web_search_results", "")),
                 long_term_memories=bullets(state.get("long_term_memories", [])),
+                attached_file_summary=_attached_file_summary(state),
+                loop_context_focus=_format_loop_context_focus(state),
             ),
         )
 
@@ -515,11 +647,13 @@ def gather_context_node(
     state: CodingAgentState,
     cfg: CodingAgentSettings = default_settings,
 ) -> CodingAgentState:
+    
     repo_root = resolve_repo_root(state, cfg)
     context: list[str] = []
     errors = list(state.get("errors", []))
     files_inspected: list[str] = []
 
+    ################## Workspace repo files ##################
     try:
         root_files = filter_context_paths(list_files(repo_root, ".", max_depth=6))[: cfg.max_search_results]
         context.append("Repository files:\n" + "\n".join(root_files))
@@ -530,6 +664,8 @@ def gather_context_node(
             "status": "context_failed",
         }
 
+
+    ################## Repo search results ##################
     search_blocks: list[str] = []
     search_result_dicts: list[dict[str, object]] = list(state.get("search_results") or [])
     search_requests = _search_requests_from_state(state)
@@ -560,6 +696,8 @@ def gather_context_node(
 
     context.extend(search_blocks)
 
+
+    ################## Long-term memory ##################
     long_term_memories = state.get("long_term_memories", [])
     
     if long_term_memories:
@@ -567,7 +705,17 @@ def gather_context_node(
             "# Relevant long-term coding memories from previous runs\n"
             + bullets(long_term_memories)
         )
+    
 
+    ################## User Attached files ##################
+    attached_context, attached_files_used = _format_attached_files_for_context(state)
+
+    if attached_context:
+        context.append(attached_context)
+
+
+
+    ################## Repo navigation ##################
     repo_navigation_summary = state.get("repo_navigation_summary")
     repo_navigation_files = list(state.get("repo_navigation_files") or [])
     repo_navigation_missing = list(state.get("repo_navigation_missing_context") or [])
@@ -597,10 +745,19 @@ def gather_context_node(
         context.append("\n".join(nav_lines))
 
 
+
+    ################## Web Search Results ##################
     web_results = state.get("web_search_results")
 
     if web_results:
         context.append(f"\n\n# Web search results:\n{web_results}")
+
+
+    ################## Context to focus on for re-try attempt ##################
+    loop_context_focus = _format_loop_context_focus(state)
+
+    if loop_context_focus:
+        context.append("# Retry/context-refresh focus\n" + loop_context_focus)
 
 
     candidate_paths = filter_context_paths(
@@ -646,12 +803,12 @@ def gather_context_node(
     return {
         "context": context,
         "files_inspected": files_inspected,
+        "attached_files_used": attached_files_used,
         "search_requests": search_requests,
         "search_results": search_result_dicts,
         "errors": errors,
         "status": "context_gathered" if context else "context_failed",
     }
-
 
 
 
@@ -689,6 +846,7 @@ def patch_node(
     attempt_file_changes: list[dict[str, str]] = []
     attempt_write_results: list[str] = []
     idempotent_noops = 0
+    converted_creates = 0
 
     try:
         decision: PatchDecision = invoke_parsed_decision(
@@ -725,6 +883,9 @@ def patch_node(
             continue
 
         try:
+            effective_operation = edit.operation
+            converted_create_to_replace = False
+
             if edit.operation == "create":
                 if edit.old.strip():
                     raise ValueError(
@@ -737,6 +898,9 @@ def patch_node(
                     before = ""
                     after = edit.new
                 else:
+                    before = existing
+                    after = edit.new
+
                     if _same_file_content(existing, edit.new):
                         result = (
                             f"No-op: {path} already exists with the requested content."
@@ -747,9 +911,12 @@ def patch_node(
                         if path not in known_changed_paths:
                             change = {
                                 "path": path,
-                                "operation": edit.operation,
+                                "operation": "create",
+                                "status": "unchanged",
                                 "reason": edit.reason,
                                 "write_result": result,
+                                "original": before,
+                                "modified": after,
                             }
                             attempt_file_changes.append(change)
                             file_changes.append(change)
@@ -757,10 +924,12 @@ def patch_node(
 
                         continue
 
-                    raise FileExistsError(
-                        f"Cannot create {path}; file already exists with different content. "
-                        "Use operation='replace'."
-                    )
+                    # The model selected create for a file that already exists. Treat
+                    # the proposed full file contents as a safe full-file replacement
+                    # instead of failing the whole run.
+                    effective_operation = "replace"
+                    converted_create_to_replace = True
+                    converted_creates += 1
 
             elif edit.operation == "replace":
                 if not edit.old:
@@ -777,13 +946,24 @@ def patch_node(
             
             diffs.append(unified_diff(path, before, after))
             result = write_file(repo_root, path, after, allow_write=allow_write)
+
+            if converted_create_to_replace:
+                result = (
+                    f"{result} Converted requested create operation to replace because "
+                    f"{path} already existed."
+                )
+
             attempt_write_results.append(result)
 
             change = {
                 "path": path,
-                "operation": edit.operation,
+                "operation": effective_operation,
+                "requested_operation": edit.operation,
+                "status": "modified" if before else "added",
                 "reason": edit.reason,
                 "write_result": result,
+                "original": before,
+                "modified": after,
             }
 
             attempt_file_changes.append(change)
@@ -803,6 +983,7 @@ def patch_node(
         f"Patch attempt: {patch_attempts}/{max_patch_attempts}\n"
         f"Files changed/proposed this attempt: {len(attempt_file_changes)}\n"
         f"Idempotent create no-ops this attempt: {idempotent_noops}\n"
+        f"Create operations converted to replace this attempt: {converted_creates}\n"
         f"Total files changed/proposed: {len(file_changes)}\n"
         f"Write results:\n{bullets(attempt_write_results)}"
     )
@@ -814,9 +995,35 @@ def patch_node(
         status = "patch_skipped"
     else:
         status = "patched"
+
+    patch_failure_fields: dict[str, object] = {}
+
+    if status == "patch_failed" and patch_attempts < max_patch_attempts:
+
+        patch_failure_focus = (
+            f"Patch attempt {patch_attempts} failed before validation. "
+            "Re-run repo navigation and context gathering with emphasis on the "
+            "files involved in the failed edits, exact current file contents, "
+            "and any missing surrounding symbols/imports needed for a valid replace."
+        )
+
+        patch_failure_fields = {
+            "continue_loop": True,
+            "loop_context_focus": patch_failure_focus,
+            "loop_notes": [
+                *state.get("loop_notes", []),
+                f"Patch attempt {patch_attempts}: patch failed; refresh context before retry.",
+            ][-8:],
+            "search_results": [],
+            "repo_navigation_files": [],
+            "repo_navigation_missing_context": [],
+            "context": [],
+            "files_inspected": [],
+        }
         
 
     return {
+        **patch_failure_fields,
         "patch_attempts": patch_attempts,
         "max_patch_attempts": max_patch_attempts,
         "file_changes": file_changes,
@@ -873,6 +1080,191 @@ def validate_node(
         "validation_results": results,
         "status": "validation_failed" if validation_failed_results(results) else "validated",
     }
+
+
+
+
+def assess_progress_node(
+    state: CodingAgentState,
+    cfg: CodingAgentSettings = default_settings,
+) -> CodingAgentState:
+    
+    iteration = int(state.get("iteration", 0)) + 1
+    max_iterations = int(state.get("max_iterations", 3))
+    errors = list(state.get("errors", []))
+    loop_notes = list(state.get("loop_notes", []))
+
+    validation_results = state.get("validation_results", [])
+    validation_failed = validation_failed_results(validation_results)
+
+    if iteration >= max_iterations:
+        return {
+            "iteration": iteration,
+            "max_iterations": max_iterations,
+            "continue_loop": False,
+            "progress_reason": (
+                f"Loop limit reached at {iteration}/{max_iterations}. "
+                "Reporting current work instead of continuing."
+            ),
+            "loop_notes": [
+                *loop_notes,
+                f"Iteration {iteration}: loop limit reached.",
+            ][-8:],
+            "status": "loop_limit_reached",
+        }
+
+    validation_summary = "\n".join(
+        f"- {item.get('command', 'unknown')} -> exit code {item.get('returncode', 'unknown')}"
+        for item in validation_results
+    ) or "No validation results."
+
+    try:
+        decision: ProgressDecision = invoke_parsed_decision(
+            model=reasoning_model,
+            schema=ProgressDecision,
+            node_name="assess_progress",
+            state=state,
+            system_prompt=(
+                "You are the progress assessment node for a coding agent. "
+                "Decide if the user's request is complete or if another implementation "
+                "loop is needed. Continue only when there is concrete remaining work, "
+                "failed validation that can likely be fixed, or missing context that can "
+                "be gathered. Do not loop just to polish."
+            ),
+            user_prompt=dedent(
+                f"""
+                Assess whether this coding task is complete.
+
+                # User request
+                {state.get("user_request", "")}
+
+                # Plan
+                {bullets(state.get("plan", []))}
+
+                # Files inspected
+                {bullets(state.get("files_inspected", []))}
+
+                # File changes
+                {bullets([
+                    item.get("path", "") + " - " + item.get("write_result", "")
+                    for item in state.get("file_changes", [])
+                ])}
+
+                # Patch summary
+                {state.get("patch_summary", "")}
+
+                # Validation
+                {validation_summary}
+
+                # Existing errors
+                {bullets(errors) if errors else "None"}
+
+                # Prior loop notes
+                {bullets(loop_notes) if loop_notes else "None"}
+
+                # Iteration
+                {iteration}/{max_iterations}
+
+                Return whether the task is complete, whether to continue, and what
+                the next loop should focus on.
+                """
+            ).strip(),
+        )
+    except Exception as exc:
+        if validation_failed and patch_attempts_remaining(state):
+            return {
+                "iteration": iteration,
+                "max_iterations": max_iterations,
+                "continue_loop": True,
+                "progress_reason": f"Progress assessment failed, but validation failed: {exc}",
+                "remaining_tasks": ["Fix failing validation."],
+                "loop_context_focus": (
+                    "Progress assessment failed, but validation failed. "
+                    "Refresh context around changed files and validation errors before patching again."
+                ),
+                "loop_notes": [
+                    *loop_notes,
+                    f"Iteration {iteration}: validation failed; continue with repair loop.",
+                ][-8:],
+                "search_requests": _derive_loop_search_requests(
+                    state=state,
+                    remaining_tasks=["Fix failing validation."],
+                    next_iteration_notes="Refresh context around changed files and validation errors.",
+                    reason=str(exc),
+                ),
+                "search_results": [],
+                "repo_navigation_files": [],
+                "repo_navigation_missing_context": [],
+                "context": [],
+                "files_inspected": [],
+                "errors": [*errors, f"Progress assessment failed: {exc}"],
+                "status": "assessed",
+            }
+
+        return {
+            "iteration": iteration,
+            "max_iterations": max_iterations,
+            "continue_loop": False,
+            "progress_reason": f"Progress assessment failed; reporting current state: {exc}",
+            "errors": [*errors, f"Progress assessment failed: {exc}"],
+            "status": "assessed",
+        }
+
+    additional_search_requests = [
+        item
+        for item in (_dump_search_request(item) for item in decision.additional_search_requests)
+        if item
+    ]
+
+    should_continue = (
+        decision.should_continue
+        and not decision.is_complete
+        and iteration < max_iterations
+    )
+
+    next_loop_focus = "\n".join(
+        item
+        for item in [
+            f"Iteration {iteration} assessment: {decision.reason}",
+            f"Next iteration focus: {decision.next_iteration_notes}"
+            if decision.next_iteration_notes
+            else "",
+            "Remaining tasks:\n" + bullets(decision.remaining_tasks)
+            if decision.remaining_tasks
+            else "",
+        ]
+        if item
+    )
+
+    next_loop_search_requests = additional_search_requests or _derive_loop_search_requests(
+        state=state,
+        remaining_tasks=decision.remaining_tasks,
+        next_iteration_notes=decision.next_iteration_notes,
+        reason=decision.reason,
+    )
+
+    return {
+        "iteration": iteration,
+        "max_iterations": max_iterations,
+        "continue_loop": should_continue,
+        "remaining_tasks": decision.remaining_tasks,
+        "progress_reason": decision.reason,
+        "loop_context_focus": next_loop_focus if should_continue else state.get("loop_context_focus", ""),
+        "loop_notes": [
+            *loop_notes,
+            f"Iteration {iteration}: {decision.reason}\nNext: {decision.next_iteration_notes}",
+        ][-8:],
+        # Force fresh navigation/search/context on the next loop.
+        "search_requests": next_loop_search_requests if should_continue else state.get("search_requests", []),
+        "search_results": [] if should_continue else state.get("search_results", []),
+        "repo_navigation_summary": "" if should_continue else state.get("repo_navigation_summary", ""),
+        "repo_navigation_files": [] if should_continue else state.get("repo_navigation_files", []),
+        "repo_navigation_missing_context": [],
+        "context": [] if should_continue else state.get("context", []),
+        "files_inspected": [] if should_continue else state.get("files_inspected", []),
+        "status": "assessed",
+    }
+
 
 
 
