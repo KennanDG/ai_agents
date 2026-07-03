@@ -844,8 +844,11 @@ def patch_node(
                             change = {
                                 "path": path,
                                 "operation": edit.operation,
+                                "status": "modified" if before else "added",
                                 "reason": edit.reason,
                                 "write_result": result,
+                                "original": before,
+                                "modified": after,
                             }
                             attempt_file_changes.append(change)
                             file_changes.append(change)
@@ -878,8 +881,11 @@ def patch_node(
             change = {
                 "path": path,
                 "operation": edit.operation,
+                "status": "modified" if before else "added",
                 "reason": edit.reason,
                 "write_result": result,
+                "original": before,
+                "modified": after,
             }
 
             attempt_file_changes.append(change)

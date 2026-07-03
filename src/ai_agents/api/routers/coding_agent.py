@@ -35,6 +35,12 @@ from ai_agents.api.schemas import (
     RepositoryTreeEntry,
     RepositoryTreeResponse,
 )
+from ai_agents.agents.coding.sandbox import (
+    apply_sandbox_files_to_repo,
+    cleanup_coding_sandbox,
+    create_coding_sandbox,
+)
+from ai_agents.agents.coding.utils.validation import validation_failed_results
 
 
 
@@ -541,14 +547,17 @@ def _stream_coding_agent_worker(
     loop: asyncio.AbstractEventLoop,
     queue: asyncio.Queue[dict[str, Any] | None],
 ) -> None:
+    
     thread_id = request.thread_id or _new_thread_id()
 
     try:
         cfg = default_coding_settings
 
         if request.memory_enabled is not None:
-            cfg = replace(cfg, memory_enabled=request.memory_enabled)
+            cfg = replace(cfg, memory_enabled=request.memory_enabled) # set up memory
 
+
+        # Resolve roots
         repo_root_path = Path(request.repo_root).expanduser().resolve()
         repo_root = str(repo_root_path)
 
@@ -557,6 +566,24 @@ def _stream_coding_agent_worker(
             if request.workspace_root
             else None
         )
+
+
+        original_repo_root_path = Path(request.repo_root).expanduser().resolve()
+        original_workspace_root_path = (
+            Path(request.workspace_root).expanduser().resolve()
+            if request.workspace_root
+            else original_repo_root_path
+        )
+
+        # initialize sandbox
+        sandbox = create_coding_sandbox(
+            repo_root=original_repo_root_path,
+            workspace_root=original_workspace_root_path,
+            run_id=run_id,
+        )
+
+        repo_root = str(sandbox.repo_root)
+        workspace_root = str(sandbox.workspace_root)
 
         _send_threadsafe(
             loop=loop,
@@ -586,6 +613,9 @@ def _stream_coding_agent_worker(
             "user_request": request.request,
             "repo_root": repo_root,
             "workspace_root": workspace_root,
+            "original_repo_root": str(sandbox.original_repo_root),
+            "sandbox_root": str(sandbox.sandbox_root),
+            "sandbox_enabled": True,
             "allow_write": request.allow_write,
             "attached_files": attached_files,
             "attached_files_used": [],
@@ -649,6 +679,31 @@ def _stream_coding_agent_worker(
         final_state["thread_id"] = thread_id
         result = _public_result(final_state, thread_id)
 
+
+        # Apply changes to sandbox if validated & allow write on
+        changed_paths = [
+            item.get("path", "")
+            for item in final_state.get("file_changes", [])
+            if item.get("path")
+        ]
+
+        validation_failed = validation_failed_results(final_state.get("validation_results", []))
+
+        if request.allow_write and changed_paths and not validation_failed:
+            try:
+                applied_paths = apply_sandbox_files_to_repo(
+                    sandbox=sandbox,
+                    changed_paths=changed_paths,
+                )
+                final_state["applied_files"] = applied_paths
+            except Exception as exc:
+                final_state["errors"] = [
+                    *final_state.get("errors", []),
+                    f"Failed to apply sandbox changes to repository: {exc}",
+                ]
+
+
+
         _send_threadsafe(
             loop=loop,
             queue=queue,
@@ -676,7 +731,11 @@ def _stream_coding_agent_worker(
         )
 
     finally:
+        if "sandbox" in locals():
+            cleanup_coding_sandbox(sandbox, keep=False)
         asyncio.run_coroutine_threadsafe(queue.put(None), loop)
+
+
 
 
 async def _run_and_forward_events(
@@ -709,6 +768,8 @@ async def _run_and_forward_events(
 
     finally:
         await worker_task
+
+
 
 
 @router.websocket("/ws")

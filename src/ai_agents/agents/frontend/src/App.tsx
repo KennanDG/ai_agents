@@ -45,6 +45,8 @@ const asRecordArray = (value: unknown): Record<string, unknown>[] | undefined =>
   return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object") : undefined;
 }
 
+
+//TODO: Add c++, rust, and java files
 const languageFromPath = (path: string) => {
   const extension = path.split(".").at(-1)?.toLowerCase();
   switch (extension) {
