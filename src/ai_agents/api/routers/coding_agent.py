@@ -75,7 +75,7 @@ IMAGE_DATA_URL_RE = re.compile(
     re.IGNORECASE,
 )
 
-#TODO: Add c++, Rust, and java files
+
 LANGUAGE_BY_EXTENSION = {
     ".css": "css",
     ".html": "html",

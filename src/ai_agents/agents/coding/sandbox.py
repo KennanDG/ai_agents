@@ -34,6 +34,34 @@ def _ignore(_dir: str, names: list[str]) -> set[str]:
     return {name for name in names if name in SANDBOX_IGNORE_DIRS or name.endswith(".egg-info")}
 
 
+
+def _link_existing_dependency_dirs(
+    *,
+    original_workspace_root: Path,
+    sandbox_workspace_root: Path,
+) -> None:
+    dependency_dirs = [
+        Path("node_modules"),
+        Path("agents/frontend/node_modules"),
+    ]
+
+    for relative in dependency_dirs:
+        source = original_workspace_root / relative
+        target = sandbox_workspace_root / relative
+
+        if not source.exists() or target.exists():
+            continue
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            target.symlink_to(source, target_is_directory=True)
+        except OSError:
+            # Best effort only. Validation will report missing tooling if deps are unavailable.
+            continue
+
+
+
 def create_coding_sandbox(
     *,
     repo_root: Path,
@@ -61,6 +89,11 @@ def create_coding_sandbox(
         original_workspace_root,
         sandbox_workspace_root,
         ignore=_ignore,
+    )
+
+    _link_existing_dependency_dirs(
+        original_workspace_root=original_workspace_root,
+        sandbox_workspace_root=sandbox_workspace_root,
     )
 
     sandbox_repo_root = sandbox_workspace_root / repo_relative
