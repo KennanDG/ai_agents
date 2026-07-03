@@ -311,6 +311,7 @@ def build_repo_navigator_user_prompt(
     web_results: str | None,
     long_term_memories: str | None,
     attached_file_summary: str | None,
+    loop_context_focus: str | None = None,
 ) -> str:
     return dedent(
         f"""
@@ -346,9 +347,13 @@ def build_repo_navigator_user_prompt(
         # User-attached files available as additional read-only context:
         {attached_file_summary[:4_000] if attached_file_summary else "None"}
 
+        # Current loop focus, if this is a retry/context-refresh loop:
+        {loop_context_focus[:4_000] if loop_context_focus else "None"}
+
         # Output guidance:
         - Return the fewest files needed for safe implementation.
         - Prefer files directly named by the request, files with high-ranked search evidence, and files that define related schemas/state/prompts/routing.
+        - When current loop focus is present, use it to select missing files or broader surrounding context before patching again.
         - Use additional_search_requests only if more search would materially improve context.
         - Do not include files solely because they are generally important.
         """

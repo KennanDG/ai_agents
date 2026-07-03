@@ -89,7 +89,7 @@ def build_coding_agent_graph(
         "patch",
         route_after_patch,
         {
-            "gather_context": "gather_context",
+            "repo_navigator": "repo_navigator",
             "validate": "validate",
             "report": "report",
         },

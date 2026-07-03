@@ -80,6 +80,7 @@ class CodingAgentState(TypedDict, total=False):
     continue_loop: bool
     remaining_tasks: list[str]
     loop_notes: list[str]
+    loop_context_focus: str
     progress_reason: str
 
 

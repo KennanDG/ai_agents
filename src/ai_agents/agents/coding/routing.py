@@ -32,9 +32,9 @@ def route_after_context(state: CodingAgentState) -> Literal["patch", "report"]:
     return "patch"
 
 
-def route_after_patch(state: CodingAgentState) -> Literal["gather_context", "validate", "report"]:
+def route_after_patch(state: CodingAgentState) -> Literal["repo_navigator", "validate", "report"]:
     if state.get("status") == "patch_failed":
-        return "gather_context" if patch_attempts_remaining(state) else "report"
+        return "repo_navigator" if patch_attempts_remaining(state) else "report"
 
     if state.get("status") == "patch_skipped":
         return "report"

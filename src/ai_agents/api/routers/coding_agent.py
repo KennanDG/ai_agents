@@ -91,6 +91,10 @@ LANGUAGE_BY_EXTENSION = {
     ".toml": "toml",
     ".yml": "yaml",
     ".yaml": "yaml",
+    ".cpp": "cpp",
+    ".hpp": "cpp",
+    ".rs": "rust",
+    ".java": "java",
 }
 
 

@@ -5,41 +5,67 @@ import subprocess
 from pathlib import Path
 
 ALLOWED_COMMAND_PREFIXES = (
-    "pytest",
-    "uv run pytest",
-    "ruff check",
-    "uv run ruff check",
-    "ruff format --check",
-    "uv run ruff format --check",
-    "python -m pytest",
-    "python -m compileall",
-    "npx tsc",
-    "npm run typecheck",
-    "npm run build",
-    "npx tailwindcss",
+    ("pytest",),
+    ("uv", "run", "pytest"),
+    ("ruff", "check"),
+    ("uv", "run", "ruff", "check"),
+    ("ruff", "format", "--check"),
+    ("uv", "run", "ruff", "format", "--check"),
+    ("python", "-m", "pytest"),
+    ("uv", "run", "python", "-m", "pytest"),
+    ("python", "-m", "compileall"),
+    ("uv", "run", "python", "-m", "compileall"),
+    ("python", "-m", "py_compile"),
+    ("python", "-c"),
+    ("uv", "run", "python", "-m", "py_compile"),
+    ("npx", "tsc"),
+    ("npm", "run", "typecheck"),
+    ("npm", "run", "build"),
+    ("npx", "tailwindcss"),
 )
 
-BLOCKED_COMMANDS = {"sudo", "rm", "rmdir", "del", "format", "shutdown", "reboot", "mkfs", "chmod", "chown"}
+BLOCKED_COMMANDS = {
+    "sudo",
+    "rm",
+    "rmdir",
+    "del",
+    "format",
+    "shutdown",
+    "reboot",
+    "mkfs",
+    "chmod",
+    "chown",
+}
+
+
+def _command_tokens(command: str) -> list[str]:
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return []
+
+
+def _starts_with_tokens(tokens: list[str], prefix: tuple[str, ...]) -> bool:
+    return len(tokens) >= len(prefix) and tuple(tokens[: len(prefix)]) == prefix
 
 
 def is_allowed_command(command: str) -> bool:
-    normalized = " ".join(shlex.split(command))
+    tokens = _command_tokens(command)
 
-    if not normalized:
+    if not tokens:
         return False
-    
-    first = shlex.split(normalized)[0]
 
-    if first in BLOCKED_COMMANDS:
+    if tokens[0] in BLOCKED_COMMANDS:
         return False
-    
-    return any(normalized.startswith(prefix) for prefix in ALLOWED_COMMAND_PREFIXES)
+
+    return any(_starts_with_tokens(tokens, prefix) for prefix in ALLOWED_COMMAND_PREFIXES)
 
 
 
 def run_command(repo_root: Path, command: str, timeout_seconds: int = 60) -> dict[str, object]:
-    
-    if not is_allowed_command(command):
+    tokens = _command_tokens(command)
+
+    if not tokens or not is_allowed_command(command):
         return {
             "command": command,
             "returncode": 126,
@@ -49,7 +75,7 @@ def run_command(repo_root: Path, command: str, timeout_seconds: int = 60) -> dic
 
     try:
         completed = subprocess.run(
-            shlex.split(command),
+            tokens,
             cwd=repo_root,
             shell=False,
             check=False,
@@ -57,7 +83,7 @@ def run_command(repo_root: Path, command: str, timeout_seconds: int = 60) -> dic
             capture_output=True,
             timeout=timeout_seconds,
         )
-        
+
     except FileNotFoundError as exc:
         return {
             "command": command,
