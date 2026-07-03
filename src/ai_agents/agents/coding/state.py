@@ -7,6 +7,8 @@ from ai_agents.api.schemas import CodingAgentAttachedFile
 CodingAgentStatus = Literal[
     "planned",
     "routed",
+    "repo_navigated",
+    "repo_navigation_failed",
     "web_search_skipped",
     "web_search_completed",
     "web_search_failed",
@@ -19,6 +21,8 @@ CodingAgentStatus = Literal[
     "patch_skipped",
     "validated",
     "validation_failed",
+    "assessed",
+    "loop_limit_reached",
     "reported",
 ]
 
@@ -69,6 +73,14 @@ class CodingAgentState(TypedDict, total=False):
     errors: list[str]
     patch_attempts: int
     max_patch_attempts: int
+
+
+    iteration: int
+    max_iterations: int
+    continue_loop: bool
+    remaining_tasks: list[str]
+    loop_notes: list[str]
+    progress_reason: str
 
 
 

@@ -190,3 +190,34 @@ class SearchRequest(BaseModel):
         ge=1,
         le=50,
     )
+
+
+
+
+
+
+class ProgressDecision(BaseModel):
+    is_complete: bool = Field(
+        default=False,
+        description="Whether the user request is fully complete.",
+    )
+    should_continue: bool = Field(
+        default=False,
+        description="Whether another implementation loop is needed.",
+    )
+    reason: str = Field(
+        default="",
+        description="Short explanation of the progress decision.",
+    )
+    remaining_tasks: list[str] = Field(
+        default_factory=list,
+        description="Specific remaining tasks for the next loop.",
+    )
+    additional_search_requests: list[SearchRequest] = Field(
+        default_factory=list,
+        description="Additional repo searches needed for the next loop.",
+    )
+    next_iteration_notes: str = Field(
+        default="",
+        description="Useful notes to carry into the next patch loop.",
+    )

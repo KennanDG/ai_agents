@@ -20,6 +20,7 @@ export type CodingAgentRunRequest = {
   memory_namespace?: string | null;
   memory_enabled?: boolean | null;
   setup_memory?: boolean;
+  max_iterations?: number | null;
   attached_files?: CodingAgentAttachedFile[];
 };
 

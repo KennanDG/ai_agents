@@ -50,11 +50,16 @@ def route_after_patch(state: CodingAgentState) -> Literal["gather_context", "val
     return "validate"
 
 
-def route_after_validate(state: CodingAgentState) -> Literal["gather_context", "report"]:
-    if validation_failed_results(state.get("validation_results", [])) and patch_attempts_remaining(state):
-        return "gather_context"
+def route_after_validate(state: CodingAgentState) -> Literal["assess_progress"]:
+    return "assess_progress"
+
+
+def route_after_assess(state: CodingAgentState) -> Literal["repo_navigator", "report"]:
+    if bool(state.get("continue_loop")):
+        return "repo_navigator"
 
     return "report"
+
 
 
 def patch_attempts_remaining(state: CodingAgentState) -> bool:

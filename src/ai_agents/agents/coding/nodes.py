@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from typing import Literal
 from dotenv import load_dotenv
+from textwrap import dedent
 
 from langchain_groq import ChatGroq
 from langchain_openai import ChatOpenAI
@@ -41,15 +42,17 @@ from ai_agents.agents.coding.prompts import (
 
 
 from ai_agents.agents.coding.registry import SkillRegistry, route_skill
+from ai_agents.agents.coding.routing import patch_attempts_remaining
 from ai_agents.agents.coding.runtime import allow_write as resolve_allow_write
 from ai_agents.agents.coding.runtime import repo_root as resolve_repo_root
 from ai_agents.agents.coding.schemas import (
     ContextDecision,
     PatchDecision,
     PlanDecision,
+    ProgressDecision,
     RepoNavigationDecision,
     ReportDecision,
-    SkillRouteDecision
+    SkillRouteDecision,
 )
 
 from ai_agents.agents.coding.utils.search import (
@@ -966,6 +969,151 @@ def validate_node(
         "validation_results": results,
         "status": "validation_failed" if validation_failed_results(results) else "validated",
     }
+
+
+
+
+def assess_progress_node(
+    state: CodingAgentState,
+    cfg: CodingAgentSettings = default_settings,
+) -> CodingAgentState:
+    
+    iteration = int(state.get("iteration", 0)) + 1
+    max_iterations = int(state.get("max_iterations", 3))
+    errors = list(state.get("errors", []))
+    loop_notes = list(state.get("loop_notes", []))
+
+    validation_results = state.get("validation_results", [])
+    validation_failed = validation_failed_results(validation_results)
+
+    if iteration >= max_iterations:
+        return {
+            "iteration": iteration,
+            "max_iterations": max_iterations,
+            "continue_loop": False,
+            "progress_reason": (
+                f"Loop limit reached at {iteration}/{max_iterations}. "
+                "Reporting current work instead of continuing."
+            ),
+            "loop_notes": [
+                *loop_notes,
+                f"Iteration {iteration}: loop limit reached.",
+            ][-8:],
+            "status": "loop_limit_reached",
+        }
+
+    validation_summary = "\n".join(
+        f"- {item.get('command', 'unknown')} -> exit code {item.get('returncode', 'unknown')}"
+        for item in validation_results
+    ) or "No validation results."
+
+    try:
+        decision: ProgressDecision = invoke_parsed_decision(
+            model=reasoning_model,
+            schema=ProgressDecision,
+            node_name="assess_progress",
+            state=state,
+            system_prompt=(
+                "You are the progress assessment node for a coding agent. "
+                "Decide if the user's request is complete or if another implementation "
+                "loop is needed. Continue only when there is concrete remaining work, "
+                "failed validation that can likely be fixed, or missing context that can "
+                "be gathered. Do not loop just to polish."
+            ),
+            user_prompt=dedent(
+                f"""
+                Assess whether this coding task is complete.
+
+                # User request
+                {state.get("user_request", "")}
+
+                # Plan
+                {bullets(state.get("plan", []))}
+
+                # Files inspected
+                {bullets(state.get("files_inspected", []))}
+
+                # File changes
+                {bullets([
+                    item.get("path", "") + " - " + item.get("write_result", "")
+                    for item in state.get("file_changes", [])
+                ])}
+
+                # Patch summary
+                {state.get("patch_summary", "")}
+
+                # Validation
+                {validation_summary}
+
+                # Existing errors
+                {bullets(errors) if errors else "None"}
+
+                # Prior loop notes
+                {bullets(loop_notes) if loop_notes else "None"}
+
+                # Iteration
+                {iteration}/{max_iterations}
+
+                Return whether the task is complete, whether to continue, and what
+                the next loop should focus on.
+                """
+            ).strip(),
+        )
+    except Exception as exc:
+        if validation_failed and patch_attempts_remaining(state):
+            return {
+                "iteration": iteration,
+                "max_iterations": max_iterations,
+                "continue_loop": True,
+                "progress_reason": f"Progress assessment failed, but validation failed: {exc}",
+                "remaining_tasks": ["Fix failing validation."],
+                "loop_notes": [
+                    *loop_notes,
+                    f"Iteration {iteration}: validation failed; continue with repair loop.",
+                ][-8:],
+                "errors": [*errors, f"Progress assessment failed: {exc}"],
+                "status": "assessed",
+            }
+
+        return {
+            "iteration": iteration,
+            "max_iterations": max_iterations,
+            "continue_loop": False,
+            "progress_reason": f"Progress assessment failed; reporting current state: {exc}",
+            "errors": [*errors, f"Progress assessment failed: {exc}"],
+            "status": "assessed",
+        }
+
+    additional_search_requests = [
+        item
+        for item in (_dump_search_request(item) for item in decision.additional_search_requests)
+        if item
+    ]
+
+    should_continue = (
+        decision.should_continue
+        and not decision.is_complete
+        and iteration < max_iterations
+    )
+
+    return {
+        "iteration": iteration,
+        "max_iterations": max_iterations,
+        "continue_loop": should_continue,
+        "remaining_tasks": decision.remaining_tasks,
+        "progress_reason": decision.reason,
+        "loop_notes": [
+            *loop_notes,
+            f"Iteration {iteration}: {decision.reason}\nNext: {decision.next_iteration_notes}",
+        ][-8:],
+        # Force fresh navigation/search on the next loop.
+        "search_requests": additional_search_requests or state.get("search_requests", []),
+        "search_results": [] if should_continue else state.get("search_results", []),
+        "repo_navigation_files": [] if should_continue else state.get("repo_navigation_files", []),
+        "repo_navigation_missing_context": [],
+        "status": "assessed",
+    }
+
 
 
 

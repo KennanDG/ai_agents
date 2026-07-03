@@ -327,12 +327,14 @@ const App = () => {
     ]);
 
     socketRef.current?.run({
+      thread_id: run.threadId,
       request: prompt,
       repo_root: repoRoot,
       workspace_root: configuredWorkspaceRoot === configuredRepoRoot ? repoRoot : configuredWorkspaceRoot,
       allow_write: allowWrite,
       memory_enabled: memoryEnabled,
       attached_files: attachedFiles,
+      max_iterations: 3,
     });
   };
 

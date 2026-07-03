@@ -35,6 +35,7 @@ class CodingAgentRunRequest(BaseModel):
     memory_namespace: str | None = None
     memory_enabled: bool | None = None
     setup_memory: bool = False
+    max_iterations: int | None = Field(default=3, ge=1, le=8)
 
     attached_files: list[CodingAgentAttachedFile] = Field(default_factory=list, max_length=10)
 

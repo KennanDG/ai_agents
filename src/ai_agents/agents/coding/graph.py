@@ -9,6 +9,7 @@ from langgraph.store.base import BaseStore
 
 from ai_agents.agents.coding.memory import CodingAgentRuntimeContext
 from ai_agents.agents.coding.nodes import (
+    assess_progress_node,
     gather_context_node,
     gmail_access_node,
     patch_node,
@@ -22,12 +23,15 @@ from ai_agents.agents.coding.nodes import (
     web_search_node,
 )
 
+
 from ai_agents.agents.coding.routing import (
+    route_after_assess,
     route_after_plan,
     route_after_context,
     route_after_patch,
     route_after_validate,
 )
+
 from ai_agents.agents.coding.state import CodingAgentState
 
 
@@ -52,6 +56,7 @@ def build_coding_agent_graph(
     builder.add_node("gather_context", gather_context_node, retry_policy=transient_retry)
     builder.add_node("patch", patch_node, retry_policy=transient_retry)
     builder.add_node("validate", validate_node, retry_policy=transient_retry)
+    builder.add_node("assess_progress", assess_progress_node, retry_policy=transient_retry)
     builder.add_node("report", report_node, retry_policy=transient_retry)
     builder.add_node("remember_run", remember_run_node, retry_policy=transient_retry)
     builder.add_node("web_search", web_search_node, retry_policy=transient_retry)
@@ -93,7 +98,14 @@ def build_coding_agent_graph(
         "validate",
         route_after_validate,
         {
-            "gather_context": "gather_context",
+            "assess_progress": "assess_progress",
+        },
+    )
+    builder.add_conditional_edges(
+        "assess_progress",
+        route_after_assess,
+        {
+            "repo_navigator": "repo_navigator",
             "report": "report",
         },
     )

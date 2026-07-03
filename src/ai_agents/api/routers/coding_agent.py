@@ -592,6 +592,11 @@ def _stream_coding_agent_worker(
             "attachment_errors": attachment_errors,
             "errors": [*attachment_errors],
             "memory_errors": [],
+            "iteration": 0,
+            "max_iterations": request.max_iterations or 3,
+            "continue_loop": False,
+            "remaining_tasks": [],
+            "loop_notes": [],
         }
 
         final_state = dict(initial_state)
