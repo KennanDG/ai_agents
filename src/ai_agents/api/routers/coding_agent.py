@@ -147,12 +147,6 @@ def _is_ignored_repository_dir(name: str) -> bool:
 
 
 
-@router.get("/token")
-async def websocket_token() -> dict:
-    token = generate_websocket_token()
-    return {"token": token}
-
-
 @router.get("/repository/tree", response_model=RepositoryTreeResponse)
 def repository_tree(
     repo_root: str = Query(".", description="Absolute or service-relative repository root."),
@@ -253,6 +247,11 @@ def repository_file(
 #######################################################################
 ############################## WebSocket ##############################
 #######################################################################
+
+
+
+
+############################## File attachment helpers ##############################
 def _coerce_message_content_to_text(content: Any) -> str:
     if isinstance(content, str):
         return content.strip()
@@ -380,6 +379,60 @@ def _truncate_text(value: str, max_chars: int) -> tuple[str, bool]:
 
 
 
+def _find_matching_repo_text_file(
+    *,
+    repo_root: Path,
+    name: str,
+    content: str,
+) -> str | None:
+    
+    target_name = Path(name).name
+    candidates: list[tuple[str, str]] = []
+
+    for current_dir, dir_names, file_names in os.walk(repo_root):
+        dir_names[:] = [
+            directory_name
+            for directory_name in dir_names
+            if not _is_ignored_repository_dir(directory_name)
+        ]
+
+        if target_name not in file_names:
+            continue
+
+        file_path = Path(current_dir) / target_name
+
+        try:
+            size = file_path.stat().st_size
+            if size > MAX_REPOSITORY_FILE_BYTES:
+                continue
+
+            raw = file_path.read_bytes()
+            if b"\0" in raw[:4096]:
+                continue
+
+            text = raw.decode("utf-8", errors="replace")
+            relative_path = file_path.relative_to(repo_root).as_posix()
+            candidates.append((relative_path, text))
+        except OSError:
+            continue
+
+    exact_matches = [
+        relative_path
+        for relative_path, text in candidates
+        if text == content or text.rstrip("\n") == content.rstrip("\n")
+    ]
+
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+
+    if len(candidates) == 1:
+        return candidates[0][0]
+
+    return None
+
+
+
+
 def _normalize_attached_files(
     *,
     request: CodingAgentRunRequest,
@@ -446,9 +499,10 @@ def _normalize_attached_files(
                 errors.append(f"Skipped repo attachment {path}: {exc}")
                 continue
 
-        else:
+        else: # source == "upload"
             data_url = attached.data_url
 
+            # If attachment is an image
             if data_url:
                 try:
                     parsed_mime_type, raw = _parse_image_data_url(data_url)
@@ -467,6 +521,20 @@ def _normalize_attached_files(
                     f"Skipped image attachment {name}: missing base64 data_url payload."
                 )
                 continue
+
+            # Checks if uploaded file is an existing repo file
+            if content.strip():
+                matched_repo_path = _find_matching_repo_text_file(
+                    repo_root=repo_root,
+                    name=name,
+                    content=content,
+                )
+
+                if matched_repo_path:
+                    source = "repo"
+                    path = matched_repo_path
+
+
 
         if not content.strip():
             errors.append(f"Skipped attachment {name}: empty content.")
@@ -509,6 +577,14 @@ def _normalize_attached_files(
     return normalized, errors
 
 
+
+
+
+
+
+
+
+############################## Stream helpers ##############################
 def _new_thread_id() -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     return f"coding-run-{timestamp}-{uuid4().hex[:8]}"
@@ -778,6 +854,15 @@ async def _run_and_forward_events(
 
     finally:
         await worker_task
+
+
+
+
+
+@router.get("/token")
+async def websocket_token() -> dict:
+    token = generate_websocket_token()
+    return {"token": token}
 
 
 

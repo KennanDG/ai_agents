@@ -46,7 +46,6 @@ const asRecordArray = (value: unknown): Record<string, unknown>[] | undefined =>
 }
 
 
-//TODO: Add c++, rust, and java files
 const languageFromPath = (path: string) => {
   const extension = path.split(".").at(-1)?.toLowerCase();
   switch (extension) {
@@ -393,7 +392,14 @@ const App = () => {
           </label>
         </div>
 
-        <TaskPanel messages={messages} run={run} onSubmit={submitPrompt} allowWrite={allowWrite} />
+        <TaskPanel
+          messages={messages}
+          run={run}
+          onSubmit={submitPrompt}
+          allowWrite={allowWrite}
+          activePath={activePath}
+          activeFile={activeFile}
+        />
       </div>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">

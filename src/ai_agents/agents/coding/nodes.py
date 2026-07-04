@@ -284,7 +284,6 @@ def _format_attached_files_for_context(state: CodingAgentState) -> tuple[str, li
 
 
 
-
 def _attached_file_summary(state: CodingAgentState) -> str:
     attached_files = list(state.get("attached_files") or [])
 
@@ -302,6 +301,83 @@ def _attached_file_summary(state: CodingAgentState) -> str:
         lines.append(f"- {label} ({source}, {len(content)} chars)")
 
     return "\n".join(lines)
+
+
+def _resolve_existing_repo_path(
+    *,
+    repo_root: Path,
+    candidate: str,
+    repo_files: list[str],
+) -> str | None:
+    
+    candidate = candidate.strip().replace("\\", "/").lstrip("/")
+
+    if not candidate:
+        return None
+
+    candidate_path = Path(candidate)
+
+    if candidate_path.is_absolute() or ".." in candidate_path.parts:
+        return None
+
+    exact = (repo_root / candidate).resolve()
+
+    try:
+        root = repo_root.resolve()
+
+        if exact.is_file() and (exact == root or root in exact.parents):
+            return exact.relative_to(root).as_posix()
+        
+    except OSError:
+        return None
+
+    suffix_matches = [
+        path for path in repo_files
+        if path == candidate or path.endswith(f"/{candidate}")
+    ]
+
+    if len(suffix_matches) == 1:
+        return suffix_matches[0]
+
+
+    basename = candidate_path.name
+
+    basename_matches = [
+        path for path in repo_files
+        if Path(path).name == basename
+    ]
+
+    if len(basename_matches) == 1:
+        return basename_matches[0]
+
+    return None
+
+
+
+def _resolve_context_candidate_paths(
+    *,
+    repo_root: Path,
+    candidate_paths: list[str],
+    repo_files: list[str],
+) -> tuple[list[str], list[str]]:
+
+    resolved: list[str] = []
+    unresolved: list[str] = []
+
+    for candidate in candidate_paths:
+        path = _resolve_existing_repo_path(
+            repo_root=repo_root,
+            candidate=candidate,
+            repo_files=repo_files,
+        )
+
+        if path:
+            resolved.append(path)
+        else:
+            unresolved.append(candidate)
+
+    return dedupe(resolved), dedupe(unresolved)
+
 
 
 def _format_loop_context_focus(state: CodingAgentState) -> str:
@@ -328,6 +404,7 @@ def _format_loop_context_focus(state: CodingAgentState) -> str:
         lines.append(bullets([str(item) for item in loop_notes]))
 
     return "\n".join(lines).strip()
+
 
 
 def _derive_loop_search_requests(
@@ -655,7 +732,8 @@ def gather_context_node(
 
     ################## Workspace repo files ##################
     try:
-        root_files = filter_context_paths(list_files(repo_root, ".", max_depth=6))[: cfg.max_search_results]
+        all_repo_files = filter_context_paths(list_files(repo_root, ".", max_depth=12))
+        root_files = all_repo_files[: cfg.max_search_results]
         context.append("Repository files:\n" + "\n".join(root_files))
 
     except Exception as exc:
@@ -791,7 +869,20 @@ def gather_context_node(
             errors.append(f"LLM context selection failed; using search-derived context only: {exc}")
             candidate_paths = paths_from_ranked_results(search_result_dicts) or paths_from_search_results(search_blocks)
 
-    for path in dedupe(filter_context_paths(candidate_paths))[:MAX_FILES_TO_INSPECT]:
+
+    ################## Resolve paths ##################
+    resolved_paths, unresolved_paths = _resolve_context_candidate_paths(
+        repo_root=repo_root,
+        candidate_paths=filter_context_paths(candidate_paths),
+        repo_files=all_repo_files,
+    )
+
+    for path in unresolved_paths:
+        errors.append(
+            f"Skipped non-repo or ambiguous context path selected by navigator: {path}"
+        )
+
+    for path in resolved_paths[:MAX_FILES_TO_INSPECT]:
         try:
             content = read_file(repo_root, path, max_chars=cfg.max_file_chars)
             files_inspected.append(path)
@@ -799,6 +890,7 @@ def gather_context_node(
 
         except Exception as exc:
             errors.append(f"Could not read {path}: {exc}")
+
 
     return {
         "context": context,
@@ -874,9 +966,23 @@ def patch_node(
             "errors": [*errors, f"LLM patching failed on attempt {patch_attempts}: {exc}"],
             "status": "patch_failed",
         }
+    
+
+    repo_files = filter_context_paths(list_files(repo_root, ".", max_depth=12))
 
     for edit in decision.edits:
+
         path = edit.path.strip()
+
+        resolved_path = _resolve_existing_repo_path(
+            repo_root=repo_root,
+            candidate=path,
+            repo_files=repo_files,
+        )
+
+        if resolved_path and resolved_path != path:
+            errors.append(f"Resolved patch path {path} to {resolved_path}.")
+            path = resolved_path
 
         if not path or is_forbidden_write_path(path):
             errors.append(f"Skipped forbidden or empty write path: {path}")

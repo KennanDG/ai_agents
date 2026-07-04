@@ -1,6 +1,6 @@
 import { ArrowUp, Check, Circle, Paperclip, ShieldCheck, Sparkles } from "lucide-react";
 import { type ChangeEvent, type SubmitEvent, type DragEvent, useRef, useState } from "react";
-import type { AgentMessage, AgentRunState } from "../types";
+import type { AgentMessage, AgentRunState, RepositoryFile } from "../types";
 import type { CodingAgentAttachedFile } from "../lib/codingAgentSocket";
 
 interface TaskPanelProps {
@@ -8,8 +8,16 @@ interface TaskPanelProps {
   run: AgentRunState;
   onSubmit: (prompt: string, attachedFiles: CodingAgentAttachedFile[]) => void;
   allowWrite: boolean;
+  activePath?: string | null;
+  activeFile?: RepositoryFile | null;
 }
 
+
+
+
+/*
+ =============   Helpers  =============
+*/
 
 const statusClass = {
   disconnected: "border-rose-500/20 bg-rose-500/8 text-rose-300",
@@ -56,7 +64,11 @@ const readAsDataUrl = (file: File) =>
   });
 
 
-export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProps) => {
+
+/*
+   =============  Component  =============
+*/
+export const TaskPanel = ({ messages, run, onSubmit, allowWrite, activePath, activeFile }: TaskPanelProps) => {
   const [prompt, setPrompt] = useState("");
   const [attachedFiles, setAttachedFiles] = useState<CodingAgentAttachedFile[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -67,22 +79,36 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProp
 
 
 
-  const handleSubmit = (event: SubmitEvent<HTMLFormElement>) => {
-    event.preventDefault();
 
-    const trimmed = prompt.trim();
-    if (!trimmed || isRunning) return;
+  const attachActiveRepoFile = () => {
+    if (!activePath) {
+      setAttachmentError("Open a repository file before attaching it as repo context.");
+      return;
+    }
 
-    onSubmit(trimmed, attachedFiles);
+    setAttachmentError(null);
 
-    setPrompt("");
-    setAttachedFiles([]);
+    setAttachedFiles((prev) => {
+      if (prev.some((file) => file.source === "repo" && file.path === activePath)) {
+        return prev;
+      }
+
+      return [
+        ...prev,
+        {
+          name: activePath.split("/").at(-1) ?? activePath,
+          path: activePath,
+          source: "repo",
+          content: null,
+          data_url: null,
+          mime_type: null,
+          size: activeFile?.size ?? null,
+        },
+      ];
+    });
   };
 
 
-  const handleAttachClick = () => {
-    fileInputRef.current?.click();
-  };
 
 
   const processFiles = (files: File[]) => {
@@ -156,6 +182,27 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProp
       }
     });
   };
+
+
+
+
+  const handleSubmit = (event: SubmitEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    const trimmed = prompt.trim();
+    if (!trimmed || isRunning) return;
+
+    onSubmit(trimmed, attachedFiles);
+
+    setPrompt("");
+    setAttachedFiles([]);
+  };
+
+
+
+  const handleAttachClick = () => {
+    fileInputRef.current?.click();
+  };
   
   
 
@@ -208,6 +255,7 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProp
 
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-panel-soft">
+
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-4">
         <Sparkles size={15} className="text-accent-light" />
         <h1 className="text-xs font-semibold text-ink">Agent session</h1>
@@ -215,6 +263,7 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProp
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+
         <div className="mb-5 rounded-lg border border-line bg-surface p-3">
           <div className="mb-2.5 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-muted">
             <ShieldCheck size={13} /> Plan
@@ -257,9 +306,12 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProp
             </article>
           ))}
         </div>
+
       </div>
 
+
       <form className="shrink-0 border-t border-line p-3" onSubmit={handleSubmit}>
+        
         <input
           type="file"
           ref={fileInputRef}
@@ -268,6 +320,7 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProp
           accept=".c,.c++,.cc,.cpp,.cxx,.h,.hh,.hpp,.hxx,.java,.rs,.css,.csv,.html,.js,.jsx,.json,.md,.py,.sql,.toml,.ts,.tsx,.txt,.xml,.yaml,.yml,image/png,image/jpeg,image/webp"
           onChange={handleFileChange}
         />
+
         <div
           onDragOver={handleDragOver}
           onDragEnter={handleDragEnter}
@@ -275,7 +328,9 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProp
           onDrop={handleDrop}
           className={`relative ${isDragOver ? "ring-2 ring-accent/30" : ""}`}
         >
+
           <div className="rounded-lg border border-line-strong bg-surface p-2.5 focus-within:border-accent/70 focus-within:ring-1 focus-within:ring-accent/20">
+            
             <label htmlFor="agent-prompt" className="sr-only">Message the coding agent</label>
             <textarea
               id="agent-prompt"
@@ -292,6 +347,7 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProp
               placeholder="Ask the agent to change your code…"
               className="w-full resize-none bg-transparent text-xs leading-5 text-ink outline-none placeholder:text-faint"
             />
+
             {attachedFiles.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-1">
                 {attachedFiles.map((file, idx) => (
@@ -313,8 +369,28 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProp
               <p className="mt-2 text-[10px] leading-4 text-rose-300">{attachmentError}</p>
             ) : null}
             <div className="mt-2 flex items-center">
-              <button type="button" className="icon-button" aria-label="Attach context" title="Attach context" onClick={handleAttachClick}><Paperclip size={14} /></button>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Attach local file"
+                title="Attach local file"
+                onClick={handleAttachClick}
+              >
+                <Paperclip size={14} />
+              </button>
+
+              <button
+                type="button"
+                className="ml-1 rounded-md border border-line px-2 py-1 text-[10px] text-muted hover:border-accent/60 hover:text-ink"
+                aria-label="Attach open repository file"
+                title="Attach open repository file"
+                onClick={attachActiveRepoFile}
+              >
+                Attach open file
+              </button>
+
               <span className="ml-1 text-[9px] text-faint">{isRunning ? "Agent running" : allowWrite ? "Write mode" : "Read mode"}</span>
+              
               <button
                 type="submit"
                 disabled={!prompt.trim() || isRunning}
@@ -323,13 +399,17 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProp
               >
                 <ArrowUp size={15} />
               </button>
+              
             </div>
+
           </div>
+
           {isDragOver && (
             <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg border-2 border-dashed border-accent/60 bg-accent/10 pointer-events-none">
               <span className="text-[11px] font-semibold text-accent-light">Drop files to attach</span>
             </div>
           )}
+
         </div>
       </form>
     </section>
