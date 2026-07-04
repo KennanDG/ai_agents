@@ -44,6 +44,9 @@ export type AgentRunStatus =
   | "ready"
   | "running"
   | "completed"
+  | "approval_pending"
+  | "applied"
+  | "rejected"
   | "failed";
 
 export interface AgentRunState {
@@ -61,6 +64,11 @@ export interface AgentRunState {
   diffs: string[];
   validationCommands: string[];
   validationResults: Record<string, unknown>[];
+  approvalRequired: boolean;
+  approvalStatus: "not_required" | "pending" | "applied" | "rejected";
+  blockingValidationFailed: boolean;
+  advisoryValidationFailed: boolean;
+  appliedFiles: string[];
   report?: string | null;
   errors: string[];
   logs: string[];

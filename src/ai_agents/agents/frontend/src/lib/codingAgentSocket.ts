@@ -28,17 +28,27 @@ export type CodingAgentRunRequest = {
 export type CodingAgentRunResult = {
   thread_id: string;
   status: string;
+
   report?: string | null;
   selected_skill?: string | null;
   route_confidence?: number | null;
   route_reason?: string | null;
+  
   plan: string[];
   files_inspected: string[];
   patch_summary?: string | null;
   file_changes: Record<string, unknown>[];
   diffs: string[];
+  
   validation_commands: string[];
   validation_results: Record<string, unknown>[];
+  
+  approval_required: boolean;
+  approval_status: "not_required" | "pending" | "applied" | "rejected";
+  blocking_validation_failed: boolean;
+  advisory_validation_failed: boolean;
+  applied_files: string[];
+  
   memory_enabled: boolean;
   memory_namespace?: string | null;
   long_term_memories: string[];
@@ -89,6 +99,37 @@ export type CodingAgentServerEvent =
       };
     }
   | {
+      type: "run.approval_required";
+      run_id: string;
+      thread_id: string;
+      payload: {
+        thread_id: string;
+        changed_paths: string[];
+        blocking_validation_failed: boolean;
+        advisory_validation_failed: boolean;
+      };
+    }
+  | {
+      type: "run.applied";
+      run_id?: string | null;
+      thread_id: string;
+      payload: {
+        thread_id: string;
+        applied_files: string[];
+        remaining_paths: string[];
+        approval_status: "pending" | "applied";
+      };
+    }
+  | {
+      type: "run.rejected";
+      run_id?: string | null;
+      thread_id?: string | null;
+      payload: {
+        thread_id: string;
+        approval_status: "rejected";
+      };
+    }
+  | {
       type: "pong";
     };
 
@@ -113,6 +154,7 @@ const makeSocketUrl = (apiBaseUrl: string, apiKey?: string) => {
 
 
 export const createCodingAgentSocket = (options: CodingAgentSocketOptions) => {
+  
   const socket = new WebSocket(makeSocketUrl(options.apiBaseUrl, options.apiKey));
   const pendingMessages: string[] = [];
 
@@ -164,6 +206,25 @@ export const createCodingAgentSocket = (options: CodingAgentSocketOptions) => {
       sendMessage({
         type: "run.request",
         payload: request,
+      });
+    },
+
+    apply(threadId: string, paths?: string[]) {
+      sendMessage({
+        type: "run.apply.request",
+        payload: {
+          thread_id: threadId,
+          paths,
+        },
+      });
+    },
+
+    reject(threadId: string) {
+      sendMessage({
+        type: "run.reject.request",
+        payload: {
+          thread_id: threadId,
+        },
       });
     },
 

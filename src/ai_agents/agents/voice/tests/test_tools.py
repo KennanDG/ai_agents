@@ -3,10 +3,10 @@ from unittest.mock import patch
 
 import pytest
 
-from agents.voice.tools.web_search import web_search
-from agents.voice.tools.weather import get_weather
-from agents.voice.tools.translation import translate
-from agents.voice.tools.implement_change import implement_change
+from ai_agents.agents.voice.tools.web_search import web_search
+from ai_agents.agents.voice.tools.weather import get_weather
+from ai_agents.agents.voice.tools.translation import translate
+from ai_agents.agents.voice.tools.implement_change import implement_change
 
 
 class TestWebSearch:

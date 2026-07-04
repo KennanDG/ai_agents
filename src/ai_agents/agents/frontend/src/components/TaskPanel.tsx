@@ -7,6 +7,8 @@ interface TaskPanelProps {
   messages: AgentMessage[];
   run: AgentRunState;
   onSubmit: (prompt: string, attachedFiles: CodingAgentAttachedFile[]) => void;
+  onApproveAll: () => void;
+  onRejectChanges: () => void;
   allowWrite: boolean;
   activePath?: string | null;
   activeFile?: RepositoryFile | null;
@@ -25,6 +27,9 @@ const statusClass = {
   ready: "border-emerald-500/20 bg-emerald-500/8 text-emerald-300",
   running: "border-accent/20 bg-accent/8 text-accent-light",
   completed: "border-emerald-500/20 bg-emerald-500/8 text-emerald-300",
+  approval_pending: "border-accent/20 bg-accent/8 text-accent-light",
+  applied: "border-emerald-500/20 bg-emerald-500/8 text-emerald-300",
+  rejected: "border-rose-500/20 bg-rose-500/8 text-rose-300",
   failed: "border-rose-500/20 bg-rose-500/8 text-rose-300",
 };
 
@@ -68,7 +73,7 @@ const readAsDataUrl = (file: File) =>
 /*
    =============  Component  =============
 */
-export const TaskPanel = ({ messages, run, onSubmit, allowWrite, activePath, activeFile }: TaskPanelProps) => {
+export const TaskPanel = ({ messages, run, onSubmit, onApproveAll, onRejectChanges, allowWrite, activePath, activeFile }: TaskPanelProps) => {
   const [prompt, setPrompt] = useState("");
   const [attachedFiles, setAttachedFiles] = useState<CodingAgentAttachedFile[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -293,6 +298,25 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite, activePath, act
         </div>
 
         <div className="space-y-4">
+          {run.approvalStatus === "pending" ? (
+            <div className="mb-4 rounded-lg border border-amber-400/30 bg-amber-400/10 p-3">
+              <p className="text-[11px] leading-5 text-amber-100">
+                The agent produced file changes. Validation results are available, but final repo write is waiting for your approval.
+                {run.blockingValidationFailed ? " Blocking validation failed, so review carefully before applying." : ""}
+                {run.advisoryValidationFailed ? " Advisory validation warnings were reported." : ""}
+              </p>
+
+              <div className="mt-3 flex gap-2">
+                <button type="button" className="primary-button" onClick={onApproveAll}>
+                  Apply all changes
+                </button>
+                <button type="button" className="secondary-button" onClick={onRejectChanges}>
+                  Reject changes
+                </button>
+              </div>
+            </div>
+          ) : null}
+
           {messages.map((message) => (
             <article key={message.id} className={message.role === "user" ? "message-user" : "message-agent"}>
               <div className="mb-1.5 flex items-center gap-2 text-[9px] font-semibold uppercase tracking-wider text-faint">
@@ -305,6 +329,7 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite, activePath, act
               </p>
             </article>
           ))}
+          
         </div>
 
       </div>

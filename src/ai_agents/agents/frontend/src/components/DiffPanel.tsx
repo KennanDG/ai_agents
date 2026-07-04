@@ -8,11 +8,22 @@ interface DiffPanelProps {
   change?: FileChange | null;
   isLoading?: boolean;
   error?: string | null;
+  canApprove?: boolean;
+  onAcceptFile?: (path: string) => void;
+  onRejectChanges?: () => void;
 }
 
 
 
-export const DiffPanel = ({ file, change, isLoading = false, error }: DiffPanelProps) => {
+export const DiffPanel = ({
+  file,
+  change,
+  isLoading = false,
+  error,
+  canApprove = false,
+  onAcceptFile,
+  onRejectChanges,
+}: DiffPanelProps) => {
   const path = change?.path ?? file?.path ?? "No file selected";
   const language = change?.language ?? file?.language ?? "plaintext";
   const original = change?.original ?? file?.content ?? "";
@@ -84,8 +95,23 @@ export const DiffPanel = ({ file, change, isLoading = false, error }: DiffPanelP
         </p>
         {hasChange ? (
           <div className="flex gap-2">
-            <button type="button" className="secondary-button"><Undo2 size={13} /> Reject</button>
-            <button type="button" className="primary-button"><Check size={13} /> Accept file</button>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={!canApprove}
+              onClick={onRejectChanges}
+            >
+              <Undo2 size={13} /> Reject
+            </button>
+
+            <button
+              type="button"
+              className="primary-button"
+              disabled={!canApprove || !change?.path}
+              onClick={() => change?.path && onAcceptFile?.(change.path)}
+            >
+              <Check size={13} /> Accept file
+            </button>
           </div>
         ) : null}
       </footer>

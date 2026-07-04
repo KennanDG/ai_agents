@@ -74,6 +74,8 @@ from ai_agents.agents.coding.tools.web_search import web_search
 from ai_agents.agents.coding.tools.search import format_search_results, search_repository
 
 from ai_agents.agents.coding.utils.validation import (
+    advisory_validation_failures,
+    blocking_validation_failures,
     default_validation_commands,
     validation_failed_results,
 )
@@ -1147,8 +1149,8 @@ def validate_node(
     state: CodingAgentState,
     cfg: CodingAgentSettings = default_settings,
 ) -> CodingAgentState:
-    workspace_root = Path(state.get("workspace_root") or ".").resolve()
-    commands = state.get("validation_commands") or default_validation_commands(workspace_root)
+    repo_root = resolve_repo_root(state, cfg)
+    commands = state.get("validation_commands") or default_validation_commands(repo_root)
 
     changed_files = [
         item.get("path", "")
@@ -1158,7 +1160,7 @@ def validate_node(
 
     try:
         suite = run_validation_suite(
-            workspace_root,
+            repo_root,
             changed_files=changed_files,
             requested_commands=commands,
             allow_shell=cfg.allow_shell,
@@ -1174,20 +1176,35 @@ def validate_node(
                 "returncode": 1,
                 "stdout": "",
                 "stderr": str(exc),
+                "reason": "Validation harness failed. Treating this as advisory so the user can review the patch.",
+                "passed": False,
             }
         ]
-        return {
-            "validation_results": results,
-            "errors": [*state.get("errors", []), f"Validation suite failed: {exc}"],
-            "status": "validation_failed",
-        }
+
+    blocking_failures = blocking_validation_failures(results)
+    advisory_failures = advisory_validation_failures(results)
+
+    errors = list(state.get("errors", []))
+
+    if blocking_failures:
+        errors.append(
+            "Blocking validation failed. Patch is still available for human review."
+        )
+
+    if advisory_failures:
+        errors.append(
+            "Advisory validation warnings were reported. Patch is still available for human approval."
+        )
 
     return {
         "validation_results": results,
-        "status": "validation_failed" if validation_failed_results(results) else "validated",
+        "blocking_validation_failed": bool(blocking_failures),
+        "advisory_validation_failed": bool(advisory_failures),
+        "errors": errors,
+        # Important: do not return validation_failed here.
+        # The graph should continue to report/approval.
+        "status": "validated",
     }
-
-
 
 
 def assess_progress_node(
