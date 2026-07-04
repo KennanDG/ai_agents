@@ -24,6 +24,9 @@ CodingAgentStatus = Literal[
     "assessed",
     "loop_limit_reached",
     "reported",
+    "approval_pending",
+    "applied",
+    "rejected",
 ]
 
 
@@ -67,6 +70,13 @@ class CodingAgentState(TypedDict, total=False):
     patch_summary: str
     validation_commands: list[str]
     validation_results: list[dict[str, Any]]
+
+    blocking_validation_failed: bool
+    advisory_validation_failed: bool
+
+    approval_required: bool
+    approval_status: Literal["not_required", "pending", "applied", "rejected"]
+    applied_files: list[str]
 
     report: str
     status: CodingAgentStatus

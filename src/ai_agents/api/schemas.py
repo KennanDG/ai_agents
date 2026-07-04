@@ -58,6 +58,12 @@ class CodingAgentRunResult(BaseModel):
     validation_commands: List[str] = Field(default_factory=list)
     validation_results: List[Dict[str, Any]] = Field(default_factory=list)
 
+    approval_required: bool = False
+    approval_status: str = "not_required"
+    blocking_validation_failed: bool = False
+    advisory_validation_failed: bool = False
+    applied_files: list[str] = Field(default_factory=list)
+
     memory_enabled: bool = False
     memory_namespace: str | None = None
     long_term_memories: List[str] = Field(default_factory=list)
@@ -68,8 +74,14 @@ class CodingAgentRunResult(BaseModel):
 
 
 class CodingAgentClientMessage(BaseModel):
-    type: Literal["run.request", "ping"]
-    payload: Dict[str, Any] = Field(default_factory=dict)
+    type: Literal[
+        "ping",
+        "run.request",
+        "run.apply.request",
+        "run.reject.request",
+    ]
+    
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class CodingAgentServerEvent(BaseModel):
@@ -79,12 +91,16 @@ class CodingAgentServerEvent(BaseModel):
         "node.completed",
         "run.completed",
         "run.failed",
+        "run.approval_required",
+        "run.applied",
+        "run.rejected",
         "pong",
     ]
+
     run_id: str | None = None
     thread_id: str | None = None
     node: str | None = None
-    payload: Dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 

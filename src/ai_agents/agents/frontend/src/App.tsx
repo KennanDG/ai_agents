@@ -29,6 +29,11 @@ const initialRunState: AgentRunState = {
   diffs: [],
   validationCommands: [],
   validationResults: [],
+  approvalRequired: false,
+  approvalStatus: "not_required",
+  blockingValidationFailed: false,
+  advisoryValidationFailed: false,
+  appliedFiles: [],
   errors: [],
   logs: [],
 };
@@ -46,14 +51,25 @@ const asRecordArray = (value: unknown): Record<string, unknown>[] | undefined =>
 }
 
 
-//TODO: Add c++, rust, and java files
 const languageFromPath = (path: string) => {
   const extension = path.split(".").at(-1)?.toLowerCase();
   switch (extension) {
+    case "c":
+    case "cc":
+    case "cpp":
+    case "cxx":
+    case "c++":
+    case "h":
+    case "hh":
+    case "hpp":
+    case "hxx":
+      return "cpp";
     case "css":
       return "css";
     case "html":
       return "html";
+    case "java":
+      return "java";
     case "js":
     case "jsx":
       return "javascript";
@@ -63,6 +79,8 @@ const languageFromPath = (path: string) => {
       return "markdown";
     case "py":
       return "python";
+    case "rs":
+      return "rust";
     case "ts":
     case "tsx":
       return "typescript";
@@ -117,6 +135,11 @@ const mergeResult = (state: AgentRunState, result: CodingAgentRunResult): AgentR
     diffs: result.diffs ?? state.diffs,
     validationCommands: result.validation_commands ?? state.validationCommands,
     validationResults: result.validation_results ?? state.validationResults,
+    approvalRequired: Boolean(result.approval_required),
+    approvalStatus: result.approval_status ?? state.approvalStatus,
+    blockingValidationFailed: Boolean(result.blocking_validation_failed),
+    advisoryValidationFailed: Boolean(result.advisory_validation_failed),
+    appliedFiles: result.applied_files ?? state.appliedFiles,
     report: result.report,
     errors: result.errors ?? state.errors,
   };
@@ -195,6 +218,41 @@ const runReducer = (state: AgentRunState, event: CodingAgentServerEvent): AgentR
         logs: [...state.logs, `[error] ${event.payload.error}`],
       };
 
+    case "run.approval_required":
+      return {
+        ...state,
+        status: "approval_pending",
+        runId: event.run_id,
+        threadId: event.thread_id,
+        approvalRequired: true,
+        approvalStatus: "pending",
+        blockingValidationFailed: event.payload.blocking_validation_failed,
+        advisoryValidationFailed: event.payload.advisory_validation_failed,
+        logs: [...state.logs, "[approval] waiting for user approval"],
+      };
+
+    case "run.applied":
+      return {
+        ...state,
+        status: event.payload.approval_status === "applied" ? "applied" : "approval_pending",
+        approvalStatus: event.payload.approval_status,
+        appliedFiles: [...state.appliedFiles, ...event.payload.applied_files],
+        logs: [
+          ...state.logs,
+          `[approval] applied ${event.payload.applied_files.length} file(s)`,
+        ],
+      };
+
+    case "run.rejected":
+      return {
+        ...state,
+        status: "rejected",
+        approvalStatus: "rejected",
+        approvalRequired: false,
+        logs: [...state.logs, "[approval] rejected changes"],
+      };
+
+
     case "pong":
       return { ...state, logs: [...state.logs, "[socket] pong"] };
 
@@ -205,25 +263,35 @@ const runReducer = (state: AgentRunState, event: CodingAgentServerEvent): AgentR
 
 
 const App = () => {
-  const [run, dispatchRun] = useReducer(runReducer, initialRunState);
+  const [activePath, setActivePath] = useState<string | null>(null);
+  const [activeFile, setActiveFile] = useState<RepositoryFile | null>(null);
+  const [allowWrite, setAllowWrite] = useState(true);
+
+  const [fileLoading, setFileLoading] = useState(false);
+  const [fileError, setFileError] = useState<string | null>(null);
+  
+  const [memoryEnabled, setMemoryEnabled] = useState(true);
   const [messages, setMessages] = useState<AgentMessage[]>([]);
+
+  // const [outputOpen, setOutputOpen] = useState(false);
+
   const [repoRoot, setRepoRoot] = useState(configuredRepoRoot);
   const [repoEntries, setRepoEntries] = useState<RepositoryTreeEntry[]>([]);
   const [repoLoading, setRepoLoading] = useState(false);
   const [repoError, setRepoError] = useState<string | null>(null);
-  const [activePath, setActivePath] = useState<string | null>(null);
-  const [activeFile, setActiveFile] = useState<RepositoryFile | null>(null);
-  const [fileLoading, setFileLoading] = useState(false);
-  const [fileError, setFileError] = useState<string | null>(null);
-  const [allowWrite, setAllowWrite] = useState(true);
-  const [memoryEnabled, setMemoryEnabled] = useState(true);
+  const [run, dispatchRun] = useReducer(runReducer, initialRunState);
+
+  // const [sidebarOpen, setSidebarOpen] = useState(true);
   const socketRef = useRef<ReturnType<typeof createCodingAgentSocket> | null>(null);
 
-  const repoName = useMemo(() => repoRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? "repository", [repoRoot]);
+  
   const activeChange = useMemo(
     () => run.fileChanges.find((change) => change.path === activePath && (change.original || change.modified)) ?? null,
     [activePath, run.fileChanges],
   );
+
+  const repoName = useMemo(() => repoRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? "repository", [repoRoot]);
+
 
   const refreshRepository = useCallback(async () => {
     setRepoLoading(true);
@@ -243,9 +311,13 @@ const App = () => {
     }
   }, []);
 
+
+
   useEffect(() => {
     void refreshRepository();
   }, [refreshRepository]);
+
+
 
   useEffect(() => {
     if (!activePath) {
@@ -271,6 +343,8 @@ const App = () => {
 
     return () => abortController.abort();
   }, [activePath, repoRoot]);
+
+
 
   useEffect(() => {
     const client = createCodingAgentSocket({
@@ -312,6 +386,27 @@ const App = () => {
     };
   }, []);
 
+
+
+
+  const approveAllChanges = () => {
+    if (!run.threadId) return;
+    socketRef.current?.apply(run.threadId);
+  };
+
+  const approveFileChange = (path: string) => {
+    if (!run.threadId) return;
+    socketRef.current?.apply(run.threadId, [path]);
+  };
+
+  const rejectChanges = () => {
+    if (!run.threadId) return;
+    socketRef.current?.reject(run.threadId);
+  };
+
+
+
+  
   const submitPrompt = (prompt: string, attachedFiles: CodingAgentAttachedFile[] = []) => {
     const attachmentLabel =
       attachedFiles.length > 0
@@ -340,9 +435,12 @@ const App = () => {
     });
   };
 
+
+
   return (
     <main className="flex h-dvh min-h-0 min-w-0 overflow-hidden bg-canvas text-ink">
       <ActivityBar />
+
 
       <Sidebar
         repoName={repoName}
@@ -355,6 +453,23 @@ const App = () => {
         onSelect={setActivePath}
         onRefresh={refreshRepository}
       />
+
+      {/* {sidebarOpen ? (
+        <div className="hidden lg:flex">
+          <Sidebar
+            repoName={repoName}
+            repoRoot={repoRoot}
+            entries={repoEntries}
+            changes={run.fileChanges}
+            activePath={activePath}
+            isLoading={repoLoading}
+            error={repoError}
+            onSelect={setActivePath}
+            onRefresh={refreshRepository}
+          />
+        </div>
+        
+      ) : null} */}
 
       <div className="flex min-h-0 w-90 shrink-0 flex-col border-r border-line bg-panel-soft">
         <div className="flex shrink-0 items-center gap-3 border-b border-line px-3 py-2">
@@ -379,12 +494,34 @@ const App = () => {
           </label>
         </div>
 
-        <TaskPanel messages={messages} run={run} onSubmit={submitPrompt} allowWrite={allowWrite} />
+        <TaskPanel
+          messages={messages}
+          run={run}
+          onSubmit={submitPrompt}
+          allowWrite={allowWrite}
+          activePath={activePath}
+          activeFile={activeFile}
+          onApproveAll={approveAllChanges}
+          onRejectChanges={rejectChanges}
+        />
       </div>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <DiffPanel file={activeFile} change={activeChange} isLoading={fileLoading} error={fileError} />
+        <DiffPanel
+          file={activeFile}
+          change={activeChange}
+          isLoading={fileLoading}
+          error={fileError}
+          canApprove={run.approvalStatus === "pending"}
+          onAcceptFile={approveFileChange}
+          onRejectChanges={rejectChanges}
+        />
+
         <OutputPanel run={run} />
+        
+        {/* {outputOpen || run.errors.length > 0 ? (
+          <OutputPanel run={run} />
+        ) : null} */}
       </div>
     </main>
   );

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import time
 from dotenv import load_dotenv
 
 from fastapi import Request, WebSocket, status
@@ -50,12 +51,48 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+_websocket_tokens: dict[str, float] = {}
+MAX_TOKEN_AGE_SECONDS = 60
+
+
+def generate_websocket_token() -> str:
+    now = time.monotonic()
+    _cleanup_expired_tokens(now)
+    token = secrets.token_urlsafe(32)
+    expiry = now + MAX_TOKEN_AGE_SECONDS
+    _websocket_tokens[token] = expiry
+    return token
+
+
+def _cleanup_expired_tokens(now: float) -> None:
+    expired = [t for t, exp in _websocket_tokens.items() if exp <= now]
+    for t in expired:
+        del _websocket_tokens[t]
+
+
 async def authorize_websocket(websocket: WebSocket) -> bool:
     """
     Browser WebSocket clients cannot set arbitrary headers, so allow either:
     - x-api-key header for non-browser clients
     - api_key query parameter for the Electron/browser renderer
+    - token query parameter (short-lived websocket token) for frontend clients
     """
+    token = websocket.query_params.get("token")
+
+    if token:
+        now = time.monotonic()
+        stored_expiry = _websocket_tokens.get(token)
+        if stored_expiry is None or stored_expiry <= now:
+            await websocket.close(
+                code=status.WS_1008_POLICY_VIOLATION,
+                reason="Invalid or expired token",
+            )
+            return False
+        # single-use token: remove after successful validation
+        del _websocket_tokens[token]
+        _cleanup_expired_tokens(now)
+        return True
+
     expected = resolved_api_key()
 
     if not expected:

@@ -6,7 +6,7 @@ import base64
 import binascii
 import mimetypes
 import re
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -25,7 +25,7 @@ from ai_agents.agents.coding.memory import (
     coding_agent_persistence,
 )
 from ai_agents.agents.coding.settings import settings as default_coding_settings
-from ai_agents.api.auth import authorize_websocket
+from ai_agents.api.auth import authorize_websocket, generate_websocket_token
 from ai_agents.api.schemas import (
     CodingAgentClientMessage,
     CodingAgentRunRequest,
@@ -36,6 +36,7 @@ from ai_agents.api.schemas import (
     RepositoryTreeResponse,
 )
 from ai_agents.agents.coding.sandbox import (
+    CodingSandbox,
     apply_sandbox_files_to_repo,
     cleanup_coding_sandbox,
     create_coding_sandbox,
@@ -100,6 +101,40 @@ LANGUAGE_BY_EXTENSION = {
 
 
 router = APIRouter(prefix="/coding-agent", tags=["coding-agent"])
+
+
+
+
+
+@dataclass
+class PendingCodingAgentRun:
+    run_id: str
+    thread_id: str
+    sandbox: CodingSandbox
+    final_state: dict[str, Any]
+    changed_paths: list[str]
+
+
+def _changed_paths_from_state(state: dict[str, Any]) -> list[str]:
+    paths: list[str] = []
+    seen: set[str] = set()
+
+    for item in state.get("file_changes", []):
+        if not isinstance(item, dict):
+            continue
+
+        path = str(item.get("path", "")).strip()
+
+        if not path or path in seen:
+            continue
+
+        paths.append(path)
+        seen.add(path)
+
+    return paths
+
+
+
 
 
 
@@ -247,6 +282,11 @@ def repository_file(
 #######################################################################
 ############################## WebSocket ##############################
 #######################################################################
+
+
+
+
+############################## File attachment helpers ##############################
 def _coerce_message_content_to_text(content: Any) -> str:
     if isinstance(content, str):
         return content.strip()
@@ -374,6 +414,60 @@ def _truncate_text(value: str, max_chars: int) -> tuple[str, bool]:
 
 
 
+def _find_matching_repo_text_file(
+    *,
+    repo_root: Path,
+    name: str,
+    content: str,
+) -> str | None:
+    
+    target_name = Path(name).name
+    candidates: list[tuple[str, str]] = []
+
+    for current_dir, dir_names, file_names in os.walk(repo_root):
+        dir_names[:] = [
+            directory_name
+            for directory_name in dir_names
+            if not _is_ignored_repository_dir(directory_name)
+        ]
+
+        if target_name not in file_names:
+            continue
+
+        file_path = Path(current_dir) / target_name
+
+        try:
+            size = file_path.stat().st_size
+            if size > MAX_REPOSITORY_FILE_BYTES:
+                continue
+
+            raw = file_path.read_bytes()
+            if b"\0" in raw[:4096]:
+                continue
+
+            text = raw.decode("utf-8", errors="replace")
+            relative_path = file_path.relative_to(repo_root).as_posix()
+            candidates.append((relative_path, text))
+        except OSError:
+            continue
+
+    exact_matches = [
+        relative_path
+        for relative_path, text in candidates
+        if text == content or text.rstrip("\n") == content.rstrip("\n")
+    ]
+
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+
+    if len(candidates) == 1:
+        return candidates[0][0]
+
+    return None
+
+
+
+
 def _normalize_attached_files(
     *,
     request: CodingAgentRunRequest,
@@ -440,9 +534,10 @@ def _normalize_attached_files(
                 errors.append(f"Skipped repo attachment {path}: {exc}")
                 continue
 
-        else:
+        else: # source == "upload"
             data_url = attached.data_url
 
+            # If attachment is an image
             if data_url:
                 try:
                     parsed_mime_type, raw = _parse_image_data_url(data_url)
@@ -461,6 +556,20 @@ def _normalize_attached_files(
                     f"Skipped image attachment {name}: missing base64 data_url payload."
                 )
                 continue
+
+            # Checks if uploaded file is an existing repo file
+            if content.strip():
+                matched_repo_path = _find_matching_repo_text_file(
+                    repo_root=repo_root,
+                    name=name,
+                    content=content,
+                )
+
+                if matched_repo_path:
+                    source = "repo"
+                    path = matched_repo_path
+
+
 
         if not content.strip():
             errors.append(f"Skipped attachment {name}: empty content.")
@@ -503,6 +612,14 @@ def _normalize_attached_files(
     return normalized, errors
 
 
+
+
+
+
+
+
+
+############################## Stream helpers ##############################
 def _new_thread_id() -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     return f"coding-run-{timestamp}-{uuid4().hex[:8]}"
@@ -528,6 +645,11 @@ def _public_result(state: dict[str, Any], thread_id: str) -> CodingAgentRunResul
         long_term_memories=list(state.get("long_term_memories") or []),
         memory_errors=list(state.get("memory_errors") or []),
         errors=list(state.get("errors") or []),
+        approval_required=bool(state.get("approval_required", False)),
+        approval_status=state.get("approval_status", "not_required"),
+        blocking_validation_failed=bool(state.get("blocking_validation_failed", False)),
+        advisory_validation_failed=bool(state.get("advisory_validation_failed", False)),
+        applied_files=list(state.get("applied_files") or []),
         raw=state,
     )
 
@@ -680,33 +802,22 @@ def _stream_coding_agent_worker(
                         ),
                     )
 
+        
         final_state["thread_id"] = thread_id
+
+        changed_paths = _changed_paths_from_state(final_state)
+        blocking_validation_failed = validation_failed_results(
+            final_state.get("validation_results", [])
+        )
+
+        approval_required = bool(request.allow_write and changed_paths)
+
+        final_state["blocking_validation_failed"] = blocking_validation_failed
+        final_state["approval_required"] = approval_required
+        final_state["approval_status"] = "pending" if approval_required else "not_required"
+        final_state["applied_files"] = []
+
         result = _public_result(final_state, thread_id)
-
-
-        # Apply changes to sandbox if validated & allow write on
-        changed_paths = [
-            item.get("path", "")
-            for item in final_state.get("file_changes", [])
-            if item.get("path")
-        ]
-
-        validation_failed = validation_failed_results(final_state.get("validation_results", []))
-
-        if request.allow_write and changed_paths and not validation_failed:
-            try:
-                applied_paths = apply_sandbox_files_to_repo(
-                    sandbox=sandbox,
-                    changed_paths=changed_paths,
-                )
-                final_state["applied_files"] = applied_paths
-            except Exception as exc:
-                final_state["errors"] = [
-                    *final_state.get("errors", []),
-                    f"Failed to apply sandbox changes to repository: {exc}",
-                ]
-
-
 
         _send_threadsafe(
             loop=loop,
@@ -719,25 +830,39 @@ def _stream_coding_agent_worker(
             ),
         )
 
-    except Exception as exc:
-        _send_threadsafe(
-            loop=loop,
-            queue=queue,
-            event=CodingAgentServerEvent(
-                type="run.failed",
+        if approval_required:
+            _send_threadsafe(
+                loop=loop,
+                queue=queue,
+                event=CodingAgentServerEvent(
+                    type="run.approval_required",
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    payload={
+                        "thread_id": thread_id,
+                        "changed_paths": changed_paths,
+                        "blocking_validation_failed": blocking_validation_failed,
+                        "advisory_validation_failed": bool(
+                            final_state.get("advisory_validation_failed", False)
+                        ),
+                    },
+                ),
+            )
+
+            return PendingCodingAgentRun(
                 run_id=run_id,
                 thread_id=thread_id,
-                payload={
-                    "error": str(exc),
-                    "error_type": type(exc).__name__,
-                },
-            ),
-        )
+                sandbox=sandbox,
+                final_state=final_state,
+                changed_paths=changed_paths,
+            )
+
+        cleanup_coding_sandbox(sandbox, keep=False)
+        return None
 
     finally:
-        if "sandbox" in locals():
-            cleanup_coding_sandbox(sandbox, keep=False)
         asyncio.run_coroutine_threadsafe(queue.put(None), loop)
+
 
 
 
@@ -746,7 +871,8 @@ async def _run_and_forward_events(
     *,
     websocket: WebSocket,
     request: CodingAgentRunRequest,
-) -> None:
+) -> PendingCodingAgentRun | None:
+    
     run_id = uuid4().hex
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
@@ -771,13 +897,25 @@ async def _run_and_forward_events(
             await websocket.send_json(event)
 
     finally:
-        await worker_task
+        pending_run = await worker_task
+    
+    return pending_run
+
+
+
+
+
+@router.get("/token")
+async def websocket_token() -> dict:
+    token = generate_websocket_token()
+    return {"token": token}
 
 
 
 
 @router.websocket("/ws")
 async def coding_agent_ws(websocket: WebSocket) -> None:
+   
     if not await authorize_websocket(websocket):
         return
 
@@ -792,6 +930,8 @@ async def coding_agent_ws(websocket: WebSocket) -> None:
             },
         ).model_dump()
     )
+
+    pending_runs: dict[str, PendingCodingAgentRun] = {}
 
     try:
         while True:
@@ -817,6 +957,8 @@ async def coding_agent_ws(websocket: WebSocket) -> None:
                 )
                 continue
 
+
+
             if message.type == "run.request":
                 try:
                     run_request = CodingAgentRunRequest.model_validate(message.payload)
@@ -832,10 +974,137 @@ async def coding_agent_ws(websocket: WebSocket) -> None:
                     )
                     continue
 
-                await _run_and_forward_events(
+                pending_run = await _run_and_forward_events(
                     websocket=websocket,
                     request=run_request,
                 )
+
+                if pending_run:
+                    pending_runs[pending_run.thread_id] = pending_run
+
+                continue
+            
+
+            if message.type == "run.apply.request":
+                payload = message.payload or {}
+                thread_id = str(payload.get("thread_id", "")).strip()
+                requested_paths = payload.get("paths")
+
+                pending_run = pending_runs.get(thread_id)
+
+                if not pending_run:
+                    await websocket.send_json(
+                        CodingAgentServerEvent(
+                            type="run.failed",
+                            thread_id=thread_id or None,
+                            payload={"error": "No pending approval run found for this thread."},
+                        ).model_dump()
+                    )
+                    continue
+
+                paths = (
+                    [str(path) for path in requested_paths]
+                    if isinstance(requested_paths, list) and requested_paths
+                    else pending_run.changed_paths
+                )
+
+                allowed = set(pending_run.changed_paths)
+                invalid = [path for path in paths if path not in allowed]
+
+                if invalid:
+                    await websocket.send_json(
+                        CodingAgentServerEvent(
+                            type="run.failed",
+                            run_id=pending_run.run_id,
+                            thread_id=thread_id,
+                            payload={
+                                "error": "Approval request included paths that are not pending.",
+                                "details": invalid,
+                            },
+                        ).model_dump()
+                    )
+                    continue
+
+                try:
+                    applied_paths = apply_sandbox_files_to_repo(
+                        sandbox=pending_run.sandbox,
+                        changed_paths=paths,
+                    )
+
+                    remaining_paths = [
+                        path for path in pending_run.changed_paths
+                        if path not in set(applied_paths)
+                    ]
+
+                    pending_run.final_state["applied_files"] = [
+                        *pending_run.final_state.get("applied_files", []),
+                        *applied_paths,
+                    ]
+
+                    if remaining_paths:
+                        pending_run.changed_paths = remaining_paths
+                        approval_status = "pending"
+                    else:
+                        approval_status = "applied"
+                        pending_run.final_state["approval_status"] = "applied"
+                        pending_run.final_state["status"] = "applied"
+                        cleanup_coding_sandbox(pending_run.sandbox, keep=False)
+                        pending_runs.pop(thread_id, None)
+
+                    await websocket.send_json(
+                        CodingAgentServerEvent(
+                            type="run.applied",
+                            run_id=pending_run.run_id,
+                            thread_id=thread_id,
+                            payload={
+                                "thread_id": thread_id,
+                                "applied_files": applied_paths,
+                                "remaining_paths": remaining_paths,
+                                "approval_status": approval_status,
+                            },
+                        ).model_dump()
+                    )
+
+                except Exception as exc:
+                    await websocket.send_json(
+                        CodingAgentServerEvent(
+                            type="run.failed",
+                            run_id=pending_run.run_id,
+                            thread_id=thread_id,
+                            payload={
+                                "error": f"Failed to apply approved files: {exc}",
+                                "error_type": type(exc).__name__,
+                            },
+                        ).model_dump()
+                    )
+
+                continue
+
+
+
+            if message.type == "run.reject.request":
+                payload = message.payload or {}
+                thread_id = str(payload.get("thread_id", "")).strip()
+                pending_run = pending_runs.pop(thread_id, None)
+
+                if pending_run:
+                    pending_run.final_state["approval_status"] = "rejected"
+                    pending_run.final_state["status"] = "rejected"
+                    cleanup_coding_sandbox(pending_run.sandbox, keep=False)
+
+                await websocket.send_json(
+                    CodingAgentServerEvent(
+                        type="run.rejected",
+                        thread_id=thread_id or None,
+                        payload={
+                            "thread_id": thread_id,
+                            "approval_status": "rejected",
+                        },
+                    ).model_dump()
+                )
+
+                continue
+
 
     except WebSocketDisconnect:
         return
