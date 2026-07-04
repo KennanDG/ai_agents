@@ -25,7 +25,7 @@ from ai_agents.agents.coding.memory import (
     coding_agent_persistence,
 )
 from ai_agents.agents.coding.settings import settings as default_coding_settings
-from ai_agents.api.auth import authorize_websocket
+from ai_agents.api.auth import authorize_websocket, generate_websocket_token
 from ai_agents.api.schemas import (
     CodingAgentClientMessage,
     CodingAgentRunRequest,
@@ -145,6 +145,12 @@ def _is_ignored_repository_dir(name: str) -> bool:
 
 
 
+
+
+@router.get("/token")
+async def websocket_token() -> dict:
+    token = generate_websocket_token()
+    return {"token": token}
 
 
 @router.get("/repository/tree", response_model=RepositoryTreeResponse)

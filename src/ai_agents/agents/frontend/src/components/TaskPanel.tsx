@@ -25,7 +25,7 @@ const MAX_TEXT_ATTACHMENT_BYTES = 1_000_000;
 const MAX_IMAGE_ATTACHMENT_BYTES = 5_000_000;
 
 const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
-const TEXT_FILE_EXTENSIONS = /\.(css|csv|html|js|jsx|json|md|py|sql|toml|ts|tsx|txt|xml|ya?ml)$/i;
+const TEXT_FILE_EXTENSIONS = /\.(c|cpp|cc|cxx|c\+\+|h|hpp|hh|hxx|css|csv|html|java|js|jsx|json|md|py|rs|sql|toml|ts|tsx|txt|xml|ya?ml)$/i;
 
 
 const isSupportedImage = (file: File) => {
@@ -265,7 +265,7 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProp
           ref={fileInputRef}
           className="sr-only"
           multiple
-          accept=".css,.csv,.html,.js,.jsx,.json,.md,.py,.sql,.toml,.ts,.tsx,.txt,.xml,.yaml,.yml,image/png,image/jpeg,image/webp"
+          accept=".c,.c++,.cc,.cpp,.cxx,.h,.hh,.hpp,.hxx,.java,.rs,.css,.csv,.html,.js,.jsx,.json,.md,.py,.sql,.toml,.ts,.tsx,.txt,.xml,.yaml,.yml,image/png,image/jpeg,image/webp"
           onChange={handleFileChange}
         />
         <div
@@ -282,6 +282,13 @@ export const TaskPanel = ({ messages, run, onSubmit, allowWrite }: TaskPanelProp
               rows={3}
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault();
+                  const form = event.currentTarget.closest('form');
+                  if (form) form.requestSubmit();
+                }
+              }}
               placeholder="Ask the agent to change your code…"
               className="w-full resize-none bg-transparent text-xs leading-5 text-ink outline-none placeholder:text-faint"
             />

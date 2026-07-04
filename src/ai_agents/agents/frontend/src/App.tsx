@@ -50,10 +50,22 @@ const asRecordArray = (value: unknown): Record<string, unknown>[] | undefined =>
 const languageFromPath = (path: string) => {
   const extension = path.split(".").at(-1)?.toLowerCase();
   switch (extension) {
+    case "c":
+    case "cc":
+    case "cpp":
+    case "cxx":
+    case "c++":
+    case "h":
+    case "hh":
+    case "hpp":
+    case "hxx":
+      return "cpp";
     case "css":
       return "css";
     case "html":
       return "html";
+    case "java":
+      return "java";
     case "js":
     case "jsx":
       return "javascript";
@@ -63,6 +75,8 @@ const languageFromPath = (path: string) => {
       return "markdown";
     case "py":
       return "python";
+    case "rs":
+      return "rust";
     case "ts":
     case "tsx":
       return "typescript";
