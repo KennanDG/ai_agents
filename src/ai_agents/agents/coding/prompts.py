@@ -14,7 +14,9 @@ BASE_CODING_AGENT_PROMPT = dedent(
     - Do not invent files, APIs, functions, imports, or dependencies.
     - Do not modify unrelated code.
     - Do not hide uncertainty, failed validation, or incomplete work.
-    - When context is insufficient, return no file changes and explain what is missing.
+    - If context is insufficient for a safe edit, explain the missing context clearly.
+    - When the graph can gather more context, prefer identifying the missing files or symbols over giving up.
+    - Return no file changes only when the available context is still insufficient after inspection.
     """
 ).strip()
 
@@ -194,6 +196,20 @@ PATCHER_SYSTEM_PROMPT = dedent(
     - Do not add placeholders that pretend to be finished code.
     - Do not use fake imports or imaginary APIs.
     - Return no file changes if the context is insufficient.
+
+    # Patching strategy:
+    - Prefer exact replace for small localized edits.
+    - Use insert_after or insert_before when adding code near a stable anchor is safer than replacing a large block.
+    - Use append only for files where appending is idiomatic, such as docs, exports, CSS, or simple registries.
+    - Use full_file_replace only when the entire file is available in context and a full rewrite is safer than a fragile exact replacement.
+    - Use create only when the file does not already exist and the repository structure supports the new file.
+    - If a needed file was not inspected, return no edit for that file and explain the missing context.
+
+    # Execution model:
+    - In sandboxed API runs, edits are applied to a temporary repository copy first.
+    - The original repository is changed only after explicit human approval.
+    - You may propose complete, reviewable edits when the inspected context supports them.
+    - Do not lower security standards because a sandbox exists.
 
     # File change requirements:
     - Return targeted edits using the PatchDecision schema.
@@ -419,14 +435,20 @@ def build_patcher_user_prompt(
         - For each edit, include `operation`, `path`, `old`, `new`, and `reason`.
         - Use `operation="replace"` for existing files.
         - Use `operation="create"` for brand-new files only.
+        - Before using create, verify from the provided repository file list/context that the file does not already exist.
+        - If the file exists, use replace or full_file_replace instead of create.
         - For replace edits, the `old` value must be copied exactly from the provided context and appear exactly once.
         - For create edits, `old` must be an empty string and `new` must contain the complete new file contents.
-        - Do not return full final file contents.
+        - Do not return full final file contents for normal localized replacements.
+        - A full-file replacement is allowed only when the file is small, fully included in context, and a targeted exact replacement would be more fragile.
         - Only change files supported by the provided context.
         - Prefer small, focused edits.
         - Do not modify secrets, `.env` files, lock files, generated caches, or unrelated files.
         - Include validation commands relevant to the changed files.
         - If there is not enough context, return an empty `edits` array and explain what is missing in `summary`.
+        - Prefer completing the requested task when the inspected context is sufficient.
+        - Do not avoid edits solely because the change touches more than one file.
+        - Multi-file edits are allowed when each file is directly relevant and present in context.
         """
     ).strip()
 

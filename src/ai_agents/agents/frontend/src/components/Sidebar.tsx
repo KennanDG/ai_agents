@@ -121,7 +121,7 @@ export const Sidebar = ({
         <p className="mt-2 truncate px-1 font-mono text-[10px] text-faint">{repoRoot}</p>
       </div>
 
-      {changes.length > 0 ? (
+      {changes.length > 0 && (
         <div className="border-b border-line py-2">
           <button
             type="button"
@@ -156,7 +156,7 @@ export const Sidebar = ({
             );
           })}
         </div>
-      ) : null}
+      )}
 
       <div className="min-h-0 flex-1 overflow-auto py-2">
         <button
