@@ -1,5 +1,5 @@
 import { ArrowUp, Check, Circle, Paperclip, ShieldCheck, Sparkles } from "lucide-react";
-import { type ChangeEvent, type SubmitEvent, type DragEvent, useRef, useState } from "react";
+import { type ChangeEvent, type ClipboardEvent, type DragEvent, type SubmitEvent, useRef, useState } from "react";
 import type { AgentMessage, AgentRunState, RepositoryFile } from "../types";
 import type { CodingAgentAttachedFile } from "../lib/codingAgentSocket";
 
@@ -258,6 +258,31 @@ export const TaskPanel = ({ messages, run, onSubmit, onApproveAll, onRejectChang
     }
   };
 
+  const handlePaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items || items.length === 0) return;
+
+    const imageItems: DataTransferItem[] = [];
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.startsWith("image/")) {
+        imageItems.push(items[i]);
+      }
+    }
+
+    if (imageItems.length > 0) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const files = imageItems
+        .map(item => item.getAsFile())
+        .filter((file): file is File => file !== null);
+
+      if (files.length > 0) {
+        processFiles(files);
+      }
+    }
+  };
+
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-panel-soft">
 
@@ -369,6 +394,7 @@ export const TaskPanel = ({ messages, run, onSubmit, onApproveAll, onRejectChang
                   if (form) form.requestSubmit();
                 }
               }}
+              onPaste={handlePaste}
               placeholder="Ask the agent to change your code…"
               className="w-full resize-none bg-transparent text-xs leading-5 text-ink outline-none placeholder:text-faint"
             />
