@@ -1,6 +1,6 @@
 # ai_agents
 
-A personal agentic AI project focused on a **LangGraph-based coding agent** that can inspect a repository, plan changes, gather context, propose or apply patches, run validation, and produce a run report.
+ai-agents is an experimental LangGraph-based coding-agent toolkit for repository inspection, patch generation, validation, persistent memory, and human-approved file writes.
 
 The broader repo also contains RAG infrastructure, but the current main focus of the project is the coding agent under `ai_agents.agents.coding`.
 

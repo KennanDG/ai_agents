@@ -96,13 +96,20 @@ class ContextDecision(BaseModel):
 
 
 class FileEdit(BaseModel):
-    operation: Literal["replace", "create"] = Field(
-        default="replace",
-        description=(
-            "Patch operation type. Use 'replace' for exact text replacement in an "
-            "existing file. Use 'create' only for creating a brand-new file."
-        ),
-    )
+    operation: Literal[
+        "replace",
+        "create",
+        "full_file_replace",
+        "insert_after",
+        "insert_before",
+        "append",
+    ] = Field(
+            default="replace",
+            description=(
+                "Patch operation type. Use 'replace' for exact text replacement in an "
+                "existing file. Use 'create' only for creating a brand-new file."
+            ),
+        )
 
     path: str = Field(description="Repository-relative path to edit.")
 

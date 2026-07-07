@@ -50,43 +50,48 @@ export const DiffPanel = ({
       </header>
 
       <div className="min-h-0 flex-1">
-        {isLoading ? (
-          <div className="grid h-full place-items-center text-xs text-muted">Loading file…</div>
-        ) : error ? (
-          <div className="grid h-full place-items-center px-8 text-center text-xs leading-6 text-rose-300">{error}</div>
-        ) : file || change ? (
-          <DiffEditor
-            key={`${path}:${hasChange ? "change" : "file"}`}
-            original={original}
-            modified={modified}
-            language={language}
-            theme="vs-dark"
-            beforeMount={(monaco) => {
-              monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
-                noSemanticValidation: true,
-                noSyntaxValidation: false,
-              });
-              monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
-                noSemanticValidation: true,
-                noSyntaxValidation: false,
-              });
-            }}
-            options={{
-              automaticLayout: true,
-              fontFamily: "JetBrains Mono, ui-monospace, SFMono-Regular, monospace",
-              fontSize: 12,
-              lineHeight: 20,
-              minimap: { enabled: false },
-              renderOverviewRuler: false,
-              scrollBeyondLastLine: false,
-              wordWrap: "on",
-              padding: { top: 12, bottom: 12 },
-              originalEditable: false,
-            }}
-          />
-        ) : (
-          <div className="grid h-full place-items-center text-xs text-muted">Select a repository file to preview it.</div>
-        )}
+        {(() => {
+          if (isLoading) {
+            return <div className="grid h-full place-items-center text-xs text-muted">Loading file…</div>;
+          }
+          if (error) {
+            return <div className="grid h-full place-items-center px-8 text-center text-xs leading-6 text-rose-300">{error}</div>;
+          }
+          if (file || change) {
+            return (
+              <DiffEditor
+                key={`${path}:${hasChange ? "change" : "file"}`}
+                original={original}
+                modified={modified}
+                language={language}
+                theme="vs-dark"
+                beforeMount={(monaco) => {
+                  monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
+                    noSemanticValidation: true,
+                    noSyntaxValidation: false,
+                  });
+                  monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
+                    noSemanticValidation: true,
+                    noSyntaxValidation: false,
+                  });
+                }}
+                options={{
+                  automaticLayout: true,
+                  fontFamily: "JetBrains Mono, ui-monospace, SFMono-Regular, monospace",
+                  fontSize: 12,
+                  lineHeight: 20,
+                  minimap: { enabled: false },
+                  renderOverviewRuler: false,
+                  scrollBeyondLastLine: false,
+                  wordWrap: "on",
+                  padding: { top: 12, bottom: 12 },
+                  originalEditable: false,
+                }}
+              />
+            );
+          }
+          return <div className="grid h-full place-items-center text-xs text-muted">Select a repository file to preview it.</div>;
+        })()}
       </div>
 
       <footer className="flex h-12 shrink-0 items-center justify-between border-t border-line bg-panel-soft px-3">

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { ActivityBar } from "./components/ActivityBar";
+// import { ActivityBar } from "./components/ActivityBar";
 import { DiffPanel } from "./components/DiffPanel";
 import { OutputPanel } from "./components/OutputPanel";
 import { Sidebar } from "./components/Sidebar";
@@ -439,7 +439,7 @@ const App = () => {
 
   return (
     <main className="flex h-dvh min-h-0 min-w-0 overflow-hidden bg-canvas text-ink">
-      <ActivityBar />
+      {/* <ActivityBar /> */}
 
 
       <Sidebar
