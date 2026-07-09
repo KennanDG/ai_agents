@@ -102,8 +102,8 @@ model = ChatGroq(
 
 reasoning_model = ChatOpenAI(
     model=config_settings.reasoning_model, # e.g., "deepseek/deepseek-v4-pro"
-    api_key=OPEN_ROUTER_API_KEY, 
-    base_url=OPEN_ROUTER_URL,
+    api_key=DEEPSEEK_API_KEY, 
+    base_url=DEEPSEEK,
     max_retries=2
 )
 

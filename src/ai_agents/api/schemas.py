@@ -106,6 +106,42 @@ class CodingAgentServerEvent(BaseModel):
 
 
 
+
+############################## VOICE AGENT ##############################
+
+class VoiceMessage(BaseModel):
+    role: Literal["user", "assistant", "system"]
+    content: str
+
+
+class VoiceTextTurnRequest(BaseModel):
+    text: str = Field(min_length=1)
+    session_id: str | None = None
+    history: list[VoiceMessage] = Field(default_factory=list)
+    repo_root: str | None = None
+    workspace_root: str | None = None
+    active_path: str | None = None
+    allow_write: bool = False
+
+
+class VoiceAgentTurnResponse(BaseModel):
+    session_id: str
+    transcript: str
+    reply_text: str
+    status: Literal["clarifying", "ready", "error"] = "clarifying"
+
+    # When ready, frontend should hand this to the existing coding agent.
+    coding_request: str | None = None
+
+    audio_mime_type: str | None = None
+    audio_base64: str | None = None
+
+    errors: list[str] = Field(default_factory=list)
+
+
+
+
+
 ############################## REPOSITORY API ##############################
 class RepositoryTreeEntry(BaseModel):
     path: str

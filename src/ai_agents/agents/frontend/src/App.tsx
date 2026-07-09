@@ -13,9 +13,10 @@ import {
 } from "./lib/codingAgentSocket";
 
 import { fetchRepositoryFile, fetchRepositoryTree } from "./lib/repositoryApi";
+import { submitVoiceTurn } from "./lib/voiceAgentApi";
 import type { AgentMessage, AgentRunState, ChangeStatus, FileChange, RepositoryFile, RepositoryTreeEntry } from "./types";
 
-const apiBaseUrl = import.meta.env.VITE_AI_AGENTS_API_BASE ?? "http://localhost:8000";
+const apiBaseUrl = import.meta.env.VITE_AI_AGENTS_API_BASE ?? "http://0.0.0.0:8000";
 const apiKey = import.meta.env.VITE_AI_AGENTS_API_KEY ?? "";
 const configuredRepoRoot = import.meta.env.VITE_CODING_AGENT_REPO_ROOT ?? ".";
 const configuredWorkspaceRoot = import.meta.env.VITE_CODING_AGENT_WORKSPACE_ROOT ?? configuredRepoRoot;
@@ -281,6 +282,8 @@ const App = () => {
   const [repoError, setRepoError] = useState<string | null>(null);
   const [run, dispatchRun] = useReducer(runReducer, initialRunState);
 
+  const [voiceSessionId, setVoiceSessionId] = useState<string | null>(null);
+
   // const [sidebarOpen, setSidebarOpen] = useState(true);
   const socketRef = useRef<ReturnType<typeof createCodingAgentSocket> | null>(null);
 
@@ -406,6 +409,87 @@ const App = () => {
 
 
 
+
+  const submitVoiceAudio = async (audio: Blob) => {
+    try {
+      const response = await submitVoiceTurn({
+        apiBaseUrl,
+        apiKey,
+        audio,
+        sessionId: voiceSessionId,
+        history: messages,
+        repoRoot,
+        workspaceRoot: configuredWorkspaceRoot === configuredRepoRoot ? repoRoot : configuredWorkspaceRoot,
+        activePath,
+        allowWrite,
+      });
+
+      setVoiceSessionId(response.session_id);
+
+      setMessages((current) => [
+        ...current,
+        {
+          id: crypto.randomUUID(),
+          role: "user",
+          body: response.transcript ? `🎙️ ${response.transcript}` : "🎙️ Voice input",
+          time: nowLabel(),
+        },
+        {
+          id: crypto.randomUUID(),
+          role: "agent",
+          body: response.reply_text,
+          time: nowLabel(),
+        },
+      ]);
+
+      if (response.audio_base64) {
+        const audioUrl = `data:${response.audio_mime_type ?? "audio/wav"};base64,${response.audio_base64}`;
+        void new Audio(audioUrl).play().catch((error) => {
+          console.warn("Could not play voice reply.", error);
+        });
+      }
+
+      if (response.status === "ready" && response.coding_request) {
+        setMessages((current) => [
+          ...current,
+          {
+            id: crypto.randomUUID(),
+            role: "agent",
+            body: `Handing this to the coding agent:\n\n${response.coding_request}`,
+            time: nowLabel(),
+          },
+        ]);
+
+        runCodingAgent(response.coding_request, []);
+      }
+    } catch (error) {
+      setMessages((current) => [
+        ...current,
+        {
+          id: crypto.randomUUID(),
+          role: "agent",
+          body: error instanceof Error ? error.message : "Voice agent failed.",
+          time: nowLabel(),
+        },
+      ]);
+    }
+  };
+
+
+
+  const runCodingAgent = (request: string, attachedFiles: CodingAgentAttachedFile[] = []) => {
+    socketRef.current?.run({
+      thread_id: run.threadId,
+      request,
+      repo_root: repoRoot,
+      workspace_root: configuredWorkspaceRoot === configuredRepoRoot ? repoRoot : configuredWorkspaceRoot,
+      allow_write: allowWrite,
+      memory_enabled: memoryEnabled,
+      attached_files: attachedFiles,
+      max_iterations: 3,
+    });
+  };
+
   
   const submitPrompt = (prompt: string, attachedFiles: CodingAgentAttachedFile[] = []) => {
     const attachmentLabel =
@@ -423,16 +507,7 @@ const App = () => {
       },
     ]);
 
-    socketRef.current?.run({
-      thread_id: run.threadId,
-      request: prompt,
-      repo_root: repoRoot,
-      workspace_root: configuredWorkspaceRoot === configuredRepoRoot ? repoRoot : configuredWorkspaceRoot,
-      allow_write: allowWrite,
-      memory_enabled: memoryEnabled,
-      attached_files: attachedFiles,
-      max_iterations: 3,
-    });
+    runCodingAgent(prompt, attachedFiles);
   };
 
 
@@ -498,6 +573,7 @@ const App = () => {
           messages={messages}
           run={run}
           onSubmit={submitPrompt}
+          onVoiceAudio={submitVoiceAudio}
           allowWrite={allowWrite}
           activePath={activePath}
           activeFile={activeFile}

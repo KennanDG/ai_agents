@@ -90,7 +90,7 @@ class Settings(BaseSettings):
     verify_model: str = Field(default="llama-3.1-8b-instant", alias="VERIFY_MODEL")
     verify_docs_model: str = Field(default="llama-3.1-8b-instant", alias="VERIFY_DOCS_MODEL")
     coding_model: str = Field(default="openai/gpt-oss-120b", alias="CODING_MODEL") 
-    reasoning_model: str = Field(default="deepseek/deepseek-v4-pro", alias="REASONING_MODEL") 
+    reasoning_model: str = Field(default="deepseek-v4-pro", alias="REASONING_MODEL") 
     groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
     groq_api_url: str | None = Field(default="https://api.groq.com/openai/v1", alias="GROQ_URL")
     groq_secret_arn: str | None = Field(default=None, alias="GROQ_SECRET_ARN")
@@ -147,6 +147,13 @@ class Settings(BaseSettings):
     verify_docs_attempts: int = Field(default=2, alias="VERIFY_DOCS_ATTEMPTS")
     verify_docs_max_chars: int = Field(default=6_000, alias="VERIFY_DOCS_MAX_CHARS")
 
+    # Voice Agent
+    voice_stt_model: str = Field(default="whisper-large-v3-turbo", alias="VOICE_STT_MODEL")
+    voice_chat_model: str = Field(default="llama-3.1-8b-instant", alias="VOICE_CHAT_MODEL")
+    voice_tts_model: str = Field(default="canopylabs/orpheus-v1-english", alias="VOICE_TTS_MODEL")
+    voice_tts_voice: str = Field(default="hannah", alias="VOICE_TTS_VOICE")
+    voice_tts_enabled: bool = Field(default=True, alias="VOICE_TTS_ENABLED")
+    voice_max_audio_mb: int = Field(default=15, alias="VOICE_MAX_AUDIO_MB")
 
 
 settings = Settings()

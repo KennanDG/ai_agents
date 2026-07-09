@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from ai_agents.api.routers.health import router as health_router
 from ai_agents.api.routers.rag import router as rag_router
 from ai_agents.api.routers.coding_agent import router as coding_agent_router
+from ai_agents.api.routers.voice_agent import router as voice_agent_router
 from ai_agents.api.auth import ApiKeyMiddleware
 
 
@@ -33,6 +34,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(rag_router)
     app.include_router(coding_agent_router)
+    app.include_router(voice_agent_router)
 
     return app
 
