@@ -44,25 +44,29 @@ class VoiceAgentService:
 
     def synthesize_reply(self, text: str) -> tuple[str | None, str | None]:
         if not settings.voice_tts_enabled:
-            return None, None
+            return None, None, None
 
-        response = self.client.audio.speech.create(
-            model=settings.voice_tts_model,
-            voice=settings.voice_tts_voice,
-            input=text,
-            response_format="wav",
-        )
+        try:
+            response = self.client.audio.speech.create(
+                model=settings.voice_tts_model,
+                voice=settings.voice_tts_voice,
+                input=text,
+                response_format="wav",
+            )
 
-        if hasattr(response, "read"):
-            audio_bytes = response.read()
-        elif hasattr(response, "content"):
-            audio_bytes = response.content
-        elif isinstance(response, bytes):
-            audio_bytes = response
-        else:
-            return None, None
+            if hasattr(response, "read"):
+                audio_bytes = response.read()
+            elif hasattr(response, "content"):
+                audio_bytes = response.content
+            elif isinstance(response, bytes):
+                audio_bytes = response
+            else:
+                return None, None, "TTS response did not contain readable audio bytes."
 
-        return "audio/wav", base64.b64encode(audio_bytes).decode("ascii")
+            return "audio/wav", base64.b64encode(audio_bytes).decode("ascii"), None
+
+        except Exception as exc:
+            return None, None, f"TTS failed: {exc}"
 
 
 
@@ -102,7 +106,11 @@ class VoiceAgentService:
         )
 
         reply_text = state.get("reply_text") or "I heard you, but I need you to repeat that."
-        audio_mime_type, audio_base64 = self.synthesize_reply(reply_text)
+        audio_mime_type, audio_base64, tts_error = self.synthesize_reply(reply_text)
+
+        errors = list(state.get("errors", []))
+        if tts_error:
+            errors.append(tts_error)
 
         return {
             "session_id": resolved_session_id,
@@ -112,5 +120,5 @@ class VoiceAgentService:
             "coding_request": state.get("coding_request"),
             "audio_mime_type": audio_mime_type,
             "audio_base64": audio_base64,
-            "errors": state.get("errors", []),
+            "errors": errors,
         }

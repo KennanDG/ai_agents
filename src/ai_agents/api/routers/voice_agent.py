@@ -70,16 +70,31 @@ async def voice_turn(
         raise HTTPException(status_code=413, detail="Audio file is too large.")
 
 
-    result = get_voice_service().run_turn(
-        audio_bytes=content,
-        filename=audio.filename or "voice-input.webm",
-        content_type=audio.content_type,
-        session_id=session_id,
-        history=_parse_history(history_json),
-        repo_root=repo_root,
-        workspace_root=workspace_root,
-        active_path=active_path,
-        allow_write=allow_write,
-    )
+    try:
+        result = get_voice_service().run_turn(
+            audio_bytes=content,
+            filename=audio.filename or "voice-input.webm",
+            content_type=audio.content_type,
+            session_id=session_id,
+            history=_parse_history(history_json),
+            repo_root=repo_root,
+            workspace_root=workspace_root,
+            active_path=active_path,
+            allow_write=allow_write,
+        )
+
+        return VoiceAgentTurnResponse(**result)
+
+    except Exception as exc:
+        return VoiceAgentTurnResponse(
+            session_id=session_id or "",
+            transcript="",
+            reply_text="The voice agent hit a backend error before it could finish. Check the backend terminal for the full traceback.",
+            status="error",
+            coding_request=None,
+            audio_mime_type=None,
+            audio_base64=None,
+            errors=[f"Voice agent request failed: {exc}"],
+        )
 
     return VoiceAgentTurnResponse(**result)
