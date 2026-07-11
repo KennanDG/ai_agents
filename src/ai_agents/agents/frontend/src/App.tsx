@@ -43,6 +43,17 @@ const nowLabel = () => {
   return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date());
 }
 
+const base64AudioToObjectUrl = (base64: string, mimeType: string) => {
+  const binary = window.atob(base64);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  return URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+};
+
 const asStringArray = (value: unknown): string[] | undefined => {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : undefined;
 }
@@ -283,6 +294,9 @@ const App = () => {
   const [run, dispatchRun] = useReducer(runReducer, initialRunState);
 
   const [voiceSessionId, setVoiceSessionId] = useState<string | null>(null);
+  const [voiceHistory, setVoiceHistory] = useState<AgentMessage[]>([]);
+  const [voiceReplyUrl, setVoiceReplyUrl] = useState<string | null>(null);
+  const voiceReplyUrlRef = useRef<string | null>(null);
 
   // const [sidebarOpen, setSidebarOpen] = useState(true);
   const socketRef = useRef<ReturnType<typeof createCodingAgentSocket> | null>(null);
@@ -319,6 +333,14 @@ const App = () => {
   useEffect(() => {
     void refreshRepository();
   }, [refreshRepository]);
+
+  useEffect(() => {
+    return () => {
+      if (voiceReplyUrlRef.current) {
+        URL.revokeObjectURL(voiceReplyUrlRef.current);
+      }
+    };
+  }, []);
 
 
 
@@ -417,7 +439,7 @@ const App = () => {
         apiKey,
         audio,
         sessionId: voiceSessionId,
-        history: messages,
+        history: voiceHistory,
         repoRoot,
         workspaceRoot: configuredWorkspaceRoot === configuredRepoRoot ? repoRoot : configuredWorkspaceRoot,
         activePath,
@@ -426,27 +448,46 @@ const App = () => {
 
       setVoiceSessionId(response.session_id);
 
-      setMessages((current) => [
-        ...current,
-        {
-          id: crypto.randomUUID(),
-          role: "user",
-          body: response.transcript ? `🎙️ ${response.transcript}` : "🎙️ Voice input",
-          time: nowLabel(),
-        },
-        {
-          id: crypto.randomUUID(),
-          role: "agent",
-          body: response.reply_text,
-          time: nowLabel(),
-        },
-      ]);
+      const userVoiceMessage: AgentMessage = {
+        id: crypto.randomUUID(),
+        role: "user",
+        body: response.transcript ? `🎙️ ${response.transcript}` : "🎙️ Voice input",
+        time: nowLabel(),
+      };
+      const agentVoiceMessage: AgentMessage = {
+        id: crypto.randomUUID(),
+        role: "agent",
+        body: response.reply_text,
+        time: nowLabel(),
+      };
+
+      setMessages((current) => [...current, userVoiceMessage, agentVoiceMessage]);
+      setVoiceHistory((current) => [...current, userVoiceMessage, agentVoiceMessage].slice(-6));
 
       if (response.audio_base64) {
-        const audioUrl = `data:${response.audio_mime_type ?? "audio/wav"};base64,${response.audio_base64}`;
-        void new Audio(audioUrl).play().catch((error) => {
-          console.warn("Could not play voice reply.", error);
-        });
+        const nextUrl = base64AudioToObjectUrl(
+          response.audio_base64,
+          response.audio_mime_type ?? "audio/wav",
+        );
+
+        if (voiceReplyUrlRef.current) {
+          URL.revokeObjectURL(voiceReplyUrlRef.current);
+        }
+
+        voiceReplyUrlRef.current = nextUrl;
+        setVoiceReplyUrl(nextUrl);
+      }
+
+      if (response.errors.length > 0) {
+        setMessages((current) => [
+          ...current,
+          {
+            id: crypto.randomUUID(),
+            role: "agent",
+            body: `Voice warning:\n${response.errors.join("\n")}`,
+            time: nowLabel(),
+          },
+        ]);
       }
 
       if (response.status === "ready" && response.coding_request) {
@@ -460,6 +501,9 @@ const App = () => {
           },
         ]);
 
+        // The next voice request should start a fresh intake conversation.
+        setVoiceHistory([]);
+        setVoiceSessionId(null);
         runCodingAgent(response.coding_request, []);
       }
     } catch (error) {
@@ -574,6 +618,7 @@ const App = () => {
           run={run}
           onSubmit={submitPrompt}
           onVoiceAudio={submitVoiceAudio}
+          voiceReplyUrl={voiceReplyUrl}
           allowWrite={allowWrite}
           activePath={activePath}
           activeFile={activeFile}

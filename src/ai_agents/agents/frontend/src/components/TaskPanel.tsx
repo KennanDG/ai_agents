@@ -8,6 +8,7 @@ interface TaskPanelProps {
   run: AgentRunState;
   onSubmit: (prompt: string, attachedFiles: CodingAgentAttachedFile[]) => void;
   onVoiceAudio?: (audio: Blob) => Promise<void> | void;
+  voiceReplyUrl?: string | null;
   onApproveAll: () => void;
   onRejectChanges: () => void;
   allowWrite: boolean;
@@ -74,7 +75,7 @@ const readAsDataUrl = (file: File) =>
 /*
    =============  Component  =============
 */
-export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, onApproveAll, onRejectChanges, allowWrite, activePath, activeFile }: TaskPanelProps) => {
+export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl, onApproveAll, onRejectChanges, allowWrite, activePath, activeFile }: TaskPanelProps) => {
   const [prompt, setPrompt] = useState("");
   const [attachedFiles, setAttachedFiles] = useState<CodingAgentAttachedFile[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -439,6 +440,21 @@ export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, onApproveAll,
               </p>
             </article>
           ))}
+
+          {voiceReplyUrl ? (
+            <div className="rounded-lg border border-line bg-surface p-2">
+              <p className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-faint">Voice reply</p>
+              <audio
+                key={voiceReplyUrl}
+                src={voiceReplyUrl}
+                controls
+                autoPlay
+                preload="auto"
+                className="h-8 w-full"
+                aria-label="Play the latest voice-agent reply"
+              />
+            </div>
+          ) : null}
           
         </div>
 

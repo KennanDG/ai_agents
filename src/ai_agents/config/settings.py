@@ -153,6 +153,8 @@ class Settings(BaseSettings):
     voice_tts_model: str = Field(default="canopylabs/orpheus-v1-english", alias="VOICE_TTS_MODEL")
     voice_tts_voice: str = Field(default="hannah", alias="VOICE_TTS_VOICE")
     voice_tts_enabled: bool = Field(default=True, alias="VOICE_TTS_ENABLED")
+    voice_tts_max_chars: int = Field(default=200, alias="VOICE_TTS_MAX_CHARS")
+    voice_max_clarifications: int = Field(default=2, alias="VOICE_MAX_CLARIFICATIONS")
     voice_max_audio_mb: int = Field(default=15, alias="VOICE_MAX_AUDIO_MB")
 
 
