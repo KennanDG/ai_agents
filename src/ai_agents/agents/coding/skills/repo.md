@@ -1,6 +1,6 @@
 # Skill: Inspect Repository
 
-Purpose: Understand the repository structure before editing.
+Purpose: Understand the repository structure and gather context before acting.
 
 Use when:
 - Starting a coding task.

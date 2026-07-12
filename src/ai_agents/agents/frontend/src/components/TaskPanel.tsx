@@ -401,32 +401,7 @@ export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl
         </div>
 
         <div className="space-y-4">
-          {run.approvalStatus === "pending" ? (
-            <div className="mb-4 rounded-lg border border-amber-400/30 bg-amber-400/10 p-3">
-              <p className="text-[11px] leading-5 text-amber-100">
-                The agent produced file changes. Validation results are available, but final repo write is waiting for your approval.
-                {run.blockingValidationFailed ? " Blocking validation failed, so review carefully before applying." : ""}
-                {run.advisoryValidationFailed ? " Advisory validation warnings were reported." : ""}
-              </p>
-
-              <div className="mt-3 flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
-                  className="inline-flex items-center justify-center whitespace-nowrap rounded-md bg-accent px-4 py-2 text-xs font-medium text-white shadow-glow transition-colors hover:bg-accent-light focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
-                  onClick={onApproveAll}
-                >
-                  Apply all changes
-                </button>
-                <button
-                  type="button"
-                  className="inline-flex items-center justify-center whitespace-nowrap rounded-md border border-rose-500/40 bg-surface px-4 py-2 text-xs font-medium text-ink transition-colors hover:border-rose-500/60 hover:bg-rose-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/50"
-                  onClick={onRejectChanges}
-                >
-                  Reject changes
-                </button>
-              </div>
-            </div>
-          ) : null}
+          
 
           {messages.map((message) => (
             <article key={message.id} className={message.role === "user" ? "message-user" : "message-agent"}>
@@ -453,6 +428,34 @@ export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl
                 className="h-8 w-full"
                 aria-label="Play the latest voice-agent reply"
               />
+            </div>
+          ) : null}
+
+
+          {run.approvalStatus === "pending" ? (
+            <div className="mb-4 rounded-lg border border-amber-400/30 bg-amber-400/10 p-3">
+              <p className="text-[11px] leading-5 text-amber-100">
+                The agent produced file changes. Validation results are available, but final repo write is waiting for your approval.
+                {run.blockingValidationFailed ? " Blocking validation failed, so review carefully before applying." : ""}
+                {run.advisoryValidationFailed ? " Advisory validation warnings were reported." : ""}
+              </p>
+
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  className="inline-flex items-center justify-center whitespace-nowrap rounded-md bg-accent px-4 py-2 text-xs font-medium text-white shadow-glow transition-colors hover:bg-accent-light focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+                  onClick={onApproveAll}
+                >
+                  Apply all changes
+                </button>
+                <button
+                  type="button"
+                  className="inline-flex items-center justify-center whitespace-nowrap rounded-md border border-rose-500/40 bg-surface px-4 py-2 text-xs font-medium text-ink transition-colors hover:border-rose-500/60 hover:bg-rose-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/50"
+                  onClick={onRejectChanges}
+                >
+                  Reject changes
+                </button>
+              </div>
             </div>
           ) : null}
           
