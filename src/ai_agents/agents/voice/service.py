@@ -6,6 +6,7 @@ import logging
 import uuid
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 
 from groq import Groq
 
@@ -151,11 +152,13 @@ class VoiceAgentService:
         content_type: str | None,
         session_id: str | None,
         history: list[dict[str, str]],
+        prompt_text: str,
+        attached_files: list[dict[str, Any]],
         repo_root: str | None,
         workspace_root: str | None,
         active_path: str | None,
         allow_write: bool,
-    ) -> dict:
+    ) -> dict[str, Any]:
         resolved_session_id = session_id or str(uuid.uuid4())
 
         transcript = self.transcribe_audio(
@@ -168,11 +171,13 @@ class VoiceAgentService:
             {
                 "session_id": resolved_session_id,
                 "transcript": transcript,
+                "prompt_text": prompt_text,
                 "history": history,
                 "repo_root": repo_root,
                 "workspace_root": workspace_root,
                 "active_path": active_path,
                 "allow_write": allow_write,
+                "attached_files": attached_files,
                 "errors": [],
             }
         )

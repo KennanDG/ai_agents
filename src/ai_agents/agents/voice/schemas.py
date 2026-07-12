@@ -11,10 +11,21 @@ class VoiceIntakeDecision(BaseModel):
     reply_text: str = Field(min_length=1)
     coding_request: str | None = None
     collected_facts: list[str] = Field(default_factory=list)
+    selected_skills: list[str] = Field(default_factory=list)
+    tools_used: list[str] = Field(default_factory=list)
+    target_files: list[str] = Field(default_factory=list)
+    plan: list[str] = Field(default_factory=list)
 
-    @field_validator("collected_facts", mode="before")
+    @field_validator(
+        "collected_facts",
+        "selected_skills",
+        "tools_used",
+        "target_files",
+        "plan",
+        mode="before",
+    )
     @classmethod
-    def normalize_collected_facts(cls, value: Any) -> list[str]:
+    def normalize_string_lists(cls, value: Any) -> list[str]:
         if value is None:
             return []
 
@@ -27,14 +38,7 @@ class VoiceIntakeDecision(BaseModel):
 
             if isinstance(item, str):
                 text = item.strip()
-            elif isinstance(item, dict):
-                text = json.dumps(
-                    item,
-                    ensure_ascii=False,
-                    default=str,
-                    separators=(",", ":"),
-                )
-            elif isinstance(item, list):
+            elif isinstance(item, (dict, list)):
                 text = json.dumps(
                     item,
                     ensure_ascii=False,

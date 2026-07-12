@@ -432,7 +432,11 @@ const App = () => {
 
 
 
-  const submitVoiceAudio = async (audio: Blob) => {
+  const submitVoiceAudio = async (
+    audio: Blob,
+    promptText: string,
+    attachedFiles: CodingAgentAttachedFile[],
+  ): Promise<boolean> => {
     try {
       const response = await submitVoiceTurn({
         apiBaseUrl,
@@ -440,6 +444,8 @@ const App = () => {
         audio,
         sessionId: voiceSessionId,
         history: voiceHistory,
+        promptText,
+        attachedFiles,
         repoRoot,
         workspaceRoot: configuredWorkspaceRoot === configuredRepoRoot ? repoRoot : configuredWorkspaceRoot,
         activePath,
@@ -448,10 +454,17 @@ const App = () => {
 
       setVoiceSessionId(response.session_id);
 
+      const draftContext = promptText.trim() ? `\n\nTyped draft:\n${promptText.trim()}` : "";
+
+      const attachmentContext = attachedFiles.length > 0
+        ? `\n\nAttached files:\n${attachedFiles.map((file) => `- ${file.name}`).join("\n")}`
+        : "";
+
+
       const userVoiceMessage: AgentMessage = {
         id: crypto.randomUUID(),
         role: "user",
-        body: response.transcript ? `🎙️ ${response.transcript}` : "🎙️ Voice input",
+        body: `${response.transcript ? `🎙️ ${response.transcript}` : "🎙️ Voice input"}${draftContext}${attachmentContext}`,
         time: nowLabel(),
       };
       const agentVoiceMessage: AgentMessage = {
@@ -501,11 +514,14 @@ const App = () => {
           },
         ]);
 
-        // The next voice request should start a fresh intake conversation.
         setVoiceHistory([]);
         setVoiceSessionId(null);
-        runCodingAgent(response.coding_request, []);
+        runCodingAgent(response.coding_request, attachedFiles);
+        return true;
       }
+
+      return false;
+      
     } catch (error) {
       setMessages((current) => [
         ...current,
@@ -516,9 +532,9 @@ const App = () => {
           time: nowLabel(),
         },
       ]);
+      return false;
     }
   };
-
 
 
   const runCodingAgent = (request: string, attachedFiles: CodingAgentAttachedFile[] = []) => {

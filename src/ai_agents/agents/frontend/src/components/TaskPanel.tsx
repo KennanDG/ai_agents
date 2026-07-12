@@ -7,7 +7,7 @@ interface TaskPanelProps {
   messages: AgentMessage[];
   run: AgentRunState;
   onSubmit: (prompt: string, attachedFiles: CodingAgentAttachedFile[]) => void;
-  onVoiceAudio?: (audio: Blob) => Promise<void> | void;
+  onVoiceAudio?: (audio: Blob, promptText: string, attachedFiles: CodingAgentAttachedFile[]) => Promise<boolean> | boolean;
   voiceReplyUrl?: string | null;
   onApproveAll: () => void;
   onRejectChanges: () => void;
@@ -89,6 +89,11 @@ export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const promptRef = useRef(prompt);
+  const attachedFilesRef = useRef(attachedFiles);
+
+  promptRef.current = prompt;
+  attachedFilesRef.current = attachedFiles;
 
 
 
@@ -338,7 +343,16 @@ export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl
         audioChunksRef.current = [];
 
         if (audio.size > 0) {
-          await onVoiceAudio(audio);
+          const handedOff = await onVoiceAudio(
+            audio,
+            promptRef.current,
+            attachedFilesRef.current,
+          );
+
+          if (handedOff) {
+            setPrompt("");
+            setAttachedFiles([]);
+          }
         }
       };
 

@@ -1,4 +1,5 @@
 import type { AgentMessage } from "../types";
+import type { CodingAgentAttachedFile } from "./codingAgentSocket";
 
 export type VoiceAgentTurnResponse = {
     session_id: string;
@@ -18,6 +19,8 @@ type SubmitVoiceTurnArgs = {
     audio: Blob;
     sessionId?: string | null;
     history: AgentMessage[];
+    promptText: string;
+    attachedFiles: CodingAgentAttachedFile[];
     repoRoot: string;
     workspaceRoot?: string | null;
     activePath?: string | null;
@@ -33,12 +36,37 @@ const toVoiceHistory = (messages: AgentMessage[]) => {
 };
 
 
+const toVoiceAttachments = (attachedFiles: CodingAgentAttachedFile[]) => {
+    let remainingContentChars = 60_000;
+
+    return attachedFiles.slice(0, 5).map((file) => {
+        const rawContent = file.data_url ? "" : (file.content ?? "");
+        const maxChars = Math.min(20_000, Math.max(0, remainingContentChars));
+        const content = rawContent.slice(0, maxChars);
+        remainingContentChars -= content.length;
+
+        return {
+            name: file.name,
+            source: file.source,
+            path: file.path ?? null,
+            mime_type: file.mime_type ?? null,
+            size: file.size ?? null,
+            content: content || null,
+            has_image_data: Boolean(file.data_url),
+            content_truncated: Boolean(file.truncated) || content.length < rawContent.length,
+        };
+    });
+};
+
+
 export const submitVoiceTurn = async ({
     apiBaseUrl,
     apiKey,
     audio,
     sessionId,
     history,
+    promptText,
+    attachedFiles,
     repoRoot,
     workspaceRoot,
     activePath,
@@ -49,6 +77,8 @@ export const submitVoiceTurn = async ({
 
     form.append("audio", audio, "voice-input.webm");
     form.append("history_json", JSON.stringify(toVoiceHistory(history)));
+    form.append("prompt_text", promptText);
+    form.append("attached_files_json", JSON.stringify(toVoiceAttachments(attachedFiles)));
     form.append("repo_root", repoRoot);
     form.append("allow_write", String(allowWrite));
 
