@@ -121,57 +121,58 @@ export const Sidebar = ({
         <p className="mt-2 truncate px-1 font-mono text-[10px] text-faint">{repoRoot}</p>
       </div>
 
-      {changes.length > 0 && (
-        <div className="border-b border-line py-2">
+      <div className="min-h-0 flex-1 overflow-auto">
+        {changes.length > 0 && (
+          <div className="border-b border-line py-2 max-h-64 overflow-y-auto">
+            <button
+              type="button"
+              onClick={() => setShowChanges(prev => !prev)}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted hover:bg-hover"
+            >
+              {showChanges ? <ChevronDown size={12} className="text-muted" /> : <ChevronRight size={12} className="text-muted" />}
+              Agent changes · {changes.length}
+            </button>
+            {showChanges && changes.map((change) => {
+              const fileName = change.path.split("/").at(-1);
+              const folder = change.path.slice(0, -(fileName?.length ?? 0)).replace(/\/$/, "");
+
+              return (
+                <button
+                  type="button"
+                  key={change.path}
+                  onClick={() => onSelect(change.path)}
+                  className={`group flex w-full items-center gap-2 border-l-2 px-3 py-2 text-left ${
+                    activePath === change.path ? "border-accent bg-selected" : "border-transparent hover:bg-hover"
+                  }`}
+                >
+                  <span className={`font-mono text-[10px] font-bold uppercase ${statusColor[change.status]}`}>
+                    {change.status[0]}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs text-ink">{fileName}</span>
+                    <span className="block truncate text-[10px] text-faint">{folder}</span>
+                  </span>
+                  <span className="font-mono text-[9px] text-faint group-hover:text-muted">+{change.additions} −{change.deletions}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <div className="py-2">
           <button
             type="button"
-            onClick={() => setShowChanges(prev => !prev)}
-            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted hover:bg-hover"
+            onClick={() => setShowFiles(prev => !prev)}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted hover:bg-hover"
           >
-            {showChanges ? <ChevronDown size={12} className="text-muted" /> : <ChevronRight size={12} className="text-muted" />}
-            Agent changes · {changes.length}
+            {showFiles ? <ChevronDown size={12} className="text-muted" /> : <ChevronRight size={12} className="text-muted" />}
+            Files · {fileEntries.length}
           </button>
-          {showChanges && changes.map((change) => {
-            const fileName = change.path.split("/").at(-1);
-            const folder = change.path.slice(0, -(fileName?.length ?? 0)).replace(/\/$/, "");
 
-            return (
-              <button
-                type="button"
-                key={change.path}
-                onClick={() => onSelect(change.path)}
-                className={`group flex w-full items-center gap-2 border-l-2 px-3 py-2 text-left ${
-                  activePath === change.path ? "border-accent bg-selected" : "border-transparent hover:bg-hover"
-                }`}
-              >
-                <span className={`font-mono text-[10px] font-bold uppercase ${statusColor[change.status]}`}>
-                  {change.status[0]}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-xs text-ink">{fileName}</span>
-                  <span className="block truncate text-[10px] text-faint">{folder}</span>
-                </span>
-                <span className="font-mono text-[9px] text-faint group-hover:text-muted">+{change.additions} −{change.deletions}</span>
-              </button>
-            );
-          })}
+          {isLoading ? <p className="px-3 py-2 text-[11px] text-muted">Loading repository…</p> : null}
+          {error ? <p className="px-3 py-2 text-[11px] leading-5 text-rose-300">{error}</p> : null}
+
+          {showFiles && renderTree(rootEntries)}
         </div>
-      )}
-
-      <div className="min-h-0 flex-1 overflow-auto py-2">
-        <button
-          type="button"
-          onClick={() => setShowFiles(prev => !prev)}
-          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted hover:bg-hover"
-        >
-          {showFiles ? <ChevronDown size={12} className="text-muted" /> : <ChevronRight size={12} className="text-muted" />}
-          Files · {fileEntries.length}
-        </button>
-
-        {isLoading ? <p className="px-3 py-2 text-[11px] text-muted">Loading repository…</p> : null}
-        {error ? <p className="px-3 py-2 text-[11px] leading-5 text-rose-300">{error}</p> : null}
-
-        {showFiles && renderTree(rootEntries)}
       </div>
 
       <div className="border-t border-line p-3 text-[10px] text-faint">

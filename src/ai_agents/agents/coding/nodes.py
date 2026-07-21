@@ -244,19 +244,37 @@ def _route_with_fallback(
 
 
 
+def _repo_attachment_paths(state: CodingAgentState) -> list[str]:
+    """Return explicit repo-relative attachment paths in user-provided order."""
+
+    paths: list[str] = []
+
+    for item in state.get("attached_files") or []:
+        if str(item.get("source", "upload")).strip() != "repo":
+            continue
+
+        path = str(item.get("path", "") or "").strip()
+        if path:
+            paths.append(path)
+
+    return dedupe(filter_context_paths(paths))
+
+
+
 def _format_attached_files_for_context(state: CodingAgentState) -> tuple[str, list[str]]:
+    """Format only external uploads as inline context.
+
+    Repository attachments are represented by their repo-relative paths and loaded
+    through the normal repository reader. This prevents the same file contents from
+    being injected once as an attachment and again as an inspected repository file.
+    """
+
     attached_files = list(state.get("attached_files") or [])
 
     if not attached_files:
         return "", []
 
-    blocks: list[str] = [
-        "# User-attached files",
-        (
-            "These files are read-only context. Some may not exist in the repository. "
-            "Only edit files under the repository root through normal patch operations."
-        ),
-    ]
+    blocks: list[str] = []
     used: list[str] = []
 
     for item in attached_files:
@@ -269,9 +287,10 @@ def _format_attached_files_for_context(state: CodingAgentState) -> tuple[str, li
         label = path if source == "repo" and path else name
         used.append(f"{source}:{label}")
 
-        header = f"Attachment: {label}"
-        if source:
-            header += f" | source={source}"
+        if source == "repo" and path:
+            continue
+
+        header = f"Attachment: {label} | source={source or 'upload'}"
         if truncated:
             header += " | truncated=true"
 
@@ -282,7 +301,18 @@ def _format_attached_files_for_context(state: CodingAgentState) -> tuple[str, li
             "```"
         )
 
-    return "\n\n".join(blocks), used
+    if not blocks:
+        return "", used
+
+    introduction = [
+        "# External user-attached files",
+        (
+            "These uploads are read-only context and may not exist in the repository. "
+            "Only edit files loaded from the repository through normal patch operations."
+        ),
+    ]
+
+    return "\n\n".join([*introduction, *blocks]), used
 
 
 
@@ -840,11 +870,16 @@ def gather_context_node(
         context.append("# Retry/context-refresh focus\n" + loop_context_focus)
 
 
-    candidate_paths = filter_context_paths(
+    repo_attachment_paths = _repo_attachment_paths(state)
+    navigator_paths = filter_context_paths(
         [str(item.get("path", "")).strip() for item in repo_navigation_files]
     )
+    candidate_paths = dedupe([*repo_attachment_paths, *navigator_paths])
 
-    if not candidate_paths:
+    
+    if not navigator_paths:
+        selected_paths: list[str] = []
+
         try:
             decision: ContextDecision = invoke_parsed_decision(
                 model=model,
@@ -862,14 +897,23 @@ def gather_context_node(
                 ),
             )
 
-            candidate_paths = filter_context_paths([item.path for item in decision.files_to_inspect])
+            selected_paths = filter_context_paths(
+                [item.path for item in decision.files_to_inspect]
+            )
 
-            if not candidate_paths:
-                candidate_paths = paths_from_ranked_results(search_result_dicts)
+            if not selected_paths:
+                selected_paths = paths_from_ranked_results(search_result_dicts)
 
         except Exception as exc:
-            errors.append(f"LLM context selection failed; using search-derived context only: {exc}")
-            candidate_paths = paths_from_ranked_results(search_result_dicts) or paths_from_search_results(search_blocks)
+            errors.append(
+                f"LLM context selection failed; using search-derived context only: {exc}"
+            )
+            selected_paths = (
+                paths_from_ranked_results(search_result_dicts)
+                or paths_from_search_results(search_blocks)
+            )
+
+        candidate_paths = dedupe([*repo_attachment_paths, *selected_paths])
 
 
     ################## Resolve paths ##################
@@ -1104,23 +1148,38 @@ def patch_node(
     else:
         status = "patched"
 
-    patch_failure_fields: dict[str, object] = {}
+    patch_retry_fields: dict[str, object] = {}
 
-    if status == "patch_failed" and patch_attempts < max_patch_attempts:
+    if status in {"patch_failed", "patch_skipped"} and patch_attempts < max_patch_attempts:
+        if status == "patch_failed":
+            retry_reason = "failed while processing the proposed edits"
+            retry_detail = (
+                "Emphasize the files involved in the failed edits, exact current file "
+                "contents, and any missing surrounding symbols/imports needed for a "
+                "valid replacement."
+            )
+        else:
+            retry_reason = "returned no edits even though repository context was gathered"
+            retry_detail = (
+                "Treat the patch summary as a missing-context signal. Re-select the "
+                "direct implementation files and related schemas/transport files, then "
+                "load their exact repository contents before retrying."
+            )
 
-        patch_failure_focus = (
-            f"Patch attempt {patch_attempts} failed before validation. "
-            "Re-run repo navigation and context gathering with emphasis on the "
-            "files involved in the failed edits, exact current file contents, "
-            "and any missing surrounding symbols/imports needed for a valid replace."
+        patch_retry_focus = (
+            f"Patch attempt {patch_attempts} {retry_reason}. {retry_detail} "
+            f"Patcher summary: {decision.summary or '(none)'}"
         )
 
-        patch_failure_fields = {
+        patch_retry_fields = {
             "continue_loop": True,
-            "loop_context_focus": patch_failure_focus,
+            "loop_context_focus": patch_retry_focus,
             "loop_notes": [
                 *state.get("loop_notes", []),
-                f"Patch attempt {patch_attempts}: patch failed; refresh context before retry.",
+                (
+                    f"Patch attempt {patch_attempts}: {status}; refresh prioritized "
+                    "repository context before retry."
+                ),
             ][-8:],
             "search_results": [],
             "repo_navigation_files": [],
@@ -1128,10 +1187,10 @@ def patch_node(
             "context": [],
             "files_inspected": [],
         }
-        
 
     return {
-        **patch_failure_fields,
+        **patch_retry_fields,
+        "continue_loop": bool(patch_retry_fields),
         "patch_attempts": patch_attempts,
         "max_patch_attempts": max_patch_attempts,
         "file_changes": file_changes,
