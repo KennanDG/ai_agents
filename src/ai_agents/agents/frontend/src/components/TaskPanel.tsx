@@ -513,7 +513,7 @@ export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl
                 }
               }}
               onPaste={handlePaste}
-              placeholder="Ask the agent to change your code…"
+              placeholder="Describe the coding task and attach relevant files…"
               className="w-full resize-none bg-transparent text-xs leading-5 text-ink outline-none placeholder:text-faint"
             />
 

@@ -120,3 +120,4 @@ override.tf
 override.tf.json
 *_override.tf
 *_override.tf.json
+groq_available_models.json

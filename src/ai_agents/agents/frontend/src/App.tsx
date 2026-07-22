@@ -467,6 +467,7 @@ const App = () => {
         body: `${response.transcript ? `🎙️ ${response.transcript}` : "🎙️ Voice input"}${draftContext}${attachmentContext}`,
         time: nowLabel(),
       };
+      
       const agentVoiceMessage: AgentMessage = {
         id: crypto.randomUUID(),
         role: "agent",
