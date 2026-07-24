@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -12,6 +13,24 @@ from ai_agents.agents.voice.prompts import VOICE_INTAKE_SYSTEM_PROMPT
 from ai_agents.agents.voice.schemas import VoiceIntakeDecision
 from ai_agents.agents.voice.state import VoiceAgentState
 from ai_agents.config.settings import settings
+
+from ai_agents.agents.voice.utils.constants import (
+    MAX_REPO_FILES,
+    MAX_TREE_FILES,
+    MAX_SEARCH_MATCHES,
+    MAX_FILE_BYTES,
+    MAX_EXPLICIT_FILE_CHARS,
+    MAX_ATTACHMENT_CONTENT_CHARS,
+    MAX_TOTAL_ATTACHMENT_CONTENT_CHARS,
+    MAX_CONTEXT_JSON_CHARS,
+    MAX_LLM_TREE_PATHS,
+    MAX_LLM_EXPLICIT_FILE_CHARS,
+    MAX_LLM_SEARCH_EXCERPT_CHARS,
+    MAX_LLM_ATTACHMENT_EXCERPT_CHARS
+)
+
+
+logger = logging.getLogger(__name__)
 
 
 IGNORED_DIRS = {
@@ -78,14 +97,7 @@ STOP_WORDS = {
     "would",
 }
 
-MAX_REPO_FILES = 700
-MAX_TREE_FILES = 250
-MAX_SEARCH_MATCHES = 10
-MAX_FILE_BYTES = 250_000
-MAX_EXPLICIT_FILE_CHARS = 8_000
-MAX_ATTACHMENT_CONTENT_CHARS = 6_000
-MAX_TOTAL_ATTACHMENT_CONTENT_CHARS = 18_000
-MAX_CONTEXT_JSON_CHARS = 48_000
+
 
 
 def _client() -> Groq:
@@ -290,6 +302,94 @@ def _attachment_context(
     return results
 
 
+def _compact_repo_context(repo_context: dict[str, Any]) -> dict[str, Any]:
+    """Build a bounded, structured context object for the intake model.
+
+    Do not pass the full context JSON as a nested string. Double-encoding makes it
+    easy for a model to echo thousands of escaped characters and hit its output cap.
+    """
+    explicit_files = [
+        {
+            "path": item.get("path"),
+            "content_excerpt": str(item.get("content_excerpt") or "")[
+                :MAX_LLM_EXPLICIT_FILE_CHARS
+            ],
+        }
+        for item in repo_context.get("explicit_files", [])[:5]
+        if isinstance(item, dict) and item.get("path")
+    ]
+
+    search_matches = [
+        {
+            "path": item.get("path"),
+            "score": item.get("score"),
+            "matched_terms": item.get("matched_terms", [])[:8],
+            "content_excerpt": str(item.get("content_excerpt") or "")[
+                :MAX_LLM_SEARCH_EXCERPT_CHARS
+            ],
+        }
+        for item in repo_context.get("search_matches", [])[:MAX_SEARCH_MATCHES]
+        if isinstance(item, dict) and item.get("path")
+    ]
+
+    attachment_context = [
+        {
+            "name": item.get("name"),
+            "source": item.get("source"),
+            "path": item.get("path"),
+            "mime_type": item.get("mime_type"),
+            "size": item.get("size"),
+            "has_image_data": bool(item.get("has_image_data")),
+            "content_excerpt": str(item.get("content_excerpt") or "")[
+                :MAX_LLM_ATTACHMENT_EXCERPT_CHARS
+            ],
+            "content_truncated": bool(item.get("content_truncated")),
+        }
+        for item in repo_context.get("attachment_context", [])[:5]
+        if isinstance(item, dict)
+    ]
+
+    relevant_paths = list(
+        dict.fromkeys(
+            [item["path"] for item in explicit_files]
+            + [item["path"] for item in search_matches]
+        )
+    )
+
+    return {
+        "repo_root": repo_context.get("repo_root"),
+        "active_path": repo_context.get("active_path"),
+        "relevant_paths": relevant_paths[:25],
+        "tree_sample": repo_context.get("repository_tree", [])[:MAX_LLM_TREE_PATHS],
+        "explicit_files": explicit_files,
+        "search_matches": search_matches,
+        "attachment_context": attachment_context,
+    }
+
+
+def _is_json_generation_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "json_validate_failed" in text or "failed to generate json" in text
+
+
+def _request_intake_decision(
+    *,
+    messages: list[dict[str, str]],
+    temperature: float,
+) -> VoiceIntakeDecision:
+    
+    completion = _client().chat.completions.create(
+        model=settings.voice_chat_model,
+        messages=messages,
+        temperature=temperature,
+        max_tokens=max(512, settings.voice_chat_max_tokens),
+        response_format={"type": "json_object"},
+    )
+
+    content = completion.choices[0].message.content or "{}"
+    return VoiceIntakeDecision.model_validate_json(content)
+
+
 def gather_context_node(state: VoiceAgentState) -> VoiceAgentState:
     transcript = state.get("transcript", "").strip()
     prompt_text = state.get("prompt_text", "").strip()
@@ -377,7 +477,8 @@ def gather_context_node(state: VoiceAgentState) -> VoiceAgentState:
         errors.append("Voice context gathering could not resolve the repository root.")
 
     recommended_skills = _select_skills(combined_request, attachments)
-    context_summary = json.dumps(repo_context, ensure_ascii=False, default=str)
+    compact_context = _compact_repo_context(repo_context)
+    context_summary = json.dumps(compact_context, ensure_ascii=False, default=str)
     if len(context_summary) > MAX_CONTEXT_JSON_CHARS:
         context_summary = context_summary[:MAX_CONTEXT_JSON_CHARS] + "...[context truncated]"
 
@@ -391,22 +492,50 @@ def gather_context_node(state: VoiceAgentState) -> VoiceAgentState:
 
 
 def _default_plan(state: VoiceAgentState) -> list[str]:
-    attachments = state.get("attached_files", [])
-    active_path = state.get("active_path")
+    repo_context = state.get("repo_context", {})
+    explicit_paths = [
+        str(item.get("path"))
+        for item in repo_context.get("explicit_files", [])
+        if isinstance(item, dict) and item.get("path")
+    ]
+    search_paths = [
+        str(item.get("path"))
+        for item in repo_context.get("search_matches", [])[:8]
+        if isinstance(item, dict) and item.get("path")
+    ]
+    relevant_paths = list(dict.fromkeys([*explicit_paths, *search_paths]))
 
     plan = [
-        "Trace the current submission flow from the text area and voice recorder through the API and into the coding-agent request payload.",
-        "Update shared request/state contracts so typed draft text and attachment metadata remain available during voice clarification turns.",
-        "Preserve the original attachment objects in the frontend and pass them to the coding agent when voice intake reaches ready status.",
-        "Add bounded repository and attachment context gathering before the voice planning step, with safe path handling and context limits.",
-        "Validate normal typed submission, voice-only submission, voice plus typed draft, and voice plus uploaded/repository attachments.",
+        "Review the resolved voice conversation and confirm the exact requested outcome.",
     ]
 
-    if active_path:
-        plan.insert(0, f"Inspect the active file `{active_path}` and its direct callers before editing.")
+    if relevant_paths:
+        plan.append(
+            "Inspect the most relevant repository files before editing: "
+            + ", ".join(relevant_paths[:6])
+            + "."
+        )
+    else:
+        plan.append(
+            "Search the repository for the files and existing patterns that implement the requested behavior."
+        )
+
+    attachments = state.get("attached_files", [])
     if attachments:
         names = ", ".join(str(item.get("name") or "attachment") for item in attachments[:5])
-        plan.insert(1, f"Inspect the attached files provided separately to the coding agent: {names}.")
+        plan.append(f"Inspect the attached context passed separately to the coding agent: {names}.")
+
+    plan.extend(
+        [
+            "Implement the smallest safe change using the repository's existing architecture and style.",
+            "Run focused validation for the changed files and report any failures or remaining assumptions.",
+        ]
+    )
+
+    if state.get("allow_write"):
+        plan.append("Prepare reviewable changes through the normal human approval flow.")
+    else:
+        plan.append("Remain read-only and report the exact proposed changes.")
 
     return plan
 
@@ -433,11 +562,22 @@ def _fallback_coding_request(
         f"- {item.get('name')} ({item.get('source')}, path={item.get('path') or 'n/a'})"
         for item in attachments
     ]
-    target_files = [
-        item.get("path")
-        for item in state.get("repo_context", {}).get("explicit_files", [])
-        if isinstance(item, dict) and item.get("path")
-    ]
+    repo_context = state.get("repo_context", {})
+    
+    target_files = list(
+        dict.fromkeys(
+            [
+                str(item.get("path"))
+                for item in repo_context.get("explicit_files", [])
+                if isinstance(item, dict) and item.get("path")
+            ]
+            + [
+                str(item.get("path"))
+                for item in repo_context.get("search_matches", [])[:8]
+                if isinstance(item, dict) and item.get("path")
+            ]
+        )
+    )
     target_text = "\n".join(f"- {path}" for path in target_files) or "- Verify the correct files from the repository tree and search matches."
     plan = _default_plan(state)
     write_mode = (
@@ -458,10 +598,9 @@ def _fallback_coding_request(
         + "\n\nDetailed plan of action\n"
         + "\n".join(f"{index}. {step}" for index, step in enumerate(plan, start=1))
         + "\n\nValidation and acceptance criteria\n"
-        "- Confirm voice clarification turns retain the current draft and attachments.\n"
-        "- Confirm the final coding-agent WebSocket request contains the original attached_files array.\n"
-        "- Confirm typed-only submission behavior is unchanged.\n"
-        "- Run focused Python and TypeScript checks available in the repository.\n\n"
+        "- Confirm the resolved user requirements are implemented without unrelated behavior changes.\n"
+        "- Run the smallest relevant tests, type checks, lint checks, or build commands available in the repository.\n"
+        "- Report validation failures and any assumptions that still need verification.\n\n"
         "Constraints and assumptions\n"
         "- Inspect repository evidence before making assumptions.\n"
         "- Preserve existing attachment limits and approval behavior.\n"
@@ -489,11 +628,21 @@ def _ensure_detailed_coding_request(
     if all(marker.lower() in request.lower() for marker in required_markers):
         return request
 
-    target_files = decision.target_files or [
-        str(item.get("path"))
-        for item in state.get("repo_context", {}).get("explicit_files", [])
-        if isinstance(item, dict) and item.get("path")
-    ]
+    repo_context = state.get("repo_context", {})
+    target_files = decision.target_files or list(
+        dict.fromkeys(
+            [
+                str(item.get("path"))
+                for item in repo_context.get("explicit_files", [])
+                if isinstance(item, dict) and item.get("path")
+            ]
+            + [
+                str(item.get("path"))
+                for item in repo_context.get("search_matches", [])[:8]
+                if isinstance(item, dict) and item.get("path")
+            ]
+        )
+    )
 
     return (
         "Objective\n"
@@ -511,9 +660,9 @@ def _ensure_detailed_coding_request(
         + "\n\nDetailed plan of action\n"
         + "\n".join(f"{index}. {step}" for index, step in enumerate(plan, start=1))
         + "\n\nValidation and acceptance criteria\n"
-        "- Exercise voice-only, voice plus typed draft, and voice plus attachment handoffs.\n"
-        "- Verify attached_files reaches the coding-agent run request unchanged.\n"
-        "- Run focused backend and frontend checks.\n\n"
+        "- Confirm the resolved requirements are implemented without unrelated behavior changes.\n"
+        "- Run focused validation for the files and technologies actually changed.\n"
+        "- Report failures and unresolved assumptions clearly.\n\n"
         "Constraints and assumptions\n"
         "- Use gathered context as evidence and verify uncertain targets.\n"
         "- Preserve existing approval and attachment-limit behavior."
@@ -533,6 +682,7 @@ def intake_node(state: VoiceAgentState) -> VoiceAgentState:
             "errors": [*state.get("errors", []), "Empty transcript and typed draft."],
         }
 
+    repository_context = _compact_repo_context(state.get("repo_context", {}))
     context: dict[str, object] = {
         "repo_root": state.get("repo_root"),
         "workspace_root": state.get("workspace_root"),
@@ -551,7 +701,7 @@ def intake_node(state: VoiceAgentState) -> VoiceAgentState:
         ],
         "recommended_skills": state.get("recommended_skills", []),
         "tools_used": state.get("tools_used", []),
-        "repository_context_summary": state.get("context_summary", ""),
+        "repository_context": repository_context,
     }
 
     clarification_count = _count_prior_clarifications(history)
@@ -565,24 +715,54 @@ def intake_node(state: VoiceAgentState) -> VoiceAgentState:
         f"Clarifying questions already asked: {clarification_count}\n"
         f"Maximum clarifying questions allowed: {max_clarifications}\n"
         f"Clarification limit reached: {clarification_limit_reached}\n\n"
-        "Use the supplied skills and tool results. If ready, return a structured, detailed coding_request. "
+        "Use the supplied skills and tool results. If ready, return a concise coding_request string, "
+        "with implementation steps in plan and paths in target_files. Do not copy raw repository context. "
         "If the clarification limit is reached, return status=ready with the best repository-grounded plan."
     )
 
+    messages = [
+        {"role": "system", "content": VOICE_INTAKE_SYSTEM_PROMPT},
+        *history,
+        {"role": "user", "content": user_content},
+    ]
+
     try:
-        completion = _client().chat.completions.create(
-            model=settings.voice_chat_model,
-            messages=[
+        try:
+            decision = _request_intake_decision(messages=messages, temperature=0.2)
+        except Exception as first_exc:
+            if not _is_json_generation_error(first_exc):
+                raise
+
+            logger.warning(
+                "Voice intake JSON generation failed; retrying with a minimal response instruction: %s",
+                first_exc,
+            )
+
+            retry_content = (
+                "Return the smallest valid JSON object matching the system schema. "
+                "coding_request must be a short plain string, never an object. "
+                "Do not repeat repository context, trees, excerpts, or raw JSON.\n\n"
+                f"Latest transcript: {transcript or '[none]'}\n"
+                f"Typed draft: {prompt_text or '[none]'}\n"
+                f"Relevant paths: {repository_context.get('relevant_paths', [])}\n"
+                f"Clarification limit reached: {clarification_limit_reached}"
+            )
+
+            retry_messages = [
                 {"role": "system", "content": VOICE_INTAKE_SYSTEM_PROMPT},
                 *history,
-                {"role": "user", "content": user_content},
-            ],
-            temperature=0.2,
-            response_format={"type": "json_object"},
-        )
+                {"role": "user", "content": retry_content},
+            ]
 
-        content = completion.choices[0].message.content or "{}"
-        decision = VoiceIntakeDecision.model_validate_json(content)
+            try:
+                decision = _request_intake_decision(
+                    messages=retry_messages,
+                    temperature=0.0,
+                )
+            except Exception as retry_exc:
+                raise RuntimeError(
+                    f"Initial JSON generation failed: {first_exc}; retry failed: {retry_exc}"
+                ) from retry_exc
 
         if clarification_limit_reached and (
             decision.status != "ready" or not decision.coding_request

@@ -150,6 +150,7 @@ class Settings(BaseSettings):
     # Voice Agent
     voice_stt_model: str = Field(default="whisper-large-v3-turbo", alias="VOICE_STT_MODEL")
     voice_chat_model: str = Field(default="llama-3.1-8b-instant", alias="VOICE_CHAT_MODEL")
+    voice_chat_max_tokens: int = Field(default=2_048, alias="VOICE_CHAT_MAX_TOKENS")
     voice_tts_model: str = Field(default="canopylabs/orpheus-v1-english", alias="VOICE_TTS_MODEL")
     voice_tts_voice: str = Field(default="hannah", alias="VOICE_TTS_VOICE")
     voice_tts_enabled: bool = Field(default=True, alias="VOICE_TTS_ENABLED")
