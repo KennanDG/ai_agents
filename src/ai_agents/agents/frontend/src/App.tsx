@@ -30,8 +30,8 @@ const apiKey = import.meta.env.VITE_AI_AGENTS_API_KEY ?? "";
 const configuredRepoRoot : string = import.meta.env.VITE_CODING_AGENT_REPO_ROOT ?? ".";
 const configuredWorkspaceRoot : string = import.meta.env.VITE_CODING_AGENT_WORKSPACE_ROOT ?? configuredRepoRoot;
 
-const initialRunState: AgentRunState = {
-  status: "connecting",
+const createRunState = (status: AgentRunState["status"] = "connecting"): AgentRunState => ({
+  status,
   plan: [],
   completedNodes: [],
   filesInspected: [],
@@ -46,7 +46,9 @@ const initialRunState: AgentRunState = {
   appliedFiles: [],
   errors: [],
   logs: [],
-};
+});
+
+const initialRunState = createRunState();
 
 const nowLabel = () => {
   return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date());
@@ -178,8 +180,7 @@ const runReducer = (state: AgentRunState, event: CodingAgentServerEvent): AgentR
 
     case "run.started":
       return {
-        ...initialRunState,
-        status: "running",
+        ...createRunState("running"),
         runId: event.run_id,
         threadId: event.thread_id,
         logs: [
@@ -318,6 +319,7 @@ const App = () => {
   // const [sidebarOpen, setSidebarOpen] = useState(true);
   const socketRef = useRef<ReturnType<typeof createCodingAgentSocket> | null>(null);
   const newThreadForNextRunRef = useRef(false);
+  const activeRunMessageIdRef = useRef<string | null>(null);
 
   
   const activeChange = useMemo(
@@ -513,6 +515,17 @@ const App = () => {
       onEvent: (event) => {
         dispatchRun(event);
 
+        const activeRunMessageId = activeRunMessageIdRef.current;
+        if (activeRunMessageId) {
+          setMessages((current) =>
+            current.map((message) =>
+              message.id === activeRunMessageId && message.run
+                ? { ...message, run: runReducer(message.run, event) }
+                : message,
+            ),
+          );
+        }
+
         if (event.type === "run.started") {
           newThreadForNextRunRef.current = false;
         }
@@ -644,8 +657,13 @@ const App = () => {
       }
 
       if (response.status === "ready" && response.coding_request) {
+        activeRunMessageIdRef.current = userVoiceMessage.id;
         setMessages((current) => [
-          ...current,
+          ...current.map((message) =>
+            message.id === userVoiceMessage.id
+              ? { ...message, run: createRunState("running") }
+              : message,
+          ),
           {
             id: crypto.randomUUID(),
             role: "agent",
@@ -696,20 +714,22 @@ const App = () => {
       attachedFiles.length > 0
         ? `\n\nAttached files:\n${attachedFiles.map((file) => `- ${file.name}`).join("\n")}`
         : "";
+    const messageId = crypto.randomUUID();
 
+    activeRunMessageIdRef.current = messageId;
     setMessages((current) => [
       ...current,
       {
-        id: crypto.randomUUID(),
+        id: messageId,
         role: "user",
         body: prompt + attachmentLabel,
         time: nowLabel(),
+        run: createRunState("running"),
       },
     ]);
 
     runCodingAgent(prompt, attachedFiles);
   };
-
 
 
   return (
@@ -724,6 +744,7 @@ const App = () => {
         changes={run.fileChanges}
         activePath={activePath}
         isLoading={repoLoading}
+        agentRunning={run.status === "running"}
         error={repoError}
         onSelect={setActivePath}
         onRefresh={refreshRepository}

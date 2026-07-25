@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useState, ReactNode } from "react";
-import { ChevronDown, ChevronRight, FileCode2, Folder, FolderGit2, RotateCcw } from "lucide-react";
+import { ChevronDown, ChevronRight, FileCode2, Folder, FolderGit2, LoaderCircle, RotateCcw } from "lucide-react";
 import type { FileChange, RepositoryTreeEntry } from "../types";
 import type { GitHubRepositorySummary, GitHubBranchSummary } from "../lib/repositoryApi";
 
@@ -10,6 +10,7 @@ interface SidebarProps {
   changes: FileChange[];
   activePath: string | null;
   isLoading: boolean;
+  agentRunning?: boolean;
   error?: string | null;
   onSelect: (path: string) => void;
   onRefresh: () => void;
@@ -47,6 +48,7 @@ export const Sidebar = ({
   changes,
   activePath,
   isLoading,
+  agentRunning = false,
   error,
   onSelect,
   onRefresh,
@@ -203,7 +205,7 @@ export const Sidebar = ({
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
-        {changes.length > 0 && (
+        {(changes.length > 0 || agentRunning) && (
           <div className="border-b border-line py-2 max-h-64 overflow-y-auto">
             <button
               type="button"
@@ -211,8 +213,17 @@ export const Sidebar = ({
               className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted hover:bg-hover"
             >
               {showChanges ? <ChevronDown size={12} className="text-muted" /> : <ChevronRight size={12} className="text-muted" />}
-              Agent changes · {changes.length}
+              <span>Agent changes · {changes.length}</span>
+              {agentRunning ? (
+                <LoaderCircle size={12} className="ml-auto animate-spin text-accent-light" aria-label="Agent is running" />
+              ) : null}
             </button>
+            {showChanges && agentRunning && changes.length === 0 ? (
+              <div className="flex items-center gap-2 px-4 py-3 text-[10px] text-muted">
+                <LoaderCircle size={12} className="animate-spin text-accent-light" />
+                Generating file changes…
+              </div>
+            ) : null}
             {showChanges && changes.map((change) => {
               const fileName = change.path.split("/").at(-1);
               const folder = change.path.slice(0, -(fileName?.length ?? 0)).replace(/\/$/, "");

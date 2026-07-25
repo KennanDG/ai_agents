@@ -11,6 +11,7 @@ from groq import Groq
 
 from ai_agents.agents.voice.prompts import VOICE_INTAKE_SYSTEM_PROMPT
 from ai_agents.agents.voice.schemas import VoiceIntakeDecision
+from ai_agents.config.settings import settings
 from ai_agents.agents.voice.state import VoiceAgentState
 from ai_agents.agents.voice.utils.constants import (
     MAX_ATTACHMENT_CONTENT_CHARS,
@@ -26,7 +27,6 @@ from ai_agents.agents.voice.utils.constants import (
     MAX_TOTAL_ATTACHMENT_CONTENT_CHARS,
     MAX_TREE_FILES,
 )
-from ai_agents.config.settings import settings
 
 
 logger = logging.getLogger(__name__)
@@ -580,7 +580,9 @@ def _fallback_coding_request(
             ]
         )
     )
-    target_text = "\n".join(f"- {path}" for path in target_files) or "- Verify the correct files from the repository tree and search matches."
+    target_text = "\n".join(f"- {path}" for path in target_files) or (
+        "- Verify the correct files from the repository tree and search matches."
+    )
     plan = _default_plan(state)
     write_mode = (
         "Prepare the patch and use the normal human approval flow before repository writes."
@@ -600,8 +602,10 @@ def _fallback_coding_request(
         + "\n\nDetailed plan of action\n"
         + "\n".join(f"{index}. {step}" for index, step in enumerate(plan, start=1))
         + "\n\nValidation and acceptance criteria\n"
-        "- Confirm the resolved user requirements are implemented without unrelated behavior changes.\n"
-        "- Run the smallest relevant tests, type checks, lint checks, or build commands available in the repository.\n"
+        "- Confirm the resolved user requirements are implemented without unrelated "
+        "behavior changes.\n"
+        "- Run the smallest relevant tests, type checks, lint checks, or build "
+        "commands available in the repository.\n"
         "- Report validation failures and any assumptions that still need verification.\n\n"
         "Constraints and assumptions\n"
         "- Inspect repository evidence before making assumptions.\n"
@@ -648,7 +652,8 @@ def _ensure_detailed_coding_request(
 
     return (
         "Objective\n"
-        f"{request or 'Implement the resolved voice request using the gathered repository context.'}\n\n"
+        f"{request or 'Implement the resolved voice request using the gathered repository context.'}"
+        "\n\n"
         "Repository and attachment context\n"
         + (
             "- Attached files passed separately: " + ", ".join(attachment_names)
@@ -711,10 +716,16 @@ def intake_node(state: VoiceAgentState) -> VoiceAgentState:
     clarification_limit_reached = clarification_count >= max_clarifications
 
     # Collect previously asked questions to avoid repetition.
+    # Use simple normalization and a set to skip near-duplicates.
     previous_questions: list[str] = []
+    seen_questions: set[str] = set()
     for item in history:
         if item["role"] == "assistant" and "?" in item["content"]:
-            previous_questions.append(item["content"][:200].strip())
+            q = item["content"][:200].strip()
+            q_normalized = q.lower().rstrip("?").strip()
+            if q_normalized and q_normalized not in seen_questions:
+                seen_questions.add(q_normalized)
+                previous_questions.append(q)
     previous_questions_list = "\n".join(
         f"- {q}" for q in previous_questions[-6:]
     ) or "- None"
@@ -722,12 +733,15 @@ def intake_node(state: VoiceAgentState) -> VoiceAgentState:
     user_content = (
         f"Latest user transcript:\n{transcript or '[none]'}\n\n"
         f"Current typed draft in the text area:\n{prompt_text or '[none]'}\n\n"
-        f"Current UI, attachment, and repository context:\n{json.dumps(context, indent=2, default=str)}\n\n"
+        f"Current UI, attachment, and repository context:\n"
+        f"{json.dumps(context, indent=2, default=str)}\n\n"
         f"Clarifying questions already asked: {clarification_count}\n"
         f"Maximum clarifying questions allowed: {max_clarifications}\n"
         f"Clarification limit reached: {clarification_limit_reached}\n\n"
-        f"Previously asked questions (do not repeat these):\n{previous_questions_list}\n\n"
-        "Use the supplied skills and tool results. If ready, return a concise coding_request string, "
+        f"Previously asked questions (do not repeat or rephrase any of these—"
+        f"ask something genuinely different):\n{previous_questions_list}\n\n"
+        "Use the supplied skills and tool results. If ready, return a concise "
+        "coding_request string, "
         "with implementation steps in plan and paths in target_files. Do not copy raw repository context. "
         "If the clarification limit is reached, return status=ready with the best repository-grounded plan."
     )
