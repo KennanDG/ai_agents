@@ -12,14 +12,21 @@ import {
   type CodingAgentServerEvent,
 } from "./lib/codingAgentSocket";
 
-import { fetchRepositoryFile, fetchRepositoryTree } from "./lib/repositoryApi";
+import {
+  fetchGitHubRepositories,
+  fetchGitHubStatus,
+  fetchRepositoryFile,
+  fetchRepositoryTree,
+  importGitHubRepository,
+  type GitHubRepositorySummary,
+} from "./lib/repositoryApi";
 import { submitVoiceTurn } from "./lib/voiceAgentApi";
 import type { AgentMessage, AgentRunState, ChangeStatus, FileChange, RepositoryFile, RepositoryTreeEntry } from "./types";
 
 const apiBaseUrl = import.meta.env.VITE_AI_AGENTS_API_BASE ?? "http://0.0.0.0:8000";
 const apiKey = import.meta.env.VITE_AI_AGENTS_API_KEY ?? "";
-const configuredRepoRoot = import.meta.env.VITE_CODING_AGENT_REPO_ROOT ?? ".";
-const configuredWorkspaceRoot = import.meta.env.VITE_CODING_AGENT_WORKSPACE_ROOT ?? configuredRepoRoot;
+const configuredRepoRoot : string = import.meta.env.VITE_CODING_AGENT_REPO_ROOT ?? ".";
+const configuredWorkspaceRoot : string = import.meta.env.VITE_CODING_AGENT_WORKSPACE_ROOT ?? configuredRepoRoot;
 
 const initialRunState: AgentRunState = {
   status: "connecting",
@@ -291,6 +298,10 @@ const App = () => {
   const [repoEntries, setRepoEntries] = useState<RepositoryTreeEntry[]>([]);
   const [repoLoading, setRepoLoading] = useState(false);
   const [repoError, setRepoError] = useState<string | null>(null);
+  const [githubRepositories, setGitHubRepositories] = useState<GitHubRepositorySummary[]>([]);
+  const [githubLoading, setGitHubLoading] = useState(false);
+  const [githubError, setGitHubError] = useState<string | null>(null);
+  const [selectedGitHubRepository, setSelectedGitHubRepository] = useState<string | null>(null);
   const [run, dispatchRun] = useReducer(runReducer, initialRunState);
 
   const [voiceSessionId, setVoiceSessionId] = useState<string | null>(null);
@@ -300,6 +311,7 @@ const App = () => {
 
   // const [sidebarOpen, setSidebarOpen] = useState(true);
   const socketRef = useRef<ReturnType<typeof createCodingAgentSocket> | null>(null);
+  const newThreadForNextRunRef = useRef(false);
 
   
   const activeChange = useMemo(
@@ -308,19 +320,24 @@ const App = () => {
   );
 
   const repoName = useMemo(() => repoRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? "repository", [repoRoot]);
+  const effectiveWorkspaceRoot = selectedGitHubRepository
+    ? repoRoot
+    : configuredWorkspaceRoot === configuredRepoRoot
+      ? repoRoot
+      : configuredWorkspaceRoot;
 
-
-  const refreshRepository = useCallback(async () => {
+  const loadRepository = useCallback(async (targetRoot: string) => {
     setRepoLoading(true);
     setRepoError(null);
 
     try {
-      const tree = await fetchRepositoryTree({ apiBaseUrl, apiKey, repoRoot: configuredRepoRoot });
+      const tree = await fetchRepositoryTree({ apiBaseUrl, apiKey, repoRoot: targetRoot });
       setRepoRoot(tree.repo_root);
       setRepoEntries(tree.entries);
 
       const firstFile = tree.entries.find((entry) => entry.kind === "file");
-      setActivePath((current) => current ?? firstFile?.path ?? null);
+      setActivePath(firstFile?.path ?? null);
+      setActiveFile(null);
     } catch (error) {
       setRepoError(error instanceof Error ? error.message : "Failed to load repository.");
     } finally {
@@ -328,11 +345,71 @@ const App = () => {
     }
   }, []);
 
+  const refreshRepository = useCallback(async () => {
+    await loadRepository(repoRoot);
+  }, [loadRepository, repoRoot]);
 
+  const refreshGitHubRepositories = useCallback(async () => {
+    setGitHubLoading(true);
+    setGitHubError(null);
+
+    try {
+      const status = await fetchGitHubStatus({ apiBaseUrl, apiKey });
+      if (!status.connected) {
+        setGitHubRepositories([]);
+        setGitHubError("GitHub is not configured on the backend.");
+        return;
+      }
+
+      const repositories = await fetchGitHubRepositories({ apiBaseUrl, apiKey });
+      setGitHubRepositories(repositories);
+    } catch (error) {
+      setGitHubRepositories([]);
+      setGitHubError(error instanceof Error ? error.message : "Failed to load GitHub repositories.");
+    } finally {
+      setGitHubLoading(false);
+    }
+  }, []);
+
+  const selectGitHubRepository = useCallback(async (fullName: string) => {
+    const repository = githubRepositories.find((item) => item.full_name === fullName);
+    if (!repository) {
+      setGitHubError(`Repository is not available: ${fullName}`);
+      return;
+    }
+
+    setGitHubLoading(true);
+    setGitHubError(null);
+
+    try {
+      const imported = await importGitHubRepository({
+        apiBaseUrl,
+        apiKey,
+        fullName,
+        ref: repository.default_branch,
+      });
+      setSelectedGitHubRepository(imported.full_name);
+      newThreadForNextRunRef.current = true;
+      await loadRepository(imported.repo_root);
+    } catch (error) {
+      setGitHubError(error instanceof Error ? error.message : "Failed to import GitHub repository.");
+    } finally {
+      setGitHubLoading(false);
+    }
+  }, [githubRepositories, loadRepository]);
+
+  const useLocalRepository = useCallback(async () => {
+    setSelectedGitHubRepository(null);
+    newThreadForNextRunRef.current = true;
+    await loadRepository(configuredRepoRoot);
+  }, [loadRepository]);
 
   useEffect(() => {
-    void refreshRepository();
-  }, [refreshRepository]);
+    void loadRepository(configuredRepoRoot);
+    void refreshGitHubRepositories();
+  }, [loadRepository, refreshGitHubRepositories]);
+
+
 
   useEffect(() => {
     return () => {
@@ -377,6 +454,10 @@ const App = () => {
       apiKey,
       onEvent: (event) => {
         dispatchRun(event);
+
+        if (event.type === "run.started") {
+          newThreadForNextRunRef.current = false;
+        }
 
         if (event.type === "run.completed" && event.payload.report) {
           setMessages((current) => [
@@ -447,7 +528,7 @@ const App = () => {
         promptText,
         attachedFiles,
         repoRoot,
-        workspaceRoot: configuredWorkspaceRoot === configuredRepoRoot ? repoRoot : configuredWorkspaceRoot,
+        workspaceRoot: effectiveWorkspaceRoot,
         activePath,
         allowWrite,
       });
@@ -540,10 +621,10 @@ const App = () => {
 
   const runCodingAgent = (request: string, attachedFiles: CodingAgentAttachedFile[] = []) => {
     socketRef.current?.run({
-      thread_id: run.threadId,
+      thread_id: newThreadForNextRunRef.current ? null : run.threadId,
       request,
       repo_root: repoRoot,
-      workspace_root: configuredWorkspaceRoot === configuredRepoRoot ? repoRoot : configuredWorkspaceRoot,
+      workspace_root: effectiveWorkspaceRoot,
       allow_write: allowWrite,
       memory_enabled: memoryEnabled,
       attached_files: attachedFiles,
@@ -588,6 +669,13 @@ const App = () => {
         error={repoError}
         onSelect={setActivePath}
         onRefresh={refreshRepository}
+        githubRepositories={githubRepositories}
+        selectedGitHubRepository={selectedGitHubRepository}
+        githubLoading={githubLoading}
+        githubError={githubError}
+        onSelectGitHubRepository={selectGitHubRepository}
+        onUseLocalRepository={useLocalRepository}
+        onRefreshGitHubRepositories={refreshGitHubRepositories}
       />
 
       {/* {sidebarOpen ? (

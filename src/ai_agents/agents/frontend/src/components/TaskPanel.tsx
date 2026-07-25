@@ -85,6 +85,7 @@ export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl
   const dragCounter = useRef(0);
   const [isRecording, setIsRecording] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [isVoiceLoading, setIsVoiceLoading] = useState(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -343,15 +344,20 @@ export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl
         audioChunksRef.current = [];
 
         if (audio.size > 0) {
-          const handedOff = await onVoiceAudio(
-            audio,
-            promptRef.current,
-            attachedFilesRef.current,
-          );
+          setIsVoiceLoading(true);
+          try {
+            const handedOff = await onVoiceAudio(
+              audio,
+              promptRef.current,
+              attachedFilesRef.current,
+            );
 
-          if (handedOff) {
-            setPrompt("");
-            setAttachedFiles([]);
+            if (handedOff) {
+              setPrompt("");
+              setAttachedFiles([]);
+            }
+          } finally {
+            setIsVoiceLoading(false);
           }
         }
       };
@@ -515,6 +521,7 @@ export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl
               onPaste={handlePaste}
               placeholder="Describe the coding task and attach relevant files…"
               className="w-full resize-none bg-transparent text-xs leading-5 text-ink outline-none placeholder:text-faint"
+              disabled={isVoiceLoading || isRunning}
             />
 
             {attachedFiles.length > 0 && (
@@ -557,9 +564,9 @@ export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl
                 aria-label={isRecording ? "Stop voice recording" : "Start voice recording"}
                 title={isRecording ? "Stop voice recording" : "Start voice recording"}
                 onClick={toggleRecording}
-                disabled={isRunning}
+                disabled={isRunning || isVoiceLoading}
               >
-                {isRecording ? <Square size={13} /> : <Mic size={14} />}
+                {isVoiceLoading ? <div className="spinner" /> : isRecording ? <Square size={13} /> : <Mic size={14} />}
               </button>
 
               <button

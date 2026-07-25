@@ -2,7 +2,7 @@ import os
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import List
+from typing import List, Literal
 
 from .secrets import get_secret_json
 
@@ -66,6 +66,17 @@ class Settings(BaseSettings):
     
 
     
+    def resolved_github_token(self) -> str | None:
+        if self.github_token:
+            return self.github_token
+
+        if self.github_secret_arn:
+            self.github_token = get_secret_json(self.github_secret_arn).get("GITHUB_TOKEN")
+            return self.github_token
+
+        return None
+
+
     model_config = SettingsConfigDict(
         env_file=os.getenv("ENV_FILE", ".env"),
         extra="ignore"
@@ -75,6 +86,21 @@ class Settings(BaseSettings):
     # App API key
     ai_agents_api_key: str | None = Field(default=None, alias="AI_AGENTS_API_KEY")
     ai_agents_secret_arn: str | None = Field(default=None, alias="AI_AGENTS_SECRET_ARN")
+
+    # GitHub repository integration
+    github_token: str | None = Field(default=None, alias="GITHUB_TOKEN")
+    github_secret_arn: str | None = Field(default=None, alias="GITHUB_SECRET_ARN")
+    github_token_kind: Literal["user", "installation"] = Field(
+        default="user",
+        alias="GITHUB_TOKEN_KIND",
+    )
+    github_api_url: str = Field(default="https://api.github.com", alias="GITHUB_API_URL")
+    github_api_version: str = Field(default="2026-03-10", alias="GITHUB_API_VERSION")
+    github_workspace_root: str = Field(
+        default=".ai-agents/github-workspaces",
+        alias="GITHUB_WORKSPACE_ROOT",
+    )
+    github_timeout_seconds: int = Field(default=120, alias="GITHUB_TIMEOUT_SECONDS")
 
     # LangChain
     langchain_api_key: str | None = Field(default=None, alias="LANGCHAIN_API_KEY")

@@ -15,7 +15,8 @@ The broader repo also contains RAG infrastructure, but the current main focus of
 - [ ] Add stronger evaluation coverage.
 - [ ] Refine long-term memory behavior.
 - [ ] Add deployment documentation.
-- [ ] Create a Voice Agent for verbal queries. 
+- [x] Create a Voice Agent for verbal queries. 
+- [x] Add GitHub repository discovery and managed checkout support.
 
 ---
 
@@ -148,6 +149,14 @@ LANGSMITH_ENDPOINT=https://api.smith.langchain.com
 GROQ_API_KEY=your_groq_key
 OPEN_ROUTER_API_KEY=your_openrouter_key
 DEEPSEEK_API_KEY=your_deepseek_key
+
+# GitHub repository integration
+GITHUB_TOKEN=your_backend_only_token
+GITHUB_TOKEN_KIND=user
+GITHUB_API_URL=https://api.github.com
+GITHUB_API_VERSION=2026-03-10
+GITHUB_WORKSPACE_ROOT=.ai-agents/github-workspaces
+GITHUB_TIMEOUT_SECONDS=120
 
 # Coding agent memory
 CODING_AGENT_MEMORY_DB_URI=postgresql://user:password@localhost:5432/ai_agents
@@ -284,6 +293,43 @@ Then run normal coding-agent tasks with or without `--write`.
 
 ---
 
+
+## GitHub Repository Integration
+
+The application uses an API-first managed-checkout design:
+
+1. The backend lists repositories that the configured GitHub credential can access.
+2. The user selects a repository in the frontend workspace selector.
+3. The backend clones the selected default branch into `GITHUB_WORKSPACE_ROOT`.
+4. The existing repository tree, file preview, sandbox, patch, validation, and human approval flow runs against that managed checkout.
+
+The GitHub token remains on the backend. The clone command receives authentication through an ephemeral Git configuration environment value rather than embedding the token in the clone URL.
+
+For a single-user local setup, a fine-grained personal access token is sufficient. For a multi-user deployment, register a GitHub App and mint short-lived installation access tokens per installation instead of sharing one user token.
+
+The official GitHub MCP server is a useful later addition for agent-level issue, pull-request, Actions, and code-search tools. It should complement this managed checkout rather than replace it, because local validation and patch approval still require a filesystem checkout.
+
+### Backend routes
+
+```text
+GET  /github/status
+GET  /github/repositories
+POST /github/repositories/import
+```
+
+The import payload is:
+
+```json
+{
+  "full_name": "owner/repository",
+  "ref": "main",
+  "refresh": false
+}
+```
+
+`refresh=true` fetches and hard-resets an existing managed checkout. Do not use it while that checkout contains uncommitted work.
+
+---
 
 ## RAG Subsystem
 

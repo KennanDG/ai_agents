@@ -1,6 +1,7 @@
 import { Fragment, useMemo, useState, ReactNode } from "react";
 import { ChevronDown, ChevronRight, FileCode2, Folder, FolderGit2, RotateCcw } from "lucide-react";
 import type { FileChange, RepositoryTreeEntry } from "../types";
+import type { GitHubRepositorySummary } from "../lib/repositoryApi";
 
 interface SidebarProps {
   repoName: string;
@@ -12,6 +13,13 @@ interface SidebarProps {
   error?: string | null;
   onSelect: (path: string) => void;
   onRefresh: () => void;
+  githubRepositories?: GitHubRepositorySummary[];
+  selectedGitHubRepository?: string | null;
+  githubLoading?: boolean;
+  githubError?: string | null;
+  onSelectGitHubRepository?: (fullName: string) => void;
+  onUseLocalRepository?: () => void;
+  onRefreshGitHubRepositories?: () => void;
 }
 
 const statusColor = {
@@ -37,6 +45,13 @@ export const Sidebar = ({
   error,
   onSelect,
   onRefresh,
+  githubRepositories = [],
+  selectedGitHubRepository = null,
+  githubLoading = false,
+  githubError = null,
+  onSelectGitHubRepository,
+  onUseLocalRepository,
+  onRefreshGitHubRepositories,
 }: SidebarProps) => {
   
   const fileEntries = entries.filter((entry) => entry.kind === "file");
@@ -113,12 +128,43 @@ export const Sidebar = ({
       </div>
 
       <div className="border-b border-line p-3">
-        <button type="button" className="flex w-full items-center gap-2 rounded-md border border-line bg-surface px-2.5 py-2 text-left hover:border-line-strong">
-          <FolderGit2 size={15} className="text-accent-light" />
-          <span className="min-w-0 flex-1 truncate text-xs font-medium text-ink">{repoName}</span>
-          <ChevronDown size={13} className="text-muted" />
-        </button>
+        <div className="flex items-center gap-2">
+          <FolderGit2 size={15} className="shrink-0 text-accent-light" />
+          <select
+            value={selectedGitHubRepository ? `github:${selectedGitHubRepository}` : "local"}
+            disabled={githubLoading}
+            onChange={(event) => {
+              const value = event.target.value;
+              if (value === "local") {
+                onUseLocalRepository?.();
+              } else if (value.startsWith("github:")) {
+                onSelectGitHubRepository?.(value.slice("github:".length));
+              }
+            }}
+            className="min-w-0 flex-1 rounded-md border border-line bg-surface px-2.5 py-2 text-xs font-medium text-ink outline-none hover:border-line-strong focus:border-accent/70"
+            aria-label="Select repository"
+          >
+            <option value="local">Local · {selectedGitHubRepository ? "configured workspace" : repoName}</option>
+            {githubRepositories.map((repository) => (
+              <option key={repository.id} value={`github:${repository.full_name}`}>
+                GitHub · {repository.full_name}{repository.private ? " (private)" : ""}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Refresh GitHub repositories"
+            title="Refresh GitHub repositories"
+            onClick={onRefreshGitHubRepositories}
+            disabled={githubLoading}
+          >
+            <RotateCcw size={13} />
+          </button>
+        </div>
         <p className="mt-2 truncate px-1 font-mono text-[10px] text-faint">{repoRoot}</p>
+        {githubLoading ? <p className="mt-2 px-1 text-[10px] text-muted">Loading GitHub repositories…</p> : null}
+        {githubError ? <p className="mt-2 px-1 text-[10px] leading-4 text-rose-300">{githubError}</p> : null}
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
