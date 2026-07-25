@@ -2,7 +2,7 @@ import os
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import List
+from typing import List, Literal
 
 from .secrets import get_secret_json
 
@@ -66,6 +66,17 @@ class Settings(BaseSettings):
     
 
     
+    def resolved_github_token(self) -> str | None:
+        if self.github_token:
+            return self.github_token
+
+        if self.github_secret_arn:
+            self.github_token = get_secret_json(self.github_secret_arn).get("GITHUB_TOKEN")
+            return self.github_token
+
+        return None
+
+
     model_config = SettingsConfigDict(
         env_file=os.getenv("ENV_FILE", ".env"),
         extra="ignore"
@@ -75,6 +86,21 @@ class Settings(BaseSettings):
     # App API key
     ai_agents_api_key: str | None = Field(default=None, alias="AI_AGENTS_API_KEY")
     ai_agents_secret_arn: str | None = Field(default=None, alias="AI_AGENTS_SECRET_ARN")
+
+    # GitHub repository integration
+    github_token: str | None = Field(default=None, alias="GITHUB_TOKEN")
+    github_secret_arn: str | None = Field(default=None, alias="GITHUB_SECRET_ARN")
+    github_token_kind: Literal["user", "installation"] = Field(
+        default="user",
+        alias="GITHUB_TOKEN_KIND",
+    )
+    github_api_url: str = Field(default="https://api.github.com", alias="GITHUB_API_URL")
+    github_api_version: str = Field(default="2026-03-10", alias="GITHUB_API_VERSION")
+    github_workspace_root: str = Field(
+        default=".ai-agents/github-workspaces",
+        alias="GITHUB_WORKSPACE_ROOT",
+    )
+    github_timeout_seconds: int = Field(default=120, alias="GITHUB_TIMEOUT_SECONDS")
 
     # LangChain
     langchain_api_key: str | None = Field(default=None, alias="LANGCHAIN_API_KEY")
@@ -90,7 +116,7 @@ class Settings(BaseSettings):
     verify_model: str = Field(default="llama-3.1-8b-instant", alias="VERIFY_MODEL")
     verify_docs_model: str = Field(default="llama-3.1-8b-instant", alias="VERIFY_DOCS_MODEL")
     coding_model: str = Field(default="openai/gpt-oss-120b", alias="CODING_MODEL") 
-    reasoning_model: str = Field(default="deepseek/deepseek-v4-pro", alias="REASONING_MODEL") 
+    reasoning_model: str = Field(default="deepseek-v4-pro", alias="REASONING_MODEL") 
     groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
     groq_api_url: str | None = Field(default="https://api.groq.com/openai/v1", alias="GROQ_URL")
     groq_secret_arn: str | None = Field(default=None, alias="GROQ_SECRET_ARN")
@@ -147,6 +173,16 @@ class Settings(BaseSettings):
     verify_docs_attempts: int = Field(default=2, alias="VERIFY_DOCS_ATTEMPTS")
     verify_docs_max_chars: int = Field(default=6_000, alias="VERIFY_DOCS_MAX_CHARS")
 
+    # Voice Agent
+    voice_stt_model: str = Field(default="whisper-large-v3-turbo", alias="VOICE_STT_MODEL")
+    voice_chat_model: str = Field(default="llama-3.1-8b-instant", alias="VOICE_CHAT_MODEL")
+    voice_chat_max_tokens: int = Field(default=2_048, alias="VOICE_CHAT_MAX_TOKENS")
+    voice_tts_model: str = Field(default="canopylabs/orpheus-v1-english", alias="VOICE_TTS_MODEL")
+    voice_tts_voice: str = Field(default="hannah", alias="VOICE_TTS_VOICE")
+    voice_tts_enabled: bool = Field(default=True, alias="VOICE_TTS_ENABLED")
+    voice_tts_max_chars: int = Field(default=200, alias="VOICE_TTS_MAX_CHARS")
+    voice_max_clarifications: int = Field(default=2, alias="VOICE_MAX_CLARIFICATIONS")
+    voice_max_audio_mb: int = Field(default=15, alias="VOICE_MAX_AUDIO_MB")
 
 
 settings = Settings()

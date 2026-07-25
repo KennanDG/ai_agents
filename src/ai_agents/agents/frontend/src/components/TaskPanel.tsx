@@ -1,4 +1,4 @@
-import { ArrowUp, Check, Circle, Paperclip, ShieldCheck, Sparkles } from "lucide-react";
+import { ArrowUp, Check, Circle, Mic, Paperclip, ShieldCheck, Sparkles, Square } from "lucide-react";
 import { type ChangeEvent, type ClipboardEvent, type DragEvent, type SubmitEvent, useRef, useState } from "react";
 import type { AgentMessage, AgentRunState, RepositoryFile } from "../types";
 import type { CodingAgentAttachedFile } from "../lib/codingAgentSocket";
@@ -7,6 +7,8 @@ interface TaskPanelProps {
   messages: AgentMessage[];
   run: AgentRunState;
   onSubmit: (prompt: string, attachedFiles: CodingAgentAttachedFile[]) => void;
+  onVoiceAudio?: (audio: Blob, promptText: string, attachedFiles: CodingAgentAttachedFile[]) => Promise<boolean> | boolean;
+  voiceReplyUrl?: string | null;
   onApproveAll: () => void;
   onRejectChanges: () => void;
   allowWrite: boolean;
@@ -73,7 +75,7 @@ const readAsDataUrl = (file: File) =>
 /*
    =============  Component  =============
 */
-export const TaskPanel = ({ messages, run, onSubmit, onApproveAll, onRejectChanges, allowWrite, activePath, activeFile }: TaskPanelProps) => {
+export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl, onApproveAll, onRejectChanges, allowWrite, activePath, activeFile }: TaskPanelProps) => {
   const [prompt, setPrompt] = useState("");
   const [attachedFiles, setAttachedFiles] = useState<CodingAgentAttachedFile[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -81,6 +83,18 @@ export const TaskPanel = ({ messages, run, onSubmit, onApproveAll, onRejectChang
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isRunning = run.status === "running";
   const dragCounter = useRef(0);
+  const [isRecording, setIsRecording] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [isVoiceLoading, setIsVoiceLoading] = useState(false);
+
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const promptRef = useRef(prompt);
+  const attachedFilesRef = useRef(attachedFiles);
+
+  promptRef.current = prompt;
+  attachedFilesRef.current = attachedFiles;
 
 
 
@@ -283,6 +297,90 @@ export const TaskPanel = ({ messages, run, onSubmit, onApproveAll, onRejectChang
     }
   };
 
+
+
+  const stopRecording = () => {
+    mediaRecorderRef.current?.stop();
+  };
+
+  const startRecording = async () => {
+    if (!onVoiceAudio || isRunning) return;
+
+    setVoiceError(null);
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setVoiceError("Microphone access is not available in this browser.");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+      audioChunksRef.current = [];
+
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "";
+
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        setIsRecording(false);
+
+        mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+        mediaStreamRef.current = null;
+
+        const audio = new Blob(audioChunksRef.current, {
+          type: recorder.mimeType || "audio/webm",
+        });
+
+        audioChunksRef.current = [];
+
+        if (audio.size > 0) {
+          setIsVoiceLoading(true);
+          try {
+            const handedOff = await onVoiceAudio(
+              audio,
+              promptRef.current,
+              attachedFilesRef.current,
+            );
+
+            if (handedOff) {
+              setPrompt("");
+              setAttachedFiles([]);
+            }
+          } finally {
+            setIsVoiceLoading(false);
+          }
+        }
+      };
+
+      recorder.start();
+      setIsRecording(true);
+    } catch (error) {
+      setIsRecording(false);
+      setVoiceError(error instanceof Error ? error.message : "Could not access microphone.");
+    }
+  };
+
+  const toggleRecording = () => {
+    if (isRecording) {
+      stopRecording();
+      return;
+    }
+
+    void startRecording();
+  };
+
+
+
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-panel-soft">
 
@@ -323,24 +421,7 @@ export const TaskPanel = ({ messages, run, onSubmit, onApproveAll, onRejectChang
         </div>
 
         <div className="space-y-4">
-          {run.approvalStatus === "pending" ? (
-            <div className="mb-4 rounded-lg border border-amber-400/30 bg-amber-400/10 p-3">
-              <p className="text-[11px] leading-5 text-amber-100">
-                The agent produced file changes. Validation results are available, but final repo write is waiting for your approval.
-                {run.blockingValidationFailed ? " Blocking validation failed, so review carefully before applying." : ""}
-                {run.advisoryValidationFailed ? " Advisory validation warnings were reported." : ""}
-              </p>
-
-              <div className="mt-3 flex gap-2">
-                <button type="button" className="primary-button" onClick={onApproveAll}>
-                  Apply all changes
-                </button>
-                <button type="button" className="secondary-button" onClick={onRejectChanges}>
-                  Reject changes
-                </button>
-              </div>
-            </div>
-          ) : null}
+          
 
           {messages.map((message) => (
             <article key={message.id} className={message.role === "user" ? "message-user" : "message-agent"}>
@@ -354,6 +435,49 @@ export const TaskPanel = ({ messages, run, onSubmit, onApproveAll, onRejectChang
               </p>
             </article>
           ))}
+
+          {voiceReplyUrl ? (
+            <div className="rounded-lg border border-line bg-surface p-2">
+              <p className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-faint">Voice reply</p>
+              <audio
+                key={voiceReplyUrl}
+                src={voiceReplyUrl}
+                controls
+                autoPlay
+                preload="auto"
+                className="h-8 w-full"
+                aria-label="Play the latest voice-agent reply"
+              />
+            </div>
+          ) : null}
+
+
+          {run.approvalStatus === "pending" ? (
+            <div className="mb-4 rounded-lg border border-amber-400/30 bg-amber-400/10 p-3">
+              <p className="text-[11px] leading-5 text-amber-100">
+                The agent produced file changes. Validation results are available, but final repo write is waiting for your approval.
+                {run.blockingValidationFailed ? " Blocking validation failed, so review carefully before applying." : ""}
+                {run.advisoryValidationFailed ? " Advisory validation warnings were reported." : ""}
+              </p>
+
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  className="inline-flex items-center justify-center whitespace-nowrap rounded-md bg-accent px-4 py-2 text-xs font-medium text-white shadow-glow transition-colors hover:bg-accent-light focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+                  onClick={onApproveAll}
+                >
+                  Apply all changes
+                </button>
+                <button
+                  type="button"
+                  className="inline-flex items-center justify-center whitespace-nowrap rounded-md border border-rose-500/40 bg-surface px-4 py-2 text-xs font-medium text-ink transition-colors hover:border-rose-500/60 hover:bg-rose-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/50"
+                  onClick={onRejectChanges}
+                >
+                  Reject changes
+                </button>
+              </div>
+            </div>
+          ) : null}
           
         </div>
 
@@ -395,8 +519,9 @@ export const TaskPanel = ({ messages, run, onSubmit, onApproveAll, onRejectChang
                 }
               }}
               onPaste={handlePaste}
-              placeholder="Ask the agent to change your code…"
+              placeholder="Describe the coding task and attach relevant files…"
               className="w-full resize-none bg-transparent text-xs leading-5 text-ink outline-none placeholder:text-faint"
+              disabled={isVoiceLoading || isRunning}
             />
 
             {attachedFiles.length > 0 && (
@@ -419,6 +544,9 @@ export const TaskPanel = ({ messages, run, onSubmit, onApproveAll, onRejectChang
             {attachmentError ? (
               <p className="mt-2 text-[10px] leading-4 text-rose-300">{attachmentError}</p>
             ) : null}
+            {voiceError ? (
+              <p className="mt-2 text-[10px] leading-4 text-rose-300">{voiceError}</p>
+            ) : null}
             <div className="mt-2 flex items-center">
               <button
                 type="button"
@@ -428,6 +556,17 @@ export const TaskPanel = ({ messages, run, onSubmit, onApproveAll, onRejectChang
                 onClick={handleAttachClick}
               >
                 <Paperclip size={14} />
+              </button>
+
+              <button
+                type="button"
+                className={`ml-1 icon-button ${isRecording ? "text-rose-300" : ""}`}
+                aria-label={isRecording ? "Stop voice recording" : "Start voice recording"}
+                title={isRecording ? "Stop voice recording" : "Start voice recording"}
+                onClick={toggleRecording}
+                disabled={isRunning || isVoiceLoading}
+              >
+                {isVoiceLoading ? <div className="spinner" /> : isRecording ? <Square size={13} /> : <Mic size={14} />}
               </button>
 
               <button

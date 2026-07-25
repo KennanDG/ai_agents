@@ -2,6 +2,8 @@
 
 React and TypeScript desktop shell for the coding agent. The UI uses Vite, Electron, Tailwind CSS, and Monaco Editor.
 
+This project features a conversational voice agent that interacts with users to gather information and pass tasks to the coding agent. The agent is designed to be conversational, asking follow-up questions to clarify user requests before passing them off to the coding agent for implementation.
+
 ## Commands
 
 ```bash

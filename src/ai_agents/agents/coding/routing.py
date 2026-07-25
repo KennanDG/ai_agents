@@ -33,11 +33,13 @@ def route_after_context(state: CodingAgentState) -> Literal["patch", "report"]:
 
 
 def route_after_patch(state: CodingAgentState) -> Literal["repo_navigator", "validate", "report"]:
-    if state.get("status") == "patch_failed":
-        return "repo_navigator" if patch_attempts_remaining(state) else "report"
-
-    if state.get("status") == "patch_skipped":
-        return "report"
+    if state.get("status") in {"patch_failed", "patch_skipped"}:
+        should_refresh_context = bool(state.get("continue_loop"))
+        return (
+            "repo_navigator"
+            if should_refresh_context and patch_attempts_remaining(state)
+            else "report"
+        )
 
     if not state.get("file_changes"):
         return "report"

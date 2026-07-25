@@ -110,3 +110,20 @@ textarea:focus-visible {
     @apply text-ink-soft after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-accent-light;
   }
 }
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@layer components {
+  .spinner {
+    width: 1rem;
+    height: 1rem;
+    border: 2px solid var(--color-line-strong);
+    border-top-color: var(--color-accent-light);
+    border-radius: 999px;
+    animation: spin 0.8s linear infinite;
+  }
+}

@@ -427,7 +427,7 @@ def build_patcher_user_prompt(
         {plan}
 
         Context:
-        {context[:30000]}
+        {context}
 
         # Final reminder:
         - Return JSON matching the PatchDecision schema.

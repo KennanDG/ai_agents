@@ -29,6 +29,10 @@ def is_valid_api_key(provided: str | None) -> bool:
 
 class ApiKeyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+
+        if request.method == "OPTIONS":
+            return await call_next(request)
+        
         # Allow health checks/docs without auth.
         if request.url.path in {"/health", "/docs", "/openapi.json"}:
             return await call_next(request)
