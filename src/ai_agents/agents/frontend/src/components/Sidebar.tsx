@@ -1,7 +1,7 @@
 import { Fragment, useMemo, useState, ReactNode } from "react";
 import { ChevronDown, ChevronRight, FileCode2, Folder, FolderGit2, RotateCcw } from "lucide-react";
 import type { FileChange, RepositoryTreeEntry } from "../types";
-import type { GitHubRepositorySummary } from "../lib/repositoryApi";
+import type { GitHubRepositorySummary, GitHubBranchSummary } from "../lib/repositoryApi";
 
 interface SidebarProps {
   repoName: string;
@@ -20,6 +20,11 @@ interface SidebarProps {
   onSelectGitHubRepository?: (fullName: string) => void;
   onUseLocalRepository?: () => void;
   onRefreshGitHubRepositories?: () => void;
+  branches?: GitHubBranchSummary[];
+  currentBranch?: string | null;
+  branchesLoading?: boolean;
+  branchesError?: string | null;
+  onSwitchBranch?: (branchName: string) => void;
 }
 
 const statusColor = {
@@ -52,6 +57,11 @@ export const Sidebar = ({
   onSelectGitHubRepository,
   onUseLocalRepository,
   onRefreshGitHubRepositories,
+  branches = [],
+  currentBranch = null,
+  branchesLoading = false,
+  branchesError = null,
+  onSwitchBranch,
 }: SidebarProps) => {
   
   const fileEntries = entries.filter((entry) => entry.kind === "file");
@@ -165,6 +175,31 @@ export const Sidebar = ({
         <p className="mt-2 truncate px-1 font-mono text-[10px] text-faint">{repoRoot}</p>
         {githubLoading ? <p className="mt-2 px-1 text-[10px] text-muted">Loading GitHub repositories…</p> : null}
         {githubError ? <p className="mt-2 px-1 text-[10px] leading-4 text-rose-300">{githubError}</p> : null}
+        {selectedGitHubRepository && branches && branches.length > 0 && (
+          <div className="mt-2">
+            <label className="block text-[10px] font-medium text-muted mb-1">Branch</label>
+            <select
+              value={currentBranch ?? ""}
+              disabled={branchesLoading || isLoading}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (value) {
+                  onSwitchBranch?.(value);
+                }
+              }}
+              className="w-full rounded-md border border-line bg-surface px-2.5 py-2 text-xs text-ink outline-none hover:border-line-strong focus:border-accent/70"
+              aria-label="Switch branch"
+            >
+              {branches.map((branch) => (
+                <option key={branch.name} value={branch.name}>
+                  {branch.name}
+                </option>
+              ))}
+            </select>
+            {branchesLoading && <p className="mt-1 px-1 text-[10px] text-muted">Loading branches…</p>}
+            {branchesError && <p className="mt-1 px-1 text-[10px] leading-4 text-rose-300">{branchesError}</p>}
+          </div>
+        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">

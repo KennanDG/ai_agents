@@ -158,3 +158,26 @@ export const importGitHubRepository = async ({
 
   return readJson<GitHubRepositoryImportResponse>(response);
 };
+
+export type GitHubBranchSummary = {
+  name: string;
+  sha: string;
+};
+
+export const fetchGitHubBranches = async ({
+  apiBaseUrl,
+  apiKey,
+  fullName,
+  page = 1,
+  perPage = 100,
+}: ApiClientConfig & {
+  fullName: string;
+  page?: number;
+  perPage?: number;
+}): Promise<GitHubBranchSummary[]> => {
+  const response = await fetch(
+    apiUrl("/github/repositories/branches", { apiBaseUrl, apiKey }, { full_name: fullName, page, per_page: perPage }),
+    { headers: authHeaders(apiKey) },
+  );
+  return readJson<GitHubBranchSummary[]>(response);
+};

@@ -55,6 +55,11 @@ class GitHubRepositoryImportResponse(BaseModel):
     reused_existing_checkout: bool
 
 
+class GitHubBranchSummary(BaseModel):
+    name: str
+    sha: str
+
+
 class GitHubService:
     def __init__(self) -> None:
         self.api_url = settings.github_api_url.rstrip("/")
@@ -183,6 +188,27 @@ class GitHubService:
         return [
             self._normalize_repository(item)
             for item in raw_repositories
+            if isinstance(item, dict)
+        ]
+
+    def list_branches(
+        self,
+        full_name: str,
+        *,
+        page: int = 1,
+        per_page: int = 100,
+    ) -> list[GitHubBranchSummary]:
+        owner, name = self._validate_repository_name(full_name)
+        raw_branches = self._request_json(
+            f"/repos/{owner}/{name}/branches",
+            query={"page": page, "per_page": per_page},
+        )
+        return [
+            GitHubBranchSummary(
+                name=str(item["name"]),
+                sha=str(item["commit"]["sha"]),
+            )
+            for item in raw_branches
             if isinstance(item, dict)
         ]
 
@@ -327,4 +353,17 @@ def import_github_repository(
         full_name=request.full_name,
         requested_ref=request.ref,
         refresh=request.refresh,
+    )
+
+
+@router.get("/repositories/branches", response_model=list[GitHubBranchSummary])
+def github_branches(
+    full_name: str = Query(..., description="Repository full name (owner/name)"),
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=100, ge=1, le=100),
+) -> list[GitHubBranchSummary]:
+    return GitHubService().list_branches(
+        full_name=full_name,
+        page=page,
+        per_page=per_page,
     )

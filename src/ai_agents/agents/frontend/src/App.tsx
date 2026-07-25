@@ -13,11 +13,13 @@ import {
 } from "./lib/codingAgentSocket";
 
 import {
+  fetchGitHubBranches,
   fetchGitHubRepositories,
   fetchGitHubStatus,
   fetchRepositoryFile,
   fetchRepositoryTree,
   importGitHubRepository,
+  type GitHubBranchSummary,
   type GitHubRepositorySummary,
 } from "./lib/repositoryApi";
 import { submitVoiceTurn } from "./lib/voiceAgentApi";
@@ -302,6 +304,10 @@ const App = () => {
   const [githubLoading, setGitHubLoading] = useState(false);
   const [githubError, setGitHubError] = useState<string | null>(null);
   const [selectedGitHubRepository, setSelectedGitHubRepository] = useState<string | null>(null);
+  const [currentBranch, setCurrentBranch] = useState<string | null>(null);
+  const [branches, setBranches] = useState<GitHubBranchSummary[]>([]);
+  const [branchesLoading, setBranchesLoading] = useState(false);
+  const [branchesError, setBranchesError] = useState<string | null>(null);
   const [run, dispatchRun] = useReducer(runReducer, initialRunState);
 
   const [voiceSessionId, setVoiceSessionId] = useState<string | null>(null);
@@ -389,6 +395,7 @@ const App = () => {
         ref: repository.default_branch,
       });
       setSelectedGitHubRepository(imported.full_name);
+      setCurrentBranch(imported.ref);
       newThreadForNextRunRef.current = true;
       await loadRepository(imported.repo_root);
     } catch (error) {
@@ -400,14 +407,65 @@ const App = () => {
 
   const useLocalRepository = useCallback(async () => {
     setSelectedGitHubRepository(null);
+    setCurrentBranch(null);
     newThreadForNextRunRef.current = true;
     await loadRepository(configuredRepoRoot);
   }, [loadRepository]);
+
+  const switchBranch = useCallback(async (branchName: string) => {
+    if (!selectedGitHubRepository) return;
+    setRepoLoading(true);
+    setRepoError(null);
+    try {
+      const imported = await importGitHubRepository({
+        apiBaseUrl,
+        apiKey,
+        fullName: selectedGitHubRepository,
+        ref: branchName,
+        refresh: true,
+      });
+      setCurrentBranch(imported.ref);
+      newThreadForNextRunRef.current = true;
+      await loadRepository(imported.repo_root);
+    } catch (error) {
+      setRepoError(error instanceof Error ? error.message : "Failed to switch branch.");
+    } finally {
+      setRepoLoading(false);
+    }
+  }, [selectedGitHubRepository, loadRepository, apiBaseUrl, apiKey]);
 
   useEffect(() => {
     void loadRepository(configuredRepoRoot);
     void refreshGitHubRepositories();
   }, [loadRepository, refreshGitHubRepositories]);
+
+  useEffect(() => {
+    if (!selectedGitHubRepository) {
+      setBranches([]);
+      setCurrentBranch(null);
+      return;
+    }
+    let cancelled = false;
+    setBranchesLoading(true);
+    setBranchesError(null);
+    const load = async () => {
+      try {
+        const list = await fetchGitHubBranches({ apiBaseUrl, apiKey, fullName: selectedGitHubRepository });
+        if (!cancelled) {
+          setBranches(list);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setBranchesError(error instanceof Error ? error.message : "Failed to load branches");
+          setBranches([]);
+        }
+      } finally {
+        if (!cancelled) setBranchesLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [selectedGitHubRepository, apiBaseUrl, apiKey]);
 
 
 
@@ -676,6 +734,11 @@ const App = () => {
         onSelectGitHubRepository={selectGitHubRepository}
         onUseLocalRepository={useLocalRepository}
         onRefreshGitHubRepositories={refreshGitHubRepositories}
+        branches={branches}
+        currentBranch={currentBranch}
+        branchesLoading={branchesLoading}
+        branchesError={branchesError}
+        onSwitchBranch={switchBranch}
       />
 
       {/* {sidebarOpen ? (

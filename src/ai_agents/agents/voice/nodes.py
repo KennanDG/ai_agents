@@ -12,22 +12,21 @@ from groq import Groq
 from ai_agents.agents.voice.prompts import VOICE_INTAKE_SYSTEM_PROMPT
 from ai_agents.agents.voice.schemas import VoiceIntakeDecision
 from ai_agents.agents.voice.state import VoiceAgentState
-from ai_agents.config.settings import settings
-
 from ai_agents.agents.voice.utils.constants import (
-    MAX_REPO_FILES,
-    MAX_TREE_FILES,
-    MAX_SEARCH_MATCHES,
-    MAX_FILE_BYTES,
-    MAX_EXPLICIT_FILE_CHARS,
     MAX_ATTACHMENT_CONTENT_CHARS,
-    MAX_TOTAL_ATTACHMENT_CONTENT_CHARS,
     MAX_CONTEXT_JSON_CHARS,
-    MAX_LLM_TREE_PATHS,
+    MAX_EXPLICIT_FILE_CHARS,
+    MAX_FILE_BYTES,
+    MAX_LLM_ATTACHMENT_EXCERPT_CHARS,
     MAX_LLM_EXPLICIT_FILE_CHARS,
     MAX_LLM_SEARCH_EXCERPT_CHARS,
-    MAX_LLM_ATTACHMENT_EXCERPT_CHARS
+    MAX_LLM_TREE_PATHS,
+    MAX_REPO_FILES,
+    MAX_SEARCH_MATCHES,
+    MAX_TOTAL_ATTACHMENT_CONTENT_CHARS,
+    MAX_TREE_FILES,
 )
+from ai_agents.config.settings import settings
 
 
 logger = logging.getLogger(__name__)
@@ -517,7 +516,8 @@ def _default_plan(state: VoiceAgentState) -> list[str]:
         )
     else:
         plan.append(
-            "Search the repository for the files and existing patterns that implement the requested behavior."
+            "Search the repository for the files and existing patterns that implement "
+            "the requested behavior."
         )
 
     attachments = state.get("attached_files", [])
@@ -527,8 +527,10 @@ def _default_plan(state: VoiceAgentState) -> list[str]:
 
     plan.extend(
         [
-            "Implement the smallest safe change using the repository's existing architecture and style.",
-            "Run focused validation for the changed files and report any failures or remaining assumptions.",
+            "Implement the smallest safe change using the repository's existing "
+            "architecture and style.",
+            "Run focused validation for the changed files and report any failures or "
+            "remaining assumptions.",
         ]
     )
 
@@ -708,6 +710,15 @@ def intake_node(state: VoiceAgentState) -> VoiceAgentState:
     max_clarifications = max(1, settings.voice_max_clarifications)
     clarification_limit_reached = clarification_count >= max_clarifications
 
+    # Collect previously asked questions to avoid repetition.
+    previous_questions: list[str] = []
+    for item in history:
+        if item["role"] == "assistant" and "?" in item["content"]:
+            previous_questions.append(item["content"][:200].strip())
+    previous_questions_list = "\n".join(
+        f"- {q}" for q in previous_questions[-6:]
+    ) or "- None"
+
     user_content = (
         f"Latest user transcript:\n{transcript or '[none]'}\n\n"
         f"Current typed draft in the text area:\n{prompt_text or '[none]'}\n\n"
@@ -715,6 +726,7 @@ def intake_node(state: VoiceAgentState) -> VoiceAgentState:
         f"Clarifying questions already asked: {clarification_count}\n"
         f"Maximum clarifying questions allowed: {max_clarifications}\n"
         f"Clarification limit reached: {clarification_limit_reached}\n\n"
+        f"Previously asked questions (do not repeat these):\n{previous_questions_list}\n\n"
         "Use the supplied skills and tool results. If ready, return a concise coding_request string, "
         "with implementation steps in plan and paths in target_files. Do not copy raw repository context. "
         "If the clarification limit is reached, return status=ready with the best repository-grounded plan."
@@ -757,7 +769,7 @@ def intake_node(state: VoiceAgentState) -> VoiceAgentState:
             try:
                 decision = _request_intake_decision(
                     messages=retry_messages,
-                    temperature=0.0,
+                    temperature=0.5,
                 )
             except Exception as retry_exc:
                 raise RuntimeError(
