@@ -628,7 +628,7 @@ const App = () => {
       };
 
       setMessages((current) => [...current, userVoiceMessage, agentVoiceMessage]);
-      setVoiceHistory((current) => [...current, userVoiceMessage, agentVoiceMessage].slice(-6));
+      setVoiceHistory((current) => [...current, userVoiceMessage, agentVoiceMessage].slice(-12));
 
       if (response.audio_base64) {
         const nextUrl = base64AudioToObjectUrl(

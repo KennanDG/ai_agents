@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -26,75 +27,19 @@ from ai_agents.agents.voice.utils.constants import (
     MAX_SEARCH_MATCHES,
     MAX_TOTAL_ATTACHMENT_CONTENT_CHARS,
     MAX_TREE_FILES,
+    IGNORED_DIRS,
+    TEXT_EXTENSIONS,
+    STOP_WORDS,
+    CLARIFICATION_TOPIC_ORDER,
+    CLARIFICATION_TOPIC_KEYWORDS,
+    CLARIFICATION_FALLBACK_QUESTIONS,
+    QUESTION_FILLER_WORDS,
+    QUESTION_REPEAT_THRESHOLD,
 )
 
 
 logger = logging.getLogger(__name__)
 
-
-IGNORED_DIRS = {
-    ".git",
-    ".hg",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".tox",
-    ".venv",
-    "__pycache__",
-    "build",
-    "dist",
-    "node_modules",
-    "venv",
-}
-
-TEXT_EXTENSIONS = {
-    ".c",
-    ".cc",
-    ".cpp",
-    ".cxx",
-    ".css",
-    ".csv",
-    ".h",
-    ".hh",
-    ".hpp",
-    ".html",
-    ".java",
-    ".js",
-    ".jsx",
-    ".json",
-    ".md",
-    ".py",
-    ".rs",
-    ".sql",
-    ".toml",
-    ".ts",
-    ".tsx",
-    ".txt",
-    ".xml",
-    ".yaml",
-    ".yml",
-}
-
-STOP_WORDS = {
-    "about",
-    "agent",
-    "attached",
-    "coding",
-    "could",
-    "files",
-    "from",
-    "have",
-    "into",
-    "please",
-    "should",
-    "that",
-    "their",
-    "this",
-    "update",
-    "voice",
-    "with",
-    "would",
-}
 
 
 
@@ -124,9 +69,158 @@ def _safe_history(history: list[dict[str, str]]) -> list[dict[str, str]]:
     return safe
 
 
+def _extract_questions(text: str) -> list[str]:
+    """Extract actual question sentences instead of treating a whole reply as one."""
+    normalized = re.sub(r"\s+", " ", text).strip()
+    if not normalized:
+        return []
+
+    sentences = re.split(r"(?<=[.!?])\s+", normalized)
+    return [sentence.strip() for sentence in sentences if sentence.strip().endswith("?")]
+
+
+def _questions_from_history(history: list[dict[str, str]]) -> list[str]:
+    questions: list[str] = []
+    seen: set[str] = set()
+
+    for item in history:
+        if item.get("role") != "assistant":
+            continue
+
+        for question in _extract_questions(str(item.get("content") or "")):
+            normalized = _normalize_question(question)
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                questions.append(question)
+
+    return questions
+
+
 def _count_prior_clarifications(history: list[dict[str, str]]) -> int:
-    """Count prior voice-agent replies in the isolated voice conversation."""
-    return sum(1 for item in history if item.get("role") == "assistant")
+    """Count only assistant turns that actually asked a question."""
+    return sum(
+        1
+        for item in history
+        if item.get("role") == "assistant"
+        and _extract_questions(str(item.get("content") or ""))
+    )
+
+
+def _normalize_question(question: str) -> str:
+    words = re.findall(r"[a-z0-9_.-]+", question.lower())
+    return " ".join(word for word in words if word not in QUESTION_FILLER_WORDS)
+
+
+def _question_similarity(left: str, right: str) -> float:
+    left_normalized = _normalize_question(left)
+    right_normalized = _normalize_question(right)
+    if not left_normalized or not right_normalized:
+        return 0.0
+
+    sequence_ratio = SequenceMatcher(None, left_normalized, right_normalized).ratio()
+    left_tokens = set(left_normalized.split())
+    right_tokens = set(right_normalized.split())
+    overlap_ratio = len(left_tokens & right_tokens) / max(
+        1,
+        min(len(left_tokens), len(right_tokens)),
+    )
+    return max(sequence_ratio, overlap_ratio)
+
+
+def _is_repeated_question(candidate: str, previous_questions: list[str]) -> bool:
+    return any(
+        _question_similarity(candidate, previous) >= QUESTION_REPEAT_THRESHOLD
+        for previous in previous_questions
+    )
+
+
+def _infer_clarification_topic(question: str) -> str | None:
+    lowered = question.lower()
+    scores = {
+        topic: sum(1 for keyword in keywords if keyword in lowered)
+        for topic, keywords in CLARIFICATION_TOPIC_KEYWORDS.items()
+    }
+    best_topic = max(scores, key=scores.get, default=None)
+    return best_topic if best_topic and scores[best_topic] > 0 else None
+
+
+def _used_clarification_topics(previous_questions: list[str]) -> set[str]:
+    return {
+        topic
+        for question in previous_questions
+        if (topic := _infer_clarification_topic(question)) is not None
+    }
+
+
+def _answered_clarification_topics(user_text: str) -> set[str]:
+    """Infer already-resolved dimensions for deterministic fallback selection."""
+    lowered = user_text.lower()
+    answered: set[str] = set()
+
+    if any(token in lowered for token in ("want", "goal", "improve", "optimize", "fix", "add")):
+        answered.add("objective")
+    if any(token in lowered for token in ("currently", "keeps", "error", "fails", "failing", "slow", "repeating")):
+        answered.add("current_behavior")
+    if any(token in lowered for token in (".py", ".ts", ".tsx", "only", "focus on", "nodes.py")):
+        answered.add("scope")
+    if any(token in lowered for token in ("environment", "runtime", "local", "ci", "deployment", "production")):
+        answered.add("environment")
+    if any(token in lowered for token in ("must", "do not", "don't", "preserve", "unchanged", "without changing")):
+        answered.add("constraints")
+    if any(token in lowered for token in ("acceptance", "success", "complete when", "working correctly", "expected result")):
+        answered.add("acceptance_criteria")
+    if any(token in lowered for token in ("priority", "focus on", "most important", "first pass")):
+        answered.add("priority")
+
+    return answered
+
+
+def _next_novel_clarification(
+    *,
+    history: list[dict[str, str]],
+    transcript: str,
+    prompt_text: str,
+    previous_questions: list[str],
+) -> tuple[str | None, str | None]:
+    user_text = "\n".join(
+        [
+            *(str(item.get("content") or "") for item in history if item.get("role") == "user"),
+            prompt_text,
+            transcript,
+        ]
+    )
+    blocked_topics = _used_clarification_topics(previous_questions)
+    answered_topics = _answered_clarification_topics(user_text)
+
+    for topic in CLARIFICATION_TOPIC_ORDER:
+        if topic not in blocked_topics and topic not in answered_topics:
+            return topic, CLARIFICATION_FALLBACK_QUESTIONS[topic]
+
+    # If every remaining topic appears answered, permit one unasked topic rather than
+    # repeating the same dimension. If all topics were used, the caller should proceed.
+    for topic in CLARIFICATION_TOPIC_ORDER:
+        if topic not in blocked_topics:
+            return topic, CLARIFICATION_FALLBACK_QUESTIONS[topic]
+
+    return None, None
+
+
+def _decision_has_novel_question(
+    decision: VoiceIntakeDecision,
+    *,
+    previous_questions: list[str],
+    previous_topics: set[str],
+) -> bool:
+    questions = _extract_questions(decision.reply_text)
+    if len(questions) != 1:
+        return False
+
+    question = questions[0]
+    topic = decision.clarification_topic or _infer_clarification_topic(question)
+    if topic is None or topic in previous_topics:
+        return False
+
+    return not _is_repeated_question(question, previous_questions)
 
 
 def _strip_voice_prefix(text: str) -> str:
@@ -715,20 +809,12 @@ def intake_node(state: VoiceAgentState) -> VoiceAgentState:
     max_clarifications = max(1, settings.voice_max_clarifications)
     clarification_limit_reached = clarification_count >= max_clarifications
 
-    # Collect previously asked questions to avoid repetition.
-    # Use simple normalization and a set to skip near-duplicates.
-    previous_questions: list[str] = []
-    seen_questions: set[str] = set()
-    for item in history:
-        if item["role"] == "assistant" and "?" in item["content"]:
-            q = item["content"][:200].strip()
-            q_normalized = q.lower().rstrip("?").strip()
-            if q_normalized and q_normalized not in seen_questions:
-                seen_questions.add(q_normalized)
-                previous_questions.append(q)
+    previous_questions = _questions_from_history(history)
+    previous_topics = _used_clarification_topics(previous_questions)
     previous_questions_list = "\n".join(
-        f"- {q}" for q in previous_questions[-6:]
+        f"- {question}" for question in previous_questions[-8:]
     ) or "- None"
+    previous_topics_list = ", ".join(sorted(previous_topics)) or "none"
 
     user_content = (
         f"Latest user transcript:\n{transcript or '[none]'}\n\n"
@@ -740,6 +826,8 @@ def intake_node(state: VoiceAgentState) -> VoiceAgentState:
         f"Clarification limit reached: {clarification_limit_reached}\n\n"
         f"Previously asked questions (do not repeat or rephrase any of these—"
         f"ask something genuinely different):\n{previous_questions_list}\n\n"
+        f"Previously used clarification topics: {previous_topics_list}\n"
+        "Choose a different, unanswered clarification topic or return status=ready.\n\n"
         "Use the supplied skills and tool results. If ready, return a concise "
         "coding_request string, "
         "with implementation steps in plan and paths in target_files. Do not copy raw repository context. "
@@ -754,7 +842,7 @@ def intake_node(state: VoiceAgentState) -> VoiceAgentState:
 
     try:
         try:
-            decision = _request_intake_decision(messages=messages, temperature=0.2)
+            decision = _request_intake_decision(messages=messages, temperature=0.5)
         except Exception as first_exc:
             if not _is_json_generation_error(first_exc):
                 raise
@@ -771,6 +859,8 @@ def intake_node(state: VoiceAgentState) -> VoiceAgentState:
                 f"Latest transcript: {transcript or '[none]'}\n"
                 f"Typed draft: {prompt_text or '[none]'}\n"
                 f"Relevant paths: {repository_context.get('relevant_paths', [])}\n"
+                f"Previously asked questions: {previous_questions[-8:]}\n"
+                f"Previously used topics: {sorted(previous_topics)}\n"
                 f"Clarification limit reached: {clarification_limit_reached}"
             )
 
@@ -790,6 +880,82 @@ def intake_node(state: VoiceAgentState) -> VoiceAgentState:
                     f"Initial JSON generation failed: {first_exc}; retry failed: {retry_exc}"
                 ) from retry_exc
 
+        if decision.status == "clarifying" and not clarification_limit_reached:
+            if not _decision_has_novel_question(
+                decision,
+                previous_questions=previous_questions,
+                previous_topics=previous_topics,
+            ):
+                fallback_topic, fallback_question = _next_novel_clarification(
+                    history=history,
+                    transcript=transcript,
+                    prompt_text=prompt_text,
+                    previous_questions=previous_questions,
+                )
+
+                if fallback_topic is None or fallback_question is None:
+                    decision = decision.model_copy(
+                        update={
+                            "status": "ready",
+                            "reply_text": (
+                                "I have enough context to prepare the implementation handoff."
+                            ),
+                            "clarification_topic": None,
+                            "coding_request": (
+                                decision.coding_request
+                                or "Implement the resolved voice request using the gathered context."
+                            ),
+                        }
+                    )
+                else:
+                    repair_content = (
+                        "Your proposed clarifying question repeated an earlier question or topic. "
+                        "Return one corrected JSON decision. Ask exactly one concise question using "
+                        f"the unused topic '{fallback_topic}', or return status=ready if that topic is "
+                        "already answered. Do not reuse any blocked wording.\n\n"
+                        f"Blocked questions: {previous_questions[-8:]}\n"
+                        f"Blocked topics: {sorted(previous_topics)}\n"
+                        f"Deterministic fallback question for this topic: {fallback_question}"
+                    )
+                    repair_messages = [
+                        *messages,
+                        {
+                            "role": "assistant",
+                            "content": decision.model_dump_json(),
+                        },
+                        {"role": "user", "content": repair_content},
+                    ]
+
+                    try:
+                        repaired_decision = _request_intake_decision(
+                            messages=repair_messages,
+                            temperature=0.5,
+                        )
+                    except Exception as repair_exc:
+                        logger.warning(
+                            "Voice intake duplicate-question repair failed; using deterministic fallback: %s",
+                            repair_exc,
+                        )
+                        repaired_decision = decision
+
+                    if repaired_decision.status == "ready":
+                        decision = repaired_decision
+                    elif _decision_has_novel_question(
+                        repaired_decision,
+                        previous_questions=previous_questions,
+                        previous_topics=previous_topics,
+                    ):
+                        decision = repaired_decision
+                    else:
+                        decision = decision.model_copy(
+                            update={
+                                "status": "clarifying",
+                                "reply_text": fallback_question,
+                                "clarification_topic": fallback_topic,
+                                "coding_request": None,
+                            }
+                        )
+
         if clarification_limit_reached and (
             decision.status != "ready" or not decision.coding_request
         ):
@@ -805,6 +971,7 @@ def intake_node(state: VoiceAgentState) -> VoiceAgentState:
             }
 
         if decision.status == "ready":
+            decision = decision.model_copy(update={"clarification_topic": None})
             return {
                 "status": "ready",
                 "reply_text": decision.reply_text,
@@ -820,6 +987,7 @@ def intake_node(state: VoiceAgentState) -> VoiceAgentState:
             "reply_text": decision.reply_text,
             "coding_request": None,
             "collected_facts": decision.collected_facts,
+            "asked_questions": [*previous_questions, decision.reply_text],
         }
 
     except Exception as exc:
