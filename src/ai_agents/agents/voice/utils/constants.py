@@ -28,7 +28,11 @@ IGNORED_DIRS = {
     "dist",
     "node_modules",
     "venv",
-    "agents/coding/logs"
+}
+
+
+IGNORED_REPO_PATH_PREFIXES = {
+    "agents/coding/logs",
 }
 
 TEXT_EXTENSIONS = {

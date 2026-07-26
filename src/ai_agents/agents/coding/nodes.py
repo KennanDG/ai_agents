@@ -15,6 +15,8 @@ from ai_agents.agents.coding.utils.constants import (
     MAX_REPO_NAVIGATION_FILES,
     MAX_REPO_NAVIGATION_FOLLOWUP_RESULTS,
     VALIDATION_PROFILE_NAME,
+    PATCH_CONTEXT_MAX_CHARS,
+    VALIDATION_PROFILE_NAME,
 )
 
 from ai_agents.agents.coding.llm import invoke_parsed_decision
@@ -463,6 +465,35 @@ def _derive_loop_search_requests(
     derived = derive_search_requests(loop_search_text) if loop_search_text else []
 
     return derived or list(state.get("search_requests") or [])
+
+
+
+def _context_file_read_limit(
+    *,
+    path: str,
+    explicit_repo_paths: set[str],
+    explicit_repo_file_count: int,
+    cfg: CodingAgentSettings,
+) -> int:
+    """Allocate more context to files explicitly attached by the user."""
+
+    if path not in explicit_repo_paths:
+        return cfg.max_file_chars
+
+    # Keep room for the request, plan, errors, navigation notes, and supporting
+    # files. Divide the remaining budget across explicit repository files.
+    reserved_chars = min(20_000, PATCH_CONTEXT_MAX_CHARS // 5)
+    available_chars = max(
+        cfg.max_file_chars,
+        PATCH_CONTEXT_MAX_CHARS - reserved_chars,
+    )
+
+    return max(
+        cfg.max_file_chars,
+        available_chars // max(1, explicit_repo_file_count),
+    )
+
+
 
 
 
@@ -928,11 +959,45 @@ def gather_context_node(
             f"Skipped non-repo or ambiguous context path selected by navigator: {path}"
         )
 
+    explicit_repo_paths = set(repo_attachment_paths)
+    explicit_repo_file_count = len(explicit_repo_paths)
+
     for path in resolved_paths[:MAX_FILES_TO_INSPECT]:
         try:
-            content = read_file(repo_root, path, max_chars=cfg.max_file_chars)
+            read_limit = _context_file_read_limit(
+                path=path,
+                explicit_repo_paths=explicit_repo_paths,
+                explicit_repo_file_count=explicit_repo_file_count,
+                cfg=cfg,
+            )
+
+            # Read one extra character so truncation can be detected instead of
+            # silently passing a partial file as complete.
+            probe = read_file(
+                repo_root,
+                path,
+                max_chars=read_limit + 1,
+            )
+
+            content_truncated = len(probe) > read_limit
+            content = probe[:read_limit]
+
             files_inspected.append(path)
-            context.append(f"File: {path}\n```\n{content}\n```")
+            context.append(
+                f"File: {path}\n"
+                f"Content-Status: "
+                f"{'truncated' if content_truncated else 'complete'}\n"
+                f"Content-Limit: {read_limit}\n"
+                "```\n"
+                f"{content}\n"
+                "```"
+            )
+
+            if content_truncated:
+                errors.append(
+                    f"Repository context for {path} was truncated at "
+                    f"{read_limit} characters."
+                )
 
         except Exception as exc:
             errors.append(f"Could not read {path}: {exc}")

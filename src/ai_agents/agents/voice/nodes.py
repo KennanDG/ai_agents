@@ -35,6 +35,7 @@ from ai_agents.agents.voice.utils.constants import (
     CLARIFICATION_FALLBACK_QUESTIONS,
     QUESTION_FILLER_WORDS,
     QUESTION_REPEAT_THRESHOLD,
+    IGNORED_REPO_PATH_PREFIXES,
 )
 
 
@@ -239,25 +240,95 @@ def _resolve_repo_root(repo_root: str | None) -> Path | None:
     return root if root.exists() and root.is_dir() else None
 
 
+
+def _normalized_repo_path(path: str) -> str:
+    return path.strip().replace("\\", "/").strip("/")
+
+
+def _is_ignored_repo_relative_path(relative_path: str) -> bool:
+    normalized = _normalized_repo_path(relative_path)
+
+    return any(
+        normalized == prefix
+        or normalized.startswith(f"{prefix}/")
+        for prefix in IGNORED_REPO_PATH_PREFIXES
+    )
+
+
+def _is_ignored_repo_path(root: Path, path: Path) -> bool:
+    try:
+        relative_path = path.relative_to(root).as_posix()
+    except ValueError:
+        return True
+
+    return _is_ignored_repo_relative_path(relative_path)
+
+
+
 def _iter_repository_files(root: Path) -> Iterable[Path]:
     yielded = 0
 
     for current_dir, dir_names, file_names in os.walk(root):
-        dir_names[:] = [
-            name
-            for name in sorted(dir_names)
-            if name not in IGNORED_DIRS and not name.endswith(".egg-info")
-        ]
+        current_path = Path(current_dir)
+
+        retained_directories: list[str] = []
+
+        for name in sorted(dir_names):
+            if name in IGNORED_DIRS or name.endswith(".egg-info"):
+                continue
+
+            directory_path = current_path / name
+
+            if _is_ignored_repo_path(root, directory_path):
+                continue
+
+            retained_directories.append(name)
+
+        # Mutating dir_names prevents os.walk from descending into ignored paths.
+        dir_names[:] = retained_directories
 
         for file_name in sorted(file_names):
-            path = Path(current_dir) / file_name
+            path = current_path / file_name
+
+            if _is_ignored_repo_path(root, path):
+                continue
+
             if path.suffix.lower() not in TEXT_EXTENSIONS:
                 continue
 
             yield path
             yielded += 1
+
             if yielded >= MAX_REPO_FILES:
                 return
+
+
+
+
+
+def _filter_navigation_paths(paths: Iterable[str]) -> list[str]:
+    filtered: list[str] = []
+    seen: set[str] = set()
+
+    for raw_path in paths:
+        path = _normalized_repo_path(str(raw_path))
+
+        if not path:
+            continue
+
+        if _is_ignored_repo_relative_path(path):
+            continue
+
+        if path in seen:
+            continue
+
+        seen.add(path)
+        filtered.append(path)
+
+    return filtered
+
+
+
 
 
 def _safe_repo_path(root: Path, relative_path: str | None) -> Path | None:
@@ -585,18 +656,24 @@ def gather_context_node(state: VoiceAgentState) -> VoiceAgentState:
 
 
 def _default_plan(state: VoiceAgentState) -> list[str]:
+
     repo_context = state.get("repo_context", {})
+
     explicit_paths = [
         str(item.get("path"))
         for item in repo_context.get("explicit_files", [])
         if isinstance(item, dict) and item.get("path")
     ]
+
     search_paths = [
         str(item.get("path"))
         for item in repo_context.get("search_matches", [])[:8]
         if isinstance(item, dict) and item.get("path")
     ]
-    relevant_paths = list(dict.fromkeys([*explicit_paths, *search_paths]))
+
+    relevant_paths = _filter_navigation_paths(
+        [*explicit_paths, *search_paths]
+    )
 
     plan = [
         "Review the resolved voice conversation and confirm the exact requested outcome.",
@@ -660,24 +737,25 @@ def _fallback_coding_request(
     ]
     repo_context = state.get("repo_context", {})
     
-    target_files = list(
-        dict.fromkeys(
-            [
-                str(item.get("path"))
-                for item in repo_context.get("explicit_files", [])
-                if isinstance(item, dict) and item.get("path")
-            ]
-            + [
-                str(item.get("path"))
-                for item in repo_context.get("search_matches", [])[:8]
-                if isinstance(item, dict) and item.get("path")
-            ]
-        )
+    target_files = _filter_navigation_paths(
+        [
+            str(item.get("path"))
+            for item in repo_context.get("explicit_files", [])
+            if isinstance(item, dict) and item.get("path")
+        ]
+        + [
+            str(item.get("path"))
+            for item in repo_context.get("search_matches", [])[:8]
+            if isinstance(item, dict) and item.get("path")
+        ]
     )
+
     target_text = "\n".join(f"- {path}" for path in target_files) or (
         "- Verify the correct files from the repository tree and search matches."
     )
+
     plan = _default_plan(state)
+
     write_mode = (
         "Prepare the patch and use the normal human approval flow before repository writes."
         if state.get("allow_write")
@@ -729,19 +807,19 @@ def _ensure_detailed_coding_request(
         return request
 
     repo_context = state.get("repo_context", {})
-    target_files = decision.target_files or list(
-        dict.fromkeys(
-            [
-                str(item.get("path"))
-                for item in repo_context.get("explicit_files", [])
-                if isinstance(item, dict) and item.get("path")
-            ]
-            + [
-                str(item.get("path"))
-                for item in repo_context.get("search_matches", [])[:8]
-                if isinstance(item, dict) and item.get("path")
-            ]
-        )
+
+    fallback_target_files = [
+        str(item.get("path"))
+        for item in repo_context.get("explicit_files", [])
+        if isinstance(item, dict) and item.get("path")
+    ] + [
+        str(item.get("path"))
+        for item in repo_context.get("search_matches", [])[:8]
+        if isinstance(item, dict) and item.get("path")
+    ]
+
+    target_files = _filter_navigation_paths(
+        decision.target_files or fallback_target_files
     )
 
     return (

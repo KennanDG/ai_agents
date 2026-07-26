@@ -61,6 +61,16 @@ def is_forbidden_write_path(path: str) -> bool:
 
 _FILE_CONTEXT_RE = re.compile(r"^File:\s*(?P<path>[^\n]+)\n", re.MULTILINE)
 
+_FILE_CONTEXT_STATUS_RE = re.compile(
+    r"^Content-Status:\s*(?P<status>complete|truncated)\s*$",
+    re.MULTILINE,
+)
+
+
+def _file_context_is_truncated(section: str) -> bool:
+    match = _FILE_CONTEXT_STATUS_RE.search(section)
+    return bool(match and match.group("status") == "truncated")
+
 
 def _repo_attachment_paths(state: CodingAgentState) -> list[str]:
     paths: list[str] = []
@@ -168,7 +178,19 @@ def build_patch_context(state: CodingAgentState) -> str:
         if path not in ordered_paths:
             ordered_paths.append(path)
 
+
     exact_file_sections = [file_sections[path] for path in ordered_paths]
+
+    truncated_file_paths = [
+        _file_context_path(section)
+        for section in exact_file_sections
+        if _file_context_is_truncated(section)
+    ]
+
+    truncated_file_paths = [
+        path for path in truncated_file_paths if path
+    ]
+
 
     navigation_sections: list[str] = []
     external_attachment_sections: list[str] = []
@@ -186,7 +208,20 @@ def build_patch_context(state: CodingAgentState) -> str:
         else:
             supporting_sections.append(section)
 
+
     critical_sections: list[str] = []
+
+    if truncated_file_paths:
+        critical_sections.append(
+            "# Incomplete repository file context\n"
+            "The following repository files are partial and must not be treated as "
+            "complete source files:\n"
+            + bullets(truncated_file_paths)
+            + "\nUse only exact edits supported by visible content. If unseen sections "
+            "are required, report the missing context instead of inventing code."
+        )
+
+
     loop_feedback = _format_loop_feedback_for_patch(state)
 
     if loop_feedback:
