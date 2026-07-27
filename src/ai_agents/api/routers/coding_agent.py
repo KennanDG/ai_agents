@@ -525,7 +525,18 @@ def _normalize_attached_files(
                         errors.append(f"Skipped repo attachment {path}: binary file.")
                         continue
 
-                    content = raw.decode("utf-8", errors="replace")
+                    normalized.append(
+                        {
+                            "name": name,
+                            "path": path,
+                            "source": "repo",
+                            "mime_type": mime_type,
+                            "size": size,
+                            "content": "",
+                            "truncated": False,
+                        }
+                    )
+                    continue
 
             except HTTPException as exc:
                 errors.append(f"Skipped repo attachment {path}: {exc.detail}")
@@ -566,8 +577,20 @@ def _normalize_attached_files(
                 )
 
                 if matched_repo_path:
-                    source = "repo"
-                    path = matched_repo_path
+                    matched_file = _resolve_repo_file(repo_root, matched_repo_path)
+
+                    normalized.append(
+                        {
+                            "name": matched_file.name,
+                            "path": matched_repo_path,
+                            "source": "repo",
+                            "mime_type": mime_type or _guess_mime_type(matched_file),
+                            "size": matched_file.stat().st_size,
+                            "content": "",
+                            "truncated": False,
+                        }
+                    )
+                    continue
 
 
 

@@ -9,15 +9,46 @@ from pydantic import BaseModel, Field, field_validator
 MAX_CODING_REQUEST_CHARS = 4_000
 
 
+ClarificationTopic = Literal[
+    "objective",
+    "current_behavior",
+    "scope",
+    "constraints",
+    "environment",
+    "acceptance_criteria",
+    "priority",
+]
+
+VALID_CLARIFICATION_TOPICS = {
+    "objective",
+    "current_behavior",
+    "scope",
+    "constraints",
+    "environment",
+    "acceptance_criteria",
+    "priority",
+}
+
+
 class VoiceIntakeDecision(BaseModel):
     status: Literal["clarifying", "ready"] = "clarifying"
     reply_text: str = Field(min_length=1)
+    clarification_topic: ClarificationTopic | None = None
     coding_request: str | None = None
     collected_facts: list[str] = Field(default_factory=list)
     selected_skills: list[str] = Field(default_factory=list)
     tools_used: list[str] = Field(default_factory=list)
     target_files: list[str] = Field(default_factory=list)
     plan: list[str] = Field(default_factory=list)
+
+    @field_validator("clarification_topic", mode="before")
+    @classmethod
+    def normalize_clarification_topic(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+
+        normalized = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+        return normalized if normalized in VALID_CLARIFICATION_TOPICS else None
 
     @field_validator("coding_request", mode="before")
     @classmethod

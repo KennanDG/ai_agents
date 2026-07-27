@@ -36,6 +36,54 @@ const statusClass = {
 };
 
 
+const PlanCard = ({ run }: { run: AgentRunState }) => {
+  const allStepsDone = run.status === "completed" || run.status === "approval_pending" || run.status === "applied";
+
+  return (
+    <div className="rounded-lg border border-line bg-surface p-3">
+      <div className="mb-2.5 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-muted">
+        <ShieldCheck size={13} />
+        <span>Plan</span>
+        <span className={`ml-auto rounded-full border px-2 py-0.5 text-[8px] font-medium uppercase ${statusClass[run.status]}`}>
+          {run.status}
+        </span>
+      </div>
+
+      {run.plan.length > 0 ? (
+        <ol className="space-y-2">
+          {run.plan.map((step, index) => {
+            const done = allStepsDone || run.completedNodes.length > index;
+            return (
+              <li key={`${step}:${index}`} className="flex items-start gap-2 text-[11px] leading-5 text-muted">
+                {done ? (
+                  <Check size={12} className="mt-1 shrink-0 text-emerald-300" />
+                ) : (
+                  <Circle size={10} className="mt-1.5 shrink-0 text-accent-light" />
+                )}
+                <span>{step}</span>
+              </li>
+            );
+          })}
+        </ol>
+      ) : (
+        <p className="text-[11px] leading-5 text-faint">
+          {run.status === "running"
+            ? "The plan will appear here after the routing and planning nodes finish."
+            : "No plan was returned for this run."}
+        </p>
+      )}
+
+      {run.selectedSkill ? (
+        <p className="mt-3 border-t border-line pt-3 text-[10px] leading-5 text-faint">
+          Skill: <span className="font-mono text-muted">{run.selectedSkill}</span>
+          {run.routeConfidence != null ? <span> · confidence {Math.round(run.routeConfidence * 100)}%</span> : null}
+        </p>
+      ) : null}
+    </div>
+  );
+};
+
+
 const MAX_TEXT_ATTACHMENT_BYTES = 1_000_000;
 const MAX_IMAGE_ATTACHMENT_BYTES = 5_000_000;
 
@@ -392,48 +440,24 @@ export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
 
-        <div className="mb-5 rounded-lg border border-line bg-surface p-3">
-          <div className="mb-2.5 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-muted">
-            <ShieldCheck size={13} /> Plan
-          </div>
-          {run.plan.length > 0 ? (
-            <ol className="space-y-2">
-              {run.plan.map((step, index) => {
-                const done = run.completedNodes.length > index || run.status === "completed";
-                return (
-                  <li key={`${step}:${index}`} className="flex items-center gap-2 text-[11px] text-muted">
-                    {done ? <Check size={12} className="text-emerald-300" /> : <Circle size={10} className="text-accent-light" />}
-                    <span>{step}</span>
-                  </li>
-                );
-              })}
-            </ol>
-          ) : (
-            <p className="text-[11px] leading-5 text-faint">The plan will stream in after the routing and planning nodes run.</p>
-          )}
-
-          {run.selectedSkill ? (
-            <p className="mt-3 border-t border-line pt-3 text-[10px] leading-5 text-faint">
-              Skill: <span className="font-mono text-muted">{run.selectedSkill}</span>
-              {run.routeConfidence != null ? <span> · confidence {Math.round(run.routeConfidence * 100)}%</span> : null}
-            </p>
-          ) : null}
-        </div>
-
         <div className="space-y-4">
           
 
           {messages.map((message) => (
-            <article key={message.id} className={message.role === "user" ? "message-user" : "message-agent"}>
-              <div className="mb-1.5 flex items-center gap-2 text-[9px] font-semibold uppercase tracking-wider text-faint">
-                <span>{message.role === "user" ? "You" : "Agent"}</span>
-                <span>·</span>
-                <time>{message.time}</time>
-              </div>
-              <p className="whitespace-pre-wrap wrap-break-word text-xs leading-5 text-ink-soft">
-                {message.body}
-              </p>
-            </article>
+            <div key={message.id} className="space-y-3">
+              <article className={message.role === "user" ? "message-user" : "message-agent"}>
+                <div className="mb-1.5 flex items-center gap-2 text-[9px] font-semibold uppercase tracking-wider text-faint">
+                  <span>{message.role === "user" ? "You" : "Agent"}</span>
+                  <span>·</span>
+                  <time>{message.time}</time>
+                </div>
+                <p className="whitespace-pre-wrap wrap-break-word text-xs leading-5 text-ink-soft">
+                  {message.body}
+                </p>
+              </article>
+
+              {message.run ? <PlanCard run={message.run} /> : null}
+            </div>
           ))}
 
           {voiceReplyUrl ? (

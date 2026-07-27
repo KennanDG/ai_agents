@@ -31,13 +31,6 @@ export interface RepositoryFile {
   size: number;
 }
 
-export interface AgentMessage {
-  id: string;
-  role: "user" | "agent";
-  body: string;
-  time: string;
-}
-
 export type AgentRunStatus =
   | "disconnected"
   | "connecting"
@@ -72,6 +65,14 @@ export interface AgentRunState {
   report?: string | null;
   errors: string[];
   logs: string[];
+}
+
+export interface AgentMessage {
+  id: string;
+  role: "user" | "agent";
+  body: string;
+  time: string;
+  run?: AgentRunState;
 }
 
 declare global {

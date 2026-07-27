@@ -19,6 +19,7 @@ class VoiceAgentState(TypedDict, total=False):
     context_summary: str
     recommended_skills: list[str]
     tools_used: list[str]
+    asked_questions: list[str]
 
     status: Literal["clarifying", "ready", "error"]
     reply_text: str

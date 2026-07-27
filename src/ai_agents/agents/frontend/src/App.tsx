@@ -13,11 +13,13 @@ import {
 } from "./lib/codingAgentSocket";
 
 import {
+  fetchGitHubBranches,
   fetchGitHubRepositories,
   fetchGitHubStatus,
   fetchRepositoryFile,
   fetchRepositoryTree,
   importGitHubRepository,
+  type GitHubBranchSummary,
   type GitHubRepositorySummary,
 } from "./lib/repositoryApi";
 import { submitVoiceTurn } from "./lib/voiceAgentApi";
@@ -28,8 +30,8 @@ const apiKey = import.meta.env.VITE_AI_AGENTS_API_KEY ?? "";
 const configuredRepoRoot : string = import.meta.env.VITE_CODING_AGENT_REPO_ROOT ?? ".";
 const configuredWorkspaceRoot : string = import.meta.env.VITE_CODING_AGENT_WORKSPACE_ROOT ?? configuredRepoRoot;
 
-const initialRunState: AgentRunState = {
-  status: "connecting",
+const createRunState = (status: AgentRunState["status"] = "connecting"): AgentRunState => ({
+  status,
   plan: [],
   completedNodes: [],
   filesInspected: [],
@@ -44,7 +46,9 @@ const initialRunState: AgentRunState = {
   appliedFiles: [],
   errors: [],
   logs: [],
-};
+});
+
+const initialRunState = createRunState();
 
 const nowLabel = () => {
   return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date());
@@ -176,8 +180,7 @@ const runReducer = (state: AgentRunState, event: CodingAgentServerEvent): AgentR
 
     case "run.started":
       return {
-        ...initialRunState,
-        status: "running",
+        ...createRunState("running"),
         runId: event.run_id,
         threadId: event.thread_id,
         logs: [
@@ -302,6 +305,10 @@ const App = () => {
   const [githubLoading, setGitHubLoading] = useState(false);
   const [githubError, setGitHubError] = useState<string | null>(null);
   const [selectedGitHubRepository, setSelectedGitHubRepository] = useState<string | null>(null);
+  const [currentBranch, setCurrentBranch] = useState<string | null>(null);
+  const [branches, setBranches] = useState<GitHubBranchSummary[]>([]);
+  const [branchesLoading, setBranchesLoading] = useState(false);
+  const [branchesError, setBranchesError] = useState<string | null>(null);
   const [run, dispatchRun] = useReducer(runReducer, initialRunState);
 
   const [voiceSessionId, setVoiceSessionId] = useState<string | null>(null);
@@ -312,6 +319,7 @@ const App = () => {
   // const [sidebarOpen, setSidebarOpen] = useState(true);
   const socketRef = useRef<ReturnType<typeof createCodingAgentSocket> | null>(null);
   const newThreadForNextRunRef = useRef(false);
+  const activeRunMessageIdRef = useRef<string | null>(null);
 
   
   const activeChange = useMemo(
@@ -389,6 +397,7 @@ const App = () => {
         ref: repository.default_branch,
       });
       setSelectedGitHubRepository(imported.full_name);
+      setCurrentBranch(imported.ref);
       newThreadForNextRunRef.current = true;
       await loadRepository(imported.repo_root);
     } catch (error) {
@@ -400,14 +409,65 @@ const App = () => {
 
   const useLocalRepository = useCallback(async () => {
     setSelectedGitHubRepository(null);
+    setCurrentBranch(null);
     newThreadForNextRunRef.current = true;
     await loadRepository(configuredRepoRoot);
   }, [loadRepository]);
+
+  const switchBranch = useCallback(async (branchName: string) => {
+    if (!selectedGitHubRepository) return;
+    setRepoLoading(true);
+    setRepoError(null);
+    try {
+      const imported = await importGitHubRepository({
+        apiBaseUrl,
+        apiKey,
+        fullName: selectedGitHubRepository,
+        ref: branchName,
+        refresh: true,
+      });
+      setCurrentBranch(imported.ref);
+      newThreadForNextRunRef.current = true;
+      await loadRepository(imported.repo_root);
+    } catch (error) {
+      setRepoError(error instanceof Error ? error.message : "Failed to switch branch.");
+    } finally {
+      setRepoLoading(false);
+    }
+  }, [selectedGitHubRepository, loadRepository, apiBaseUrl, apiKey]);
 
   useEffect(() => {
     void loadRepository(configuredRepoRoot);
     void refreshGitHubRepositories();
   }, [loadRepository, refreshGitHubRepositories]);
+
+  useEffect(() => {
+    if (!selectedGitHubRepository) {
+      setBranches([]);
+      setCurrentBranch(null);
+      return;
+    }
+    let cancelled = false;
+    setBranchesLoading(true);
+    setBranchesError(null);
+    const load = async () => {
+      try {
+        const list = await fetchGitHubBranches({ apiBaseUrl, apiKey, fullName: selectedGitHubRepository });
+        if (!cancelled) {
+          setBranches(list);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setBranchesError(error instanceof Error ? error.message : "Failed to load branches");
+          setBranches([]);
+        }
+      } finally {
+        if (!cancelled) setBranchesLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [selectedGitHubRepository, apiBaseUrl, apiKey]);
 
 
 
@@ -454,6 +514,17 @@ const App = () => {
       apiKey,
       onEvent: (event) => {
         dispatchRun(event);
+
+        const activeRunMessageId = activeRunMessageIdRef.current;
+        if (activeRunMessageId) {
+          setMessages((current) =>
+            current.map((message) =>
+              message.id === activeRunMessageId && message.run
+                ? { ...message, run: runReducer(message.run, event) }
+                : message,
+            ),
+          );
+        }
 
         if (event.type === "run.started") {
           newThreadForNextRunRef.current = false;
@@ -557,7 +628,7 @@ const App = () => {
       };
 
       setMessages((current) => [...current, userVoiceMessage, agentVoiceMessage]);
-      setVoiceHistory((current) => [...current, userVoiceMessage, agentVoiceMessage].slice(-6));
+      setVoiceHistory((current) => [...current, userVoiceMessage, agentVoiceMessage].slice(-12));
 
       if (response.audio_base64) {
         const nextUrl = base64AudioToObjectUrl(
@@ -586,8 +657,13 @@ const App = () => {
       }
 
       if (response.status === "ready" && response.coding_request) {
+        activeRunMessageIdRef.current = userVoiceMessage.id;
         setMessages((current) => [
-          ...current,
+          ...current.map((message) =>
+            message.id === userVoiceMessage.id
+              ? { ...message, run: createRunState("running") }
+              : message,
+          ),
           {
             id: crypto.randomUUID(),
             role: "agent",
@@ -638,20 +714,22 @@ const App = () => {
       attachedFiles.length > 0
         ? `\n\nAttached files:\n${attachedFiles.map((file) => `- ${file.name}`).join("\n")}`
         : "";
+    const messageId = crypto.randomUUID();
 
+    activeRunMessageIdRef.current = messageId;
     setMessages((current) => [
       ...current,
       {
-        id: crypto.randomUUID(),
+        id: messageId,
         role: "user",
         body: prompt + attachmentLabel,
         time: nowLabel(),
+        run: createRunState("running"),
       },
     ]);
 
     runCodingAgent(prompt, attachedFiles);
   };
-
 
 
   return (
@@ -666,6 +744,7 @@ const App = () => {
         changes={run.fileChanges}
         activePath={activePath}
         isLoading={repoLoading}
+        agentRunning={run.status === "running"}
         error={repoError}
         onSelect={setActivePath}
         onRefresh={refreshRepository}
@@ -676,6 +755,11 @@ const App = () => {
         onSelectGitHubRepository={selectGitHubRepository}
         onUseLocalRepository={useLocalRepository}
         onRefreshGitHubRepositories={refreshGitHubRepositories}
+        branches={branches}
+        currentBranch={currentBranch}
+        branchesLoading={branchesLoading}
+        branchesError={branchesError}
+        onSwitchBranch={switchBranch}
       />
 
       {/* {sidebarOpen ? (
