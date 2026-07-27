@@ -6,6 +6,14 @@ Use when:
 - The user asks for a small feature, refactor, or fix.
 - The task is localized to a few files.
 
+Allowed tools:
+- list_files
+- read_file
+- file_size
+- search_repo
+- robust_search
+- format_search_results
+
 Steps:
 1. Inspect relevant files.
 2. Identify the smallest safe change.
