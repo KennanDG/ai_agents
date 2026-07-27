@@ -571,10 +571,10 @@ const App = () => {
     socketRef.current?.apply(run.threadId);
   };
 
-  const approveFileChange = (path: string) => {
-    if (!run.threadId) return;
-    socketRef.current?.apply(run.threadId, [path]);
-  };
+  // const approveFileChange = (path: string) => {
+  //   if (!run.threadId) return;
+  //   socketRef.current?.apply(run.threadId, [path]);
+  // };
 
   const rejectChanges = () => {
     if (!run.threadId) return;
@@ -822,9 +822,9 @@ const App = () => {
           change={activeChange}
           isLoading={fileLoading}
           error={fileError}
-          canApprove={run.approvalStatus === "pending"}
-          onAcceptFile={approveFileChange}
-          onRejectChanges={rejectChanges}
+          // canApprove={run.approvalStatus === "pending"}
+          // onAcceptFile={approveFileChange}
+          // onRejectChanges={rejectChanges}
         />
 
         <OutputPanel run={run} />

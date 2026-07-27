@@ -2,13 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import re
-from difflib import SequenceMatcher
-from pathlib import Path
-from typing import Any, Iterable
-
-from groq import Groq
+from typing import Any
 
 from ai_agents.agents.voice.prompts import VOICE_INTAKE_SYSTEM_PROMPT
 from ai_agents.agents.voice.schemas import VoiceIntakeDecision
@@ -21,26 +15,14 @@ from ai_agents.agents.voice.utils.constants import (
     MAX_SEARCH_MATCHES
 )
 from .utils.helpers import (
-    _client,
     _safe_history,
-    _extract_questions,
     _questions_from_history,
     _count_prior_clarifications,
-    _normalize_question,
-    _question_similarity,
-    _is_repeated_question,
-    _infer_clarification_topic,
     _used_clarification_topics,
-    _answered_clarification_topics,
     _next_novel_clarification,
     _decision_has_novel_question,
-    _strip_voice_prefix,
     _resolve_repo_root,
-    _normalized_repo_path,
-    _is_ignored_repo_relative_path,
-    _is_ignored_repo_path,
     _iter_repository_files,
-    _filter_navigation_paths,
     _safe_repo_path,
     _read_text_excerpt,
     _keywords,
@@ -50,7 +32,6 @@ from .utils.helpers import (
     _compact_repo_context,
     _is_json_generation_error,
     _request_intake_decision,
-    _default_plan,
     _fallback_coding_request,
     _ensure_detailed_coding_request,
 )

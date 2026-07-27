@@ -1,12 +1,12 @@
 import { DiffEditor } from "@monaco-editor/react";
 import {
-  Check,
+  // Check,
   Clipboard,
   Columns2,
   Download,
   FileCode2,
   MoreHorizontal,
-  Undo2,
+  // Undo2,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FileChange, RepositoryFile } from "../types";
@@ -16,9 +16,9 @@ interface DiffPanelProps {
   change?: FileChange | null;
   isLoading?: boolean;
   error?: string | null;
-  canApprove?: boolean;
-  onAcceptFile?: (path: string) => void;
-  onRejectChanges?: () => void;
+  // canApprove?: boolean;
+  // onAcceptFile?: (path: string) => void;
+  // onRejectChanges?: () => void;
 }
 
 const modelPath = (side: "repo" | "sandbox", path: string) => {
@@ -36,9 +36,9 @@ export const DiffPanel = ({
   change,
   isLoading = false,
   error,
-  canApprove = false,
-  onAcceptFile,
-  onRejectChanges,
+  // canApprove = false,
+  // onAcceptFile,
+  // onRejectChanges,
 }: DiffPanelProps) => {
   const path = change?.path ?? file?.path ?? "No file selected";
   const language = change?.language ?? file?.language ?? "plaintext";
@@ -261,7 +261,7 @@ export const DiffPanel = ({
             ? "Review this file before applying the patch."
             : "Repository preview. Agent changes will appear here when a run produces diffs.")}
         </p>
-        {hasChange ? (
+        {/* {hasChange ? (
           <div className="flex shrink-0 gap-2">
             <button
               type="button"
@@ -281,7 +281,7 @@ export const DiffPanel = ({
               <Check size={13} /> Accept file
             </button>
           </div>
-        ) : null}
+        ) : null} */}
       </footer>
     </section>
   );

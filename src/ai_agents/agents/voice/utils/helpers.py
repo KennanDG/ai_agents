@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
@@ -15,8 +14,6 @@ from ai_agents.config.settings import settings
 from ai_agents.agents.voice.state import VoiceAgentState
 from .constants import (
     MAX_ATTACHMENT_CONTENT_CHARS,
-    MAX_CONTEXT_JSON_CHARS,
-    MAX_EXPLICIT_FILE_CHARS,
     MAX_FILE_BYTES,
     MAX_LLM_ATTACHMENT_EXCERPT_CHARS,
     MAX_LLM_EXPLICIT_FILE_CHARS,
