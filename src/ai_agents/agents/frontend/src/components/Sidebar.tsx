@@ -1,7 +1,25 @@
-import { Fragment, useMemo, useState, ReactNode } from "react";
-import { ChevronDown, ChevronRight, FileCode2, Folder, FolderGit2, LoaderCircle, RotateCcw } from "lucide-react";
+import { Fragment, useEffect, useMemo, useState, ReactNode } from "react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Download,
+  FileCode2,
+  Folder,
+  FolderGit2,
+  GitBranchPlus,
+  GitCommitHorizontal,
+  GitPullRequest,
+  LoaderCircle,
+  PlugZap,
+  RotateCcw,
+  Upload,
+} from "lucide-react";
 import type { FileChange, RepositoryTreeEntry } from "../types";
-import type { GitHubRepositorySummary, GitHubBranchSummary } from "../lib/repositoryApi";
+import type {
+  GitHubBranchSummary,
+  GitHubRepositoryStatus,
+  GitHubRepositorySummary,
+} from "../lib/repositoryApi";
 
 interface SidebarProps {
   repoName: string;
@@ -26,6 +44,25 @@ interface SidebarProps {
   branchesLoading?: boolean;
   branchesError?: string | null;
   onSwitchBranch?: (branchName: string) => void;
+  defaultBranch?: string | null;
+  repositoryPermissions?: GitHubRepositorySummary["permissions"] | null;
+  githubRepositoryStatus?: GitHubRepositoryStatus | null;
+  githubActionLoading?: string | null;
+  githubActionMessage?: string | null;
+  githubActionError?: string | null;
+  githubPullRequestUrl?: string | null;
+  committableFileCount?: number;
+  onTestGitHubConnection?: () => void;
+  onCreateGitHubBranch?: (branch: string) => void;
+  onPullGitHubBranch?: () => void;
+  onCommitGitHubChanges?: (message: string) => void;
+  onPushGitHubBranch?: () => void;
+  onCreateGitHubPullRequest?: (request: {
+    title: string;
+    body: string;
+    base: string;
+    draft: boolean;
+  }) => void;
 }
 
 const statusColor = {
@@ -64,12 +101,33 @@ export const Sidebar = ({
   branchesLoading = false,
   branchesError = null,
   onSwitchBranch,
+  defaultBranch = null,
+  repositoryPermissions = null,
+  githubRepositoryStatus = null,
+  githubActionLoading = null,
+  githubActionMessage = null,
+  githubActionError = null,
+  githubPullRequestUrl = null,
+  committableFileCount = 0,
+  onTestGitHubConnection,
+  onCreateGitHubBranch,
+  onPullGitHubBranch,
+  onCommitGitHubChanges,
+  onPushGitHubBranch,
+  onCreateGitHubPullRequest,
 }: SidebarProps) => {
   
   const fileEntries = entries.filter((entry) => entry.kind === "file");
   const [openDirs, setOpenDirs] = useState<Set<string>>(new Set());
   const [showChanges, setShowChanges] = useState(true);
   const [showFiles, setShowFiles] = useState(true);
+  const [showGitHubActions, setShowGitHubActions] = useState(false);
+  const [newBranch, setNewBranch] = useState("agent/");
+  const [commitMessage, setCommitMessage] = useState("");
+  const [pullRequestTitle, setPullRequestTitle] = useState("");
+  const [pullRequestBody, setPullRequestBody] = useState("");
+  const [pullRequestBase, setPullRequestBase] = useState(defaultBranch ?? "");
+  const [draftPullRequest, setDraftPullRequest] = useState(true);
   const childrenByParent = useMemo(() => {
     const map = new Map<string, RepositoryTreeEntry[]>();
     for (const entry of entries) {
@@ -81,6 +139,22 @@ export const Sidebar = ({
   }, [entries]);
 
   const rootEntries = useMemo(() => childrenByParent.get('') ?? [], [childrenByParent]);
+  const availableBranches = useMemo(() => {
+    if (!currentBranch || branches.some((branch) => branch.name === currentBranch)) return branches;
+    return [{ name: currentBranch, sha: githubRepositoryStatus?.head_sha ?? "" }, ...branches];
+  }, [branches, currentBranch, githubRepositoryStatus?.head_sha]);
+  const canPush = Boolean(repositoryPermissions?.push);
+  const onDefaultBranch = Boolean(currentBranch && defaultBranch && currentBranch === defaultBranch);
+  const operationRunning = Boolean(githubActionLoading);
+
+  useEffect(() => {
+    setPullRequestBase(defaultBranch ?? "");
+    setNewBranch("agent/");
+    setCommitMessage("");
+    setPullRequestTitle("");
+    setPullRequestBody("");
+    setDraftPullRequest(true);
+  }, [defaultBranch, selectedGitHubRepository]);
 
   const renderTree = (nodes: RepositoryTreeEntry[]): ReactNode[] =>
     nodes.map((entry) => {
@@ -192,7 +266,7 @@ export const Sidebar = ({
               className="w-full rounded-md border border-line bg-surface px-2.5 py-2 text-xs text-ink outline-none hover:border-line-strong focus:border-accent/70"
               aria-label="Switch branch"
             >
-              {branches.map((branch) => (
+              {availableBranches.map((branch) => (
                 <option key={branch.name} value={branch.name}>
                   {branch.name}
                 </option>
@@ -202,6 +276,175 @@ export const Sidebar = ({
             {branchesError && <p className="mt-1 px-1 text-[10px] leading-4 text-rose-300">{branchesError}</p>}
           </div>
         )}
+
+        {selectedGitHubRepository ? (
+          <div className="mt-3 border-t border-line pt-3">
+            <button
+              type="button"
+              onClick={() => setShowGitHubActions((current) => !current)}
+              className="flex w-full items-center gap-2 text-left text-[10px] font-semibold uppercase tracking-wider text-muted hover:text-ink-soft"
+            >
+              {showGitHubActions ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+              GitHub publish controls
+              {githubActionLoading ? <LoaderCircle size={12} className="ml-auto animate-spin text-accent-light" /> : null}
+            </button>
+
+            {showGitHubActions ? (
+              <div className="mt-2 space-y-2">
+                <div className="rounded-md border border-line bg-surface/60 p-2 text-[10px] text-muted">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate font-mono text-ink-soft">{currentBranch ?? "No branch"}</span>
+                    <span>{githubRepositoryStatus?.ahead ?? 0} ahead · {githubRepositoryStatus?.behind ?? 0} behind</span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between gap-2">
+                    <span>{githubRepositoryStatus?.dirty ? "Uncommitted changes" : "Working tree clean"}</span>
+                    <span>{canPush ? "Write access" : "Read-only"}</span>
+                  </div>
+                </div>
+
+                {onDefaultBranch ? (
+                  <p className="rounded-md border border-amber-400/30 bg-amber-400/5 px-2 py-1.5 text-[10px] leading-4 text-amber-200">
+                    Direct agent commits to {defaultBranch} are blocked. Create an agent/* branch first.
+                  </p>
+                ) : null}
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    className="secondary-button justify-center"
+                    disabled={operationRunning}
+                    onClick={onTestGitHubConnection}
+                  >
+                    <PlugZap size={12} /> Test
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button justify-center"
+                    disabled={operationRunning || Boolean(githubRepositoryStatus?.dirty)}
+                    onClick={onPullGitHubBranch}
+                    title={githubRepositoryStatus?.dirty ? "Commit or discard local changes before pulling." : "Fast-forward only pull"}
+                  >
+                    <Download size={12} /> Pull
+                  </button>
+                </div>
+
+                <div className="flex gap-2">
+                  <input
+                    value={newBranch}
+                    onChange={(event) => setNewBranch(event.target.value)}
+                    className="min-w-0 flex-1 rounded-md border border-line bg-surface px-2 py-1.5 font-mono text-[10px] text-ink outline-none focus:border-accent/70"
+                    placeholder="agent/feature-name"
+                    aria-label="New GitHub branch"
+                  />
+                  <button
+                    type="button"
+                    className="icon-button shrink-0"
+                    disabled={operationRunning || !canPush || newBranch.trim().length < 3}
+                    onClick={() => onCreateGitHubBranch?.(newBranch.trim())}
+                    title="Create and switch branch"
+                  >
+                    <GitBranchPlus size={13} />
+                  </button>
+                </div>
+
+                <textarea
+                  value={commitMessage}
+                  onChange={(event) => setCommitMessage(event.target.value)}
+                  className="min-h-14 w-full resize-y rounded-md border border-line bg-surface px-2 py-1.5 text-[10px] leading-4 text-ink outline-none focus:border-accent/70"
+                  placeholder="Commit message"
+                  maxLength={200}
+                />
+                <button
+                  type="button"
+                  className="secondary-button w-full justify-center"
+                  disabled={operationRunning || !canPush || onDefaultBranch || committableFileCount === 0 || commitMessage.trim().length < 3}
+                  onClick={() => onCommitGitHubChanges?.(commitMessage.trim())}
+                >
+                  <GitCommitHorizontal size={12} /> Commit {committableFileCount} applied file{committableFileCount === 1 ? "" : "s"}
+                </button>
+
+                <button
+                  type="button"
+                  className="secondary-button w-full justify-center"
+                  disabled={operationRunning || !canPush || onDefaultBranch || Boolean(githubRepositoryStatus?.dirty)}
+                  onClick={onPushGitHubBranch}
+                >
+                  <Upload size={12} /> Push current branch
+                </button>
+
+                <div className="border-t border-line pt-2">
+                  <input
+                    value={pullRequestTitle}
+                    onChange={(event) => setPullRequestTitle(event.target.value)}
+                    className="w-full rounded-md border border-line bg-surface px-2 py-1.5 text-[10px] text-ink outline-none focus:border-accent/70"
+                    placeholder="Pull request title"
+                    maxLength={256}
+                  />
+                  <div className="mt-2 flex gap-2">
+                    <select
+                      value={pullRequestBase}
+                      onChange={(event) => setPullRequestBase(event.target.value)}
+                      className="min-w-0 flex-1 rounded-md border border-line bg-surface px-2 py-1.5 text-[10px] text-ink outline-none focus:border-accent/70"
+                      aria-label="Pull request base branch"
+                    >
+                      {availableBranches.map((branch) => (
+                        <option key={`base:${branch.name}`} value={branch.name}>{branch.name}</option>
+                      ))}
+                    </select>
+                    <label className="flex items-center gap-1 text-[10px] text-muted">
+                      <input
+                        type="checkbox"
+                        checked={draftPullRequest}
+                        onChange={(event) => setDraftPullRequest(event.target.checked)}
+                        className="accent-accent"
+                      />
+                      Draft
+                    </label>
+                  </div>
+                  <textarea
+                    value={pullRequestBody}
+                    onChange={(event) => setPullRequestBody(event.target.value)}
+                    className="mt-2 min-h-16 w-full resize-y rounded-md border border-line bg-surface px-2 py-1.5 text-[10px] leading-4 text-ink outline-none focus:border-accent/70"
+                    placeholder="What changed, why, impact, and validation"
+                  />
+                  <button
+                    type="button"
+                    className="primary-button mt-2 w-full justify-center"
+                    disabled={
+                      operationRunning
+                      || !canPush
+                      || !currentBranch
+                      || currentBranch === pullRequestBase
+                      || pullRequestTitle.trim().length < 3
+                      || Boolean(githubRepositoryStatus?.dirty)
+                    }
+                    onClick={() => onCreateGitHubPullRequest?.({
+                      title: pullRequestTitle.trim(),
+                      body: pullRequestBody,
+                      base: pullRequestBase,
+                      draft: draftPullRequest,
+                    })}
+                  >
+                    <GitPullRequest size={12} /> Create {draftPullRequest ? "draft " : ""}PR
+                  </button>
+                </div>
+
+                {githubActionMessage ? <p className="text-[10px] leading-4 text-emerald-300">{githubActionMessage}</p> : null}
+                {githubActionError ? <p className="text-[10px] leading-4 text-rose-300">{githubActionError}</p> : null}
+                {githubPullRequestUrl ? (
+                  <a
+                    href={githubPullRequestUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="block truncate text-[10px] text-accent-light underline underline-offset-2"
+                  >
+                    Open pull request
+                  </a>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">

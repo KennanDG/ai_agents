@@ -101,6 +101,42 @@ class Settings(BaseSettings):
         alias="GITHUB_WORKSPACE_ROOT",
     )
     github_timeout_seconds: int = Field(default=120, alias="GITHUB_TIMEOUT_SECONDS")
+    github_commit_author_name: str = Field(
+        default="AI Agents",
+        alias="GITHUB_COMMIT_AUTHOR_NAME",
+    )
+    github_commit_author_email: str = Field(
+        default="ai-agents@users.noreply.github.com",
+        alias="GITHUB_COMMIT_AUTHOR_EMAIL",
+    )
+    github_allow_default_branch_push: bool = Field(
+        default=False,
+        alias="GITHUB_ALLOW_DEFAULT_BRANCH_PUSH",
+    )
+    github_max_commit_files: int = Field(
+        default=100,
+        ge=1,
+        le=500,
+        alias="GITHUB_MAX_COMMIT_FILES",
+    )
+    github_max_file_size_bytes: int = Field(
+        default=5_000_000,
+        ge=1,
+        alias="GITHUB_MAX_FILE_SIZE_BYTES",
+    )
+    github_blocked_path_patterns: List[str] = Field(
+        default_factory=lambda: [
+            ".env",
+            ".env.*",
+            "*.pem",
+            "*.key",
+            "id_rsa",
+            "id_ed25519",
+            "*credentials*",
+            "*secrets*",
+        ],
+        alias="GITHUB_BLOCKED_PATH_PATTERNS",
+    )
 
     # LangChain
     langchain_api_key: str | None = Field(default=None, alias="LANGCHAIN_API_KEY")

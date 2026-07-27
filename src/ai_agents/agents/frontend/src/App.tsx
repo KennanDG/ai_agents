@@ -13,13 +13,21 @@ import {
 } from "./lib/codingAgentSocket";
 
 import {
+  commitGitHubChanges,
+  createGitHubBranch,
+  createGitHubPullRequest,
   fetchGitHubBranches,
   fetchGitHubRepositories,
+  fetchGitHubRepositoryStatus,
   fetchGitHubStatus,
   fetchRepositoryFile,
   fetchRepositoryTree,
   importGitHubRepository,
+  pullGitHubBranch,
+  pushGitHubBranch,
+  testGitHubConnection,
   type GitHubBranchSummary,
+  type GitHubRepositoryStatus,
   type GitHubRepositorySummary,
 } from "./lib/repositoryApi";
 import { submitVoiceTurn } from "./lib/voiceAgentApi";
@@ -309,6 +317,11 @@ const App = () => {
   const [branches, setBranches] = useState<GitHubBranchSummary[]>([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [branchesError, setBranchesError] = useState<string | null>(null);
+  const [githubRepositoryStatus, setGitHubRepositoryStatus] = useState<GitHubRepositoryStatus | null>(null);
+  const [githubActionLoading, setGitHubActionLoading] = useState<string | null>(null);
+  const [githubActionMessage, setGitHubActionMessage] = useState<string | null>(null);
+  const [githubActionError, setGitHubActionError] = useState<string | null>(null);
+  const [githubPullRequestUrl, setGitHubPullRequestUrl] = useState<string | null>(null);
   const [run, dispatchRun] = useReducer(runReducer, initialRunState);
 
   const [voiceSessionId, setVoiceSessionId] = useState<string | null>(null);
@@ -328,6 +341,19 @@ const App = () => {
   );
 
   const repoName = useMemo(() => repoRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? "repository", [repoRoot]);
+  const selectedGitHubRepositorySummary = useMemo(
+    () => githubRepositories.find((repository) => repository.full_name === selectedGitHubRepository) ?? null,
+    [githubRepositories, selectedGitHubRepository],
+  );
+  const committablePaths = useMemo(() => {
+    if (!githubRepositoryStatus) return [];
+    const changedPaths = new Set([
+      ...githubRepositoryStatus.staged_files,
+      ...githubRepositoryStatus.unstaged_files,
+      ...githubRepositoryStatus.untracked_files,
+    ]);
+    return [...new Set(run.appliedFiles)].filter((path) => changedPaths.has(path));
+  }, [githubRepositoryStatus, run.appliedFiles]);
   const effectiveWorkspaceRoot = selectedGitHubRepository
     ? repoRoot
     : configuredWorkspaceRoot === configuredRepoRoot
@@ -379,6 +405,25 @@ const App = () => {
     }
   }, []);
 
+  const loadGitHubRepositoryStatus = useCallback(async (fullName: string) => {
+    try {
+      const status = await fetchGitHubRepositoryStatus({ apiBaseUrl, apiKey, fullName });
+      setGitHubRepositoryStatus(status);
+      setCurrentBranch(status.branch);
+      return status;
+    } catch (error) {
+      setGitHubRepositoryStatus(null);
+      setGitHubActionError(error instanceof Error ? error.message : "Failed to load GitHub repository status.");
+      return null;
+    }
+  }, []);
+
+  const clearGitHubActionFeedback = () => {
+    setGitHubActionMessage(null);
+    setGitHubActionError(null);
+    setGitHubPullRequestUrl(null);
+  };
+
   const selectGitHubRepository = useCallback(async (fullName: string) => {
     const repository = githubRepositories.find((item) => item.full_name === fullName);
     if (!repository) {
@@ -399,17 +444,21 @@ const App = () => {
       setSelectedGitHubRepository(imported.full_name);
       setCurrentBranch(imported.ref);
       newThreadForNextRunRef.current = true;
+      clearGitHubActionFeedback();
       await loadRepository(imported.repo_root);
+      await loadGitHubRepositoryStatus(imported.full_name);
     } catch (error) {
       setGitHubError(error instanceof Error ? error.message : "Failed to import GitHub repository.");
     } finally {
       setGitHubLoading(false);
     }
-  }, [githubRepositories, loadRepository]);
+  }, [githubRepositories, loadGitHubRepositoryStatus, loadRepository]);
 
   const useLocalRepository = useCallback(async () => {
     setSelectedGitHubRepository(null);
     setCurrentBranch(null);
+    setGitHubRepositoryStatus(null);
+    clearGitHubActionFeedback();
     newThreadForNextRunRef.current = true;
     await loadRepository(configuredRepoRoot);
   }, [loadRepository]);
@@ -428,13 +477,155 @@ const App = () => {
       });
       setCurrentBranch(imported.ref);
       newThreadForNextRunRef.current = true;
+      clearGitHubActionFeedback();
       await loadRepository(imported.repo_root);
+      await loadGitHubRepositoryStatus(imported.full_name);
     } catch (error) {
       setRepoError(error instanceof Error ? error.message : "Failed to switch branch.");
     } finally {
       setRepoLoading(false);
     }
-  }, [selectedGitHubRepository, loadRepository, apiBaseUrl, apiKey]);
+  }, [selectedGitHubRepository, loadGitHubRepositoryStatus, loadRepository]);
+
+  const testSelectedGitHubConnection = useCallback(async () => {
+    setGitHubActionLoading("test");
+    clearGitHubActionFeedback();
+    try {
+      const result = await testGitHubConnection({
+        apiBaseUrl,
+        apiKey,
+        fullName: selectedGitHubRepository,
+      });
+      setGitHubActionMessage(result.message);
+      if (!result.connected) {
+        setGitHubActionError("The API, Git transport, token permissions, and workspace checks did not all pass.");
+      }
+    } catch (error) {
+      setGitHubActionError(error instanceof Error ? error.message : "GitHub connection test failed.");
+    } finally {
+      setGitHubActionLoading(null);
+    }
+  }, [selectedGitHubRepository]);
+
+  const createAgentBranch = useCallback(async (branch: string) => {
+    if (!selectedGitHubRepository) return;
+    setGitHubActionLoading("branch");
+    clearGitHubActionFeedback();
+    try {
+      const result = await createGitHubBranch({
+        apiBaseUrl,
+        apiKey,
+        fullName: selectedGitHubRepository,
+        branch,
+        base: currentBranch,
+      });
+      setCurrentBranch(result.branch);
+      setBranches((current) => current.some((item) => item.name === result.branch)
+        ? current
+        : [{ name: result.branch, sha: result.sha }, ...current]);
+      newThreadForNextRunRef.current = true;
+      setGitHubActionMessage(`Created and switched to ${result.branch}.`);
+      await loadGitHubRepositoryStatus(selectedGitHubRepository);
+      await loadRepository(repoRoot);
+    } catch (error) {
+      setGitHubActionError(error instanceof Error ? error.message : "Failed to create branch.");
+    } finally {
+      setGitHubActionLoading(null);
+    }
+  }, [currentBranch, loadGitHubRepositoryStatus, loadRepository, repoRoot, selectedGitHubRepository]);
+
+  const pullCurrentGitHubBranch = useCallback(async () => {
+    if (!selectedGitHubRepository) return;
+    setGitHubActionLoading("pull");
+    clearGitHubActionFeedback();
+    try {
+      const result = await pullGitHubBranch({ apiBaseUrl, apiKey, fullName: selectedGitHubRepository });
+      setGitHubActionMessage(result.changed ? `Fast-forwarded ${result.branch}.` : `${result.branch} is already current.`);
+      await loadGitHubRepositoryStatus(selectedGitHubRepository);
+      await loadRepository(repoRoot);
+    } catch (error) {
+      setGitHubActionError(error instanceof Error ? error.message : "Failed to pull branch.");
+    } finally {
+      setGitHubActionLoading(null);
+    }
+  }, [loadGitHubRepositoryStatus, loadRepository, repoRoot, selectedGitHubRepository]);
+
+  const commitAppliedGitHubChanges = useCallback(async (message: string) => {
+    if (!selectedGitHubRepository) return;
+    if (committablePaths.length === 0) {
+      setGitHubActionError("No approved and applied agent files are currently available to commit.");
+      return;
+    }
+    setGitHubActionLoading("commit");
+    clearGitHubActionFeedback();
+    try {
+      const result = await commitGitHubChanges({
+        apiBaseUrl,
+        apiKey,
+        fullName: selectedGitHubRepository,
+        message,
+        paths: committablePaths,
+      });
+      setGitHubActionMessage(`Committed ${result.committed_files.length} file(s) as ${result.commit_sha.slice(0, 7)}.`);
+      await loadGitHubRepositoryStatus(selectedGitHubRepository);
+      await loadRepository(repoRoot);
+    } catch (error) {
+      setGitHubActionError(error instanceof Error ? error.message : "Failed to commit changes.");
+    } finally {
+      setGitHubActionLoading(null);
+    }
+  }, [committablePaths, loadGitHubRepositoryStatus, loadRepository, repoRoot, selectedGitHubRepository]);
+
+  const pushCurrentGitHubBranch = useCallback(async () => {
+    if (!selectedGitHubRepository) return;
+    setGitHubActionLoading("push");
+    clearGitHubActionFeedback();
+    try {
+      const result = await pushGitHubBranch({ apiBaseUrl, apiKey, fullName: selectedGitHubRepository });
+      setGitHubActionMessage(result.pushed ? `Pushed ${result.branch}.` : `${result.branch} was already pushed.`);
+      await loadGitHubRepositoryStatus(selectedGitHubRepository);
+    } catch (error) {
+      setGitHubActionError(error instanceof Error ? error.message : "Failed to push branch.");
+    } finally {
+      setGitHubActionLoading(null);
+    }
+  }, [loadGitHubRepositoryStatus, selectedGitHubRepository]);
+
+  const openGitHubPullRequest = useCallback(async ({
+    title,
+    body,
+    base,
+    draft,
+  }: {
+    title: string;
+    body: string;
+    base: string;
+    draft: boolean;
+  }) => {
+    if (!selectedGitHubRepository) return;
+    setGitHubActionLoading("pr");
+    clearGitHubActionFeedback();
+    try {
+      const result = await createGitHubPullRequest({
+        apiBaseUrl,
+        apiKey,
+        fullName: selectedGitHubRepository,
+        title,
+        body,
+        base,
+        head: currentBranch,
+        draft,
+      });
+      setGitHubPullRequestUrl(result.html_url);
+      setGitHubActionMessage(result.created
+        ? `Created ${result.draft ? "draft " : ""}PR #${result.number}.`
+        : `PR #${result.number} is already open.`);
+    } catch (error) {
+      setGitHubActionError(error instanceof Error ? error.message : "Failed to create pull request.");
+    } finally {
+      setGitHubActionLoading(null);
+    }
+  }, [currentBranch, selectedGitHubRepository]);
 
   useEffect(() => {
     void loadRepository(configuredRepoRoot);
@@ -467,7 +658,15 @@ const App = () => {
     };
     load();
     return () => { cancelled = true; };
-  }, [selectedGitHubRepository, apiBaseUrl, apiKey]);
+  }, [selectedGitHubRepository]);
+
+  useEffect(() => {
+    if (!selectedGitHubRepository) {
+      setGitHubRepositoryStatus(null);
+      return;
+    }
+    void loadGitHubRepositoryStatus(selectedGitHubRepository);
+  }, [loadGitHubRepositoryStatus, selectedGitHubRepository, run.appliedFiles]);
 
 
 
@@ -760,6 +959,20 @@ const App = () => {
         branchesLoading={branchesLoading}
         branchesError={branchesError}
         onSwitchBranch={switchBranch}
+        defaultBranch={selectedGitHubRepositorySummary?.default_branch ?? null}
+        repositoryPermissions={selectedGitHubRepositorySummary?.permissions ?? null}
+        githubRepositoryStatus={githubRepositoryStatus}
+        githubActionLoading={githubActionLoading}
+        githubActionMessage={githubActionMessage}
+        githubActionError={githubActionError}
+        githubPullRequestUrl={githubPullRequestUrl}
+        committableFileCount={committablePaths.length}
+        onTestGitHubConnection={testSelectedGitHubConnection}
+        onCreateGitHubBranch={createAgentBranch}
+        onPullGitHubBranch={pullCurrentGitHubBranch}
+        onCommitGitHubChanges={commitAppliedGitHubChanges}
+        onPushGitHubBranch={pushCurrentGitHubBranch}
+        onCreateGitHubPullRequest={openGitHubPullRequest}
       />
 
       {/* {sidebarOpen ? (

@@ -3,6 +3,9 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Union, Literal
 from pydantic import BaseModel, Field
 
+from pydantic import BaseModel, Field
+
+
 
 class HealthResponse(BaseModel):
     status: str = "ok"
@@ -162,6 +165,140 @@ class RepositoryFileResponse(BaseModel):
     language: str = "plaintext"
     content: str
     size: int
+
+
+class GitHubRepositoryImportRequest(BaseModel):
+    full_name: str = Field(..., examples=["owner/repository"])
+    ref: str | None = Field(default=None, description="Branch to check out.")
+    refresh: bool = Field(
+        default=False,
+        description="Fetch and fast-forward an existing managed checkout.",
+    )
+
+
+class GitHubRepositorySummary(BaseModel):
+    id: int
+    full_name: str
+    name: str
+    owner: str
+    private: bool
+    default_branch: str
+    clone_url: str
+    html_url: str
+    updated_at: str | None = None
+    permissions: dict[str, bool] = Field(default_factory=dict)
+
+
+class GitHubRepositoryImportResponse(BaseModel):
+    full_name: str
+    ref: str
+    repo_root: str
+    reused_existing_checkout: bool
+
+
+class GitHubBranchSummary(BaseModel):
+    name: str
+    sha: str
+
+
+class GitHubConnectionTestResponse(BaseModel):
+    connected: bool
+    api_connected: bool
+    git_available: bool
+    git_transport_connected: bool
+    workspace_writable: bool
+    token_kind: Literal["user", "installation"]
+    account: str | None = None
+    full_name: str | None = None
+    default_branch: str | None = None
+    permissions: dict[str, bool] = Field(default_factory=dict)
+    message: str
+
+
+class GitHubRepositoryStatus(BaseModel):
+    full_name: str
+    repo_root: str
+    branch: str
+    default_branch: str
+    head_sha: str
+    upstream: str | None = None
+    ahead: int = 0
+    behind: int = 0
+    dirty: bool
+    staged_files: list[str] = Field(default_factory=list)
+    unstaged_files: list[str] = Field(default_factory=list)
+    untracked_files: list[str] = Field(default_factory=list)
+
+
+class GitHubCreateBranchRequest(BaseModel):
+    full_name: str
+    branch: str
+    base: str | None = None
+
+
+class GitHubCreateBranchResponse(BaseModel):
+    full_name: str
+    branch: str
+    sha: str
+
+
+class GitHubPullRequest(BaseModel):
+    full_name: str
+
+
+class GitHubPullResponse(BaseModel):
+    full_name: str
+    branch: str
+    head_sha: str
+    changed: bool
+
+
+class GitHubCommitRequest(BaseModel):
+    full_name: str
+    message: str = Field(min_length=3, max_length=200)
+    paths: list[str] = Field(min_length=1)
+
+
+class GitHubCommitResponse(BaseModel):
+    full_name: str
+    branch: str
+    commit_sha: str
+    committed_files: list[str]
+
+
+class GitHubPushRequest(BaseModel):
+    full_name: str
+
+
+class GitHubPushResponse(BaseModel):
+    full_name: str
+    branch: str
+    commit_sha: str
+    pushed: bool
+
+
+class GitHubPullRequestCreateRequest(BaseModel):
+    full_name: str
+    title: str = Field(min_length=3, max_length=256)
+    body: str = Field(default="", max_length=65_536)
+    base: str | None = None
+    head: str | None = None
+    draft: bool = True
+    maintainer_can_modify: bool = True
+
+
+class GitHubPullRequestResponse(BaseModel):
+    full_name: str
+    number: int
+    title: str
+    html_url: str
+    base: str
+    head: str
+    draft: bool
+    created: bool
+
+
+
 
 
 
