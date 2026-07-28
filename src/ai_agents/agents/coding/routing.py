@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Literal
 
 from ai_agents.agents.coding.utils.constants import MAX_PATCH_ATTEMPTS
-from ai_agents.agents.coding.settings import settings as default_settings
+from ai_agents.agents.coding.coding_agent_settings import settings as default_settings
 from ai_agents.agents.coding.state import CodingAgentState
 from ai_agents.agents.coding.utils.validation import validation_failed_results
 

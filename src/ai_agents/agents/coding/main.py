@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 from ai_agents.agents.coding.graph import build_coding_agent_graph
 from ai_agents.agents.coding.memory import CodingAgentRuntimeContext, coding_agent_persistence
-from ai_agents.agents.coding.settings import settings as default_settings
+from ai_agents.agents.coding.coding_agent_settings import settings as default_settings
 from ai_agents.agents.coding.utils.text import bullets
 
 load_dotenv()

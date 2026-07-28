@@ -11,7 +11,7 @@ from uuid import uuid4
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.store.base import BaseStore
 
-from ai_agents.agents.coding.settings import CodingAgentSettings, settings as default_settings
+from ai_agents.agents.coding.coding_agent_settings import CodingAgentSettings, settings as default_settings
 from ai_agents.agents.coding.state import CodingAgentState
 from ai_agents.agents.coding.utils.text import bullets, truncate
 

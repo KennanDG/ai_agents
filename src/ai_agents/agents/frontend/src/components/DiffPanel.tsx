@@ -114,7 +114,7 @@ export const DiffPanel = ({
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-canvas">
       <header className="relative flex h-12 shrink-0 items-center gap-2 border-b border-line bg-panel-soft px-3">
-        <FileCode2 size={14} className="text-sky-300" />
+        <FileCode2 size={14} className="text-accent-light" />
         <span className="min-w-0 truncate font-mono text-[11px] text-ink-soft">{path}</span>
         <div className="ml-auto flex items-center gap-1.5">
           {hasChange ? (
