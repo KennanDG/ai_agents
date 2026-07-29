@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-import os
 
 from typing import Literal
-from dotenv import load_dotenv
 from textwrap import dedent
 
-from langchain_groq import ChatGroq
-from langchain_openai import ChatOpenAI
 
 from ai_agents.agents.coding.utils.constants import (
     MAX_FILES_TO_INSPECT,
@@ -43,6 +39,7 @@ from ai_agents.agents.coding.prompts import (
 
 
 from ai_agents.agents.coding.registry import SkillRegistry, route_skill
+from ai_agents.agents.coding.model_factory import coding_model, reasoning_model
 from ai_agents.agents.coding.routing import patch_attempts_remaining
 from ai_agents.agents.coding.runtime import allow_write as resolve_allow_write
 from ai_agents.agents.coding.runtime import repo_root as resolve_repo_root
@@ -80,7 +77,6 @@ from ai_agents.agents.coding.utils.validation import (
     validation_failed_results,
 )
 
-from ai_agents.config.settings import settings as config_settings
 
 from ai_agents.agents.coding.utils.helpers import(
     _dump_search_request,
@@ -99,31 +95,6 @@ from ai_agents.agents.coding.utils.helpers import(
     _derive_loop_search_requests,
     _context_file_read_limit,
     _same_file_content,
-)
-
-
-load_dotenv()
-
-
-
-OPEN_ROUTER_API_KEY=os.environ["OPEN_ROUTER_API_KEY"]
-OPEN_ROUTER_URL="https://openrouter.ai/api/v1"
-
-DEEPSEEK_API_KEY=os.environ["DEEPSEEK_API_KEY"]
-DEEPSEEK="https://api.deepseek.com"
-
-
-model = ChatGroq(
-    model=config_settings.coding_model,
-    api_key=config_settings.resolved_groq_api_key(),
-)
-
-
-reasoning_model = ChatOpenAI(
-    model=config_settings.reasoning_model, # e.g., "deepseek/deepseek-v4-pro"
-    api_key=DEEPSEEK_API_KEY, 
-    base_url=DEEPSEEK,
-    max_retries=2
 )
 
 
@@ -158,7 +129,7 @@ def route_node(state: CodingAgentState) -> CodingAgentState:
 
     try:
         decision: SkillRouteDecision = invoke_parsed_decision(
-            model=model,
+            model=coding_model(),
             schema=SkillRouteDecision,
             node_name="route",
             state=state,
@@ -247,7 +218,7 @@ def plan_node(state: CodingAgentState) -> CodingAgentState:
 
     try:
         decision: PlanDecision = invoke_parsed_decision(
-            model=reasoning_model,
+            model=reasoning_model(),
             schema=PlanDecision,
             node_name="plan",
             state=state,
@@ -316,7 +287,7 @@ def repo_navigator_node(
 
     try:
         decision: RepoNavigationDecision = invoke_parsed_decision(
-            model=reasoning_model,
+            model=reasoning_model(),
             schema=RepoNavigationDecision,
             node_name="repo_navigator",
             state=state,
@@ -545,7 +516,7 @@ def gather_context_node(
 
         try:
             decision: ContextDecision = invoke_parsed_decision(
-                model=model,
+                model=coding_model(),
                 schema=ContextDecision,
                 node_name="context_selector",
                 state=state,
@@ -680,7 +651,7 @@ def patch_node(
 
     try:
         decision: PatchDecision = invoke_parsed_decision(
-            model=reasoning_model,
+            model=reasoning_model(),
             schema=PatchDecision,
             node_name="patch",
             state={**state, "patch_attempts": patch_attempts},
@@ -994,7 +965,7 @@ def assess_progress_node(
 
     try:
         decision: ProgressDecision = invoke_parsed_decision(
-            model=reasoning_model,
+            model=reasoning_model(),
             schema=ProgressDecision,
             node_name="assess_progress",
             state=state,
@@ -1157,7 +1128,7 @@ def report_node(state: CodingAgentState) -> CodingAgentState:
 
     try:
         decision: ReportDecision = invoke_parsed_decision(
-            model=model,
+            model=coding_model(),
             schema=ReportDecision,
             node_name="report",
             state=state,

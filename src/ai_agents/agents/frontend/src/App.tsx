@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { ActivityBar } from "./components/ActivityBar";
+import { ActivityBar, type ActivityAction, type ActivityView } from "./components/ActivityBar";
+import { AgentSettingsModal } from "./components/AgentSettingsModal";
+import { SkillsPage } from "./components/SkillsPage";
+import { SourceControlPage } from "./components/SourceControlPage";
 import { DiffPanel } from "./components/DiffPanel";
 import { OutputPanel } from "./components/OutputPanel";
 import { Sidebar } from "./components/Sidebar";
@@ -293,6 +296,8 @@ const runReducer = (state: AgentRunState, event: CodingAgentServerEvent): AgentR
 
 
 const App = () => {
+  const [activeView, setActiveView] = useState<ActivityView>("explorer");
+  const [agentSettingsOpen, setAgentSettingsOpen] = useState(false);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [activeFile, setActiveFile] = useState<RepositoryFile | null>(null);
   const [allowWrite, setAllowWrite] = useState(true);
@@ -931,52 +936,28 @@ const App = () => {
   };
 
 
+  const selectActivity = (action: ActivityAction) => {
+    if (action === "agent") {
+      setAgentSettingsOpen(true);
+      return;
+    }
+
+    if (action === "explorer" || action === "source-control" || action === "skills") {
+      setActiveView(action);
+    }
+  };
+
+
   return (
     <main className="flex h-dvh min-h-0 min-w-0 overflow-hidden bg-canvas text-ink">
-      <ActivityBar />
-
-
-      <Sidebar
-        repoName={repoName}
-        repoRoot={repoRoot}
-        entries={repoEntries}
-        changes={run.fileChanges}
-        activePath={activePath}
-        isLoading={repoLoading}
-        agentRunning={run.status === "running"}
-        error={repoError}
-        onSelect={setActivePath}
-        onRefresh={refreshRepository}
-        githubRepositories={githubRepositories}
-        selectedGitHubRepository={selectedGitHubRepository}
-        githubLoading={githubLoading}
-        githubError={githubError}
-        onSelectGitHubRepository={selectGitHubRepository}
-        onUseLocalRepository={useLocalRepository}
-        onRefreshGitHubRepositories={refreshGitHubRepositories}
-        branches={branches}
-        currentBranch={currentBranch}
-        branchesLoading={branchesLoading}
-        branchesError={branchesError}
-        onSwitchBranch={switchBranch}
-        defaultBranch={selectedGitHubRepositorySummary?.default_branch ?? null}
-        repositoryPermissions={selectedGitHubRepositorySummary?.permissions ?? null}
-        githubRepositoryStatus={githubRepositoryStatus}
-        githubActionLoading={githubActionLoading}
-        githubActionMessage={githubActionMessage}
-        githubActionError={githubActionError}
-        githubPullRequestUrl={githubPullRequestUrl}
-        committableFileCount={committablePaths.length}
-        onTestGitHubConnection={testSelectedGitHubConnection}
-        onCreateGitHubBranch={createAgentBranch}
-        onPullGitHubBranch={pullCurrentGitHubBranch}
-        onCommitGitHubChanges={commitAppliedGitHubChanges}
-        onPushGitHubBranch={pushCurrentGitHubBranch}
-        onCreateGitHubPullRequest={openGitHubPullRequest}
+      <ActivityBar
+        activeView={activeView}
+        agentSettingsOpen={agentSettingsOpen}
+        onSelect={selectActivity}
       />
 
-      {/* {sidebarOpen ? (
-        <div className="hidden lg:flex">
+      {activeView === "explorer" ? (
+        <>
           <Sidebar
             repoName={repoName}
             repoRoot={repoRoot}
@@ -984,68 +965,100 @@ const App = () => {
             changes={run.fileChanges}
             activePath={activePath}
             isLoading={repoLoading}
+            agentRunning={run.status === "running"}
             error={repoError}
             onSelect={setActivePath}
             onRefresh={refreshRepository}
           />
-        </div>
-        
-      ) : null} */}
 
-      <div className="flex min-h-0 w-90 shrink-0 flex-col border-r border-line bg-panel-soft">
-        <div className="flex shrink-0 items-center gap-3 border-b border-line px-3 py-2">
-          <label className="flex cursor-pointer items-center gap-1.5 text-xs text-ink-soft">
-            <input
-              type="checkbox"
-              checked={allowWrite}
-              onChange={() => setAllowWrite(!allowWrite)}
-              className="accent-accent"
+          <div className="flex min-h-0 w-90 shrink-0 flex-col border-r border-line bg-panel-soft">
+            <div className="flex shrink-0 items-center gap-3 border-b border-line px-3 py-2">
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-ink-soft">
+                <input
+                  type="checkbox"
+                  checked={allowWrite}
+                  onChange={() => setAllowWrite(!allowWrite)}
+                  className="accent-accent"
+                />
+                Allow Write
+              </label>
+
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-ink-soft">
+                <input
+                  type="checkbox"
+                  checked={memoryEnabled}
+                  onChange={() => setMemoryEnabled(!memoryEnabled)}
+                  className="accent-accent"
+                />
+                Memory Enabled
+              </label>
+            </div>
+
+            <TaskPanel
+              messages={messages}
+              run={run}
+              onSubmit={submitPrompt}
+              onVoiceAudio={submitVoiceAudio}
+              voiceReplyUrl={voiceReplyUrl}
+              allowWrite={allowWrite}
+              activePath={activePath}
+              activeFile={activeFile}
+              onApproveAll={approveAllChanges}
+              onRejectChanges={rejectChanges}
             />
-            Allow Write
-          </label>
+          </div>
 
-          <label className="flex cursor-pointer items-center gap-1.5 text-xs text-ink-soft">
-            <input
-              type="checkbox"
-              checked={memoryEnabled}
-              onChange={() => setMemoryEnabled(!memoryEnabled)}
-              className="accent-accent"
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <DiffPanel
+              file={activeFile}
+              change={activeChange}
+              isLoading={fileLoading}
+              error={fileError}
             />
-            Memory Enabled
-          </label>
-        </div>
-
-        <TaskPanel
-          messages={messages}
-          run={run}
-          onSubmit={submitPrompt}
-          onVoiceAudio={submitVoiceAudio}
-          voiceReplyUrl={voiceReplyUrl}
-          allowWrite={allowWrite}
-          activePath={activePath}
-          activeFile={activeFile}
-          onApproveAll={approveAllChanges}
-          onRejectChanges={rejectChanges}
+            <OutputPanel run={run} />
+          </div>
+        </>
+      ) : activeView === "source-control" ? (
+        <SourceControlPage
+          repoName={repoName}
+          repoRoot={repoRoot}
+          githubRepositories={githubRepositories}
+          selectedGitHubRepository={selectedGitHubRepository}
+          githubLoading={githubLoading}
+          githubError={githubError}
+          onSelectGitHubRepository={selectGitHubRepository}
+          onUseLocalRepository={useLocalRepository}
+          onRefreshGitHubRepositories={refreshGitHubRepositories}
+          branches={branches}
+          currentBranch={currentBranch}
+          branchesLoading={branchesLoading}
+          branchesError={branchesError}
+          onSwitchBranch={switchBranch}
+          defaultBranch={selectedGitHubRepositorySummary?.default_branch ?? null}
+          repositoryPermissions={selectedGitHubRepositorySummary?.permissions ?? null}
+          githubRepositoryStatus={githubRepositoryStatus}
+          githubActionLoading={githubActionLoading}
+          githubActionMessage={githubActionMessage}
+          githubActionError={githubActionError}
+          githubPullRequestUrl={githubPullRequestUrl}
+          committableFileCount={committablePaths.length}
+          onTestGitHubConnection={testSelectedGitHubConnection}
+          onCreateGitHubBranch={createAgentBranch}
+          onPullGitHubBranch={pullCurrentGitHubBranch}
+          onCommitGitHubChanges={commitAppliedGitHubChanges}
+          onPushGitHubBranch={pushCurrentGitHubBranch}
+          onCreateGitHubPullRequest={openGitHubPullRequest}
         />
-      </div>
+      ) : (
+        <SkillsPage apiBaseUrl={apiBaseUrl} apiKey={apiKey} />
+      )}
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <DiffPanel
-          file={activeFile}
-          change={activeChange}
-          isLoading={fileLoading}
-          error={fileError}
-          // canApprove={run.approvalStatus === "pending"}
-          // onAcceptFile={approveFileChange}
-          // onRejectChanges={rejectChanges}
-        />
-
-        <OutputPanel run={run} />
-        
-        {/* {outputOpen || run.errors.length > 0 ? (
-          <OutputPanel run={run} />
-        ) : null} */}
-      </div>
+      <AgentSettingsModal
+        open={agentSettingsOpen}
+        apiBaseUrl={apiBaseUrl}
+        apiKey={apiKey}
+        onClose={() => setAgentSettingsOpen(false)}
+      />
     </main>
   );
 }
