@@ -46,6 +46,11 @@ from ai_agents.config.settings import settings as config_settings
 
 
 
+IGNORED_REPOSITORY_FILES = {
+    ".DS_Store",
+    "Thumbs.db",
+}
+
 IGNORED_REPOSITORY_DIRS = {
     ".git",
     ".hg",
@@ -219,6 +224,9 @@ def repository_tree(
                 return RepositoryTreeResponse(repo_root=str(root), entries=entries)
 
         for file_name in sorted(file_names):
+            if file_name in IGNORED_REPOSITORY_FILES:
+                continue
+
             file_path = current_path / file_name
 
             try:

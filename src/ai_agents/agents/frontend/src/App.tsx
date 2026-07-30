@@ -432,12 +432,12 @@ const App = () => {
   const selectGitHubRepository = useCallback(async (fullName: string) => {
     const repository = githubRepositories.find((item) => item.full_name === fullName);
     if (!repository) {
-      setGitHubError(`Repository is not available: ${fullName}`);
+      setGitHubActionError(`Repository is not available: ${fullName}`);
       return;
     }
 
-    setGitHubLoading(true);
-    setGitHubError(null);
+    setGitHubActionLoading("repository");
+    clearGitHubActionFeedback();
 
     try {
       const imported = await importGitHubRepository({
@@ -449,13 +449,21 @@ const App = () => {
       setSelectedGitHubRepository(imported.full_name);
       setCurrentBranch(imported.ref);
       newThreadForNextRunRef.current = true;
-      clearGitHubActionFeedback();
       await loadRepository(imported.repo_root);
       await loadGitHubRepositoryStatus(imported.full_name);
+
+      const feedback = [`Using ${imported.full_name} on ${imported.ref}.`];
+      if (imported.saved_previous_changes && imported.previous_ref) {
+        feedback.push(`Saved local changes from ${imported.previous_ref} for later restoration.`);
+      }
+      if (imported.restored_target_changes) {
+        feedback.push(`Restored the saved local changes for ${imported.ref}.`);
+      }
+      setGitHubActionMessage(feedback.join(" "));
     } catch (error) {
-      setGitHubError(error instanceof Error ? error.message : "Failed to import GitHub repository.");
+      setGitHubActionError(error instanceof Error ? error.message : "Failed to import GitHub repository.");
     } finally {
-      setGitHubLoading(false);
+      setGitHubActionLoading(null);
     }
   }, [githubRepositories, loadGitHubRepositoryStatus, loadRepository]);
 
@@ -469,9 +477,10 @@ const App = () => {
   }, [loadRepository]);
 
   const switchBranch = useCallback(async (branchName: string) => {
-    if (!selectedGitHubRepository) return;
-    setRepoLoading(true);
-    setRepoError(null);
+    if (!selectedGitHubRepository || branchName === currentBranch) return;
+
+    setGitHubActionLoading("switch");
+    clearGitHubActionFeedback();
     try {
       const imported = await importGitHubRepository({
         apiBaseUrl,
@@ -482,15 +491,23 @@ const App = () => {
       });
       setCurrentBranch(imported.ref);
       newThreadForNextRunRef.current = true;
-      clearGitHubActionFeedback();
       await loadRepository(imported.repo_root);
       await loadGitHubRepositoryStatus(imported.full_name);
+
+      const feedback = [`Switched to ${imported.ref}.`];
+      if (imported.saved_previous_changes && imported.previous_ref) {
+        feedback.push(`Saved local changes from ${imported.previous_ref}.`);
+      }
+      if (imported.restored_target_changes) {
+        feedback.push(`Restored the saved local changes for ${imported.ref}.`);
+      }
+      setGitHubActionMessage(feedback.join(" "));
     } catch (error) {
-      setRepoError(error instanceof Error ? error.message : "Failed to switch branch.");
+      setGitHubActionError(error instanceof Error ? error.message : "Failed to switch branch.");
     } finally {
-      setRepoLoading(false);
+      setGitHubActionLoading(null);
     }
-  }, [selectedGitHubRepository, loadGitHubRepositoryStatus, loadRepository]);
+  }, [currentBranch, selectedGitHubRepository, loadGitHubRepositoryStatus, loadRepository]);
 
   const testSelectedGitHubConnection = useCallback(async () => {
     setGitHubActionLoading("test");

@@ -41,6 +41,15 @@ from ai_agents.config.settings import settings
 
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _IMPORT_LOCK = threading.RLock()
+_AUTO_STASH_PREFIX = "ai-agents:auto-stash:"
+
+
+class _AutoStashRestoreError(RuntimeError):
+    def __init__(self, branch: str, stash_ref: str, detail: str) -> None:
+        super().__init__(detail)
+        self.branch = branch
+        self.stash_ref = stash_ref
+        self.detail = detail
 
 
 
@@ -189,6 +198,55 @@ class GitHubService:
         )
         return env
 
+    def _git_error_text(self, completed: subprocess.CompletedProcess[str]) -> str:
+        detail = (completed.stderr or completed.stdout or "Git command failed.").strip()
+        token = self.token or ""
+        if token:
+            detail = detail.replace(token, "***")
+        return detail[-2_000:]
+
+    def _raise_git_failure(
+        self,
+        completed: subprocess.CompletedProcess[str],
+        *,
+        operation: str,
+    ) -> None:
+        detail = self._git_error_text(completed)
+        lowered = detail.casefold()
+
+        auth_markers = (
+            "authentication failed",
+            "could not read username",
+            "write access to repository not granted",
+            "requested url returned error: 401",
+            "requested url returned error: 403",
+            "repository not found",
+        )
+        conflict_markers = (
+            "not possible to fast-forward",
+            "non-fast-forward",
+            "would be overwritten",
+            "conflict",
+        )
+
+        if any(marker in lowered for marker in auth_markers):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"GitHub Git transport rejected the {operation} operation. "
+                    "Grant the configured credential access to this repository and at least "
+                    "Contents: Read permission (Contents: Read and write for commits/pushes). "
+                    "For a classic PAT, use the repo scope; for organization repositories, "
+                    "also authorize SSO when required. Git reported: "
+                    f"{detail}"
+                ),
+            )
+
+        if any(marker in lowered for marker in conflict_markers):
+            raise HTTPException(status_code=409, detail=detail)
+
+        raise HTTPException(status_code=502, detail=detail)
+
     def _run_git(
         self,
         args: list[str],
@@ -216,12 +274,41 @@ class GitHubService:
             raise HTTPException(status_code=504, detail="Git operation timed out.") from exc
 
         if check and completed.returncode != 0:
-            stderr = (completed.stderr or completed.stdout or "Git command failed.").strip()
-            token = self.token or ""
-            if token:
-                stderr = stderr.replace(token, "***")
-            raise HTTPException(status_code=502, detail=stderr[-2_000:])
+            self._raise_git_failure(completed, operation=args[0] if args else "Git")
         return completed
+
+    def _assert_git_transport_access(self, full_name: str, clone_url: str) -> None:
+        completed = self._run_git(["ls-remote", "--heads", clone_url], check=False)
+        if completed.returncode == 0:
+            return
+
+        detail = self._git_error_text(completed)
+        lowered = detail.casefold()
+        auth_markers = (
+            "authentication failed",
+            "could not read username",
+            "write access to repository not granted",
+            "requested url returned error: 401",
+            "requested url returned error: 403",
+            "repository not found",
+        )
+        if any(marker in lowered for marker in auth_markers):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"The GitHub API can see {full_name}, but the configured credential cannot "
+                    "read its Git contents over HTTPS. Grant this credential repository access "
+                    "and Contents: Read permission. For pushes and pull requests, grant Contents "
+                    "and Pull requests: Read and write. For a classic PAT, use the repo scope; "
+                    "authorize organization SSO when required. Git reported: "
+                    f"{detail}"
+                ),
+            )
+
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not verify Git transport access to {full_name}: {detail}",
+        )
 
     def _repository_payload(self, full_name: str) -> dict[str, Any]:
         owner, name = self._validate_repository_name(full_name)
@@ -265,6 +352,17 @@ class GitHubService:
                 detail=f"Managed checkout origin does not match {full_name}.",
             )
 
+    def _configure_origin_fetch_all_branches(self, repo_root: Path) -> None:
+        self._run_git(
+            [
+                "config",
+                "--replace-all",
+                "remote.origin.fetch",
+                "+refs/heads/*:refs/remotes/origin/*",
+            ],
+            cwd=repo_root,
+        )
+
     def _current_branch(self, repo_root: Path) -> str:
         completed = self._run_git(
             ["symbolic-ref", "--quiet", "--short", "HEAD"],
@@ -290,6 +388,76 @@ class GitHubService:
             self._run_git(["ls-files", "--others", "--exclude-standard", "-z"], cwd=repo_root).stdout
         )
         return staged, unstaged, untracked
+
+    @staticmethod
+    def _auto_stash_message(branch: str) -> str:
+        return f"{_AUTO_STASH_PREFIX}{branch}"
+
+    def _find_branch_snapshot(self, repo_root: Path, branch: str) -> str | None:
+        message = self._auto_stash_message(branch)
+        result = self._run_git(
+            ["stash", "list", "--format=%gd%x09%gs"],
+            cwd=repo_root,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+
+        for line in result.stdout.splitlines():
+            stash_ref, separator, subject = line.partition("\t")
+            if separator and subject.endswith(message):
+                return stash_ref.strip() or None
+        return None
+
+    def _save_branch_snapshot(self, repo_root: Path, branch: str) -> bool:
+        staged, unstaged, untracked = self._changed_files(repo_root)
+        if not (staged or unstaged or untracked):
+            return False
+
+        result = self._run_git(
+            [
+                "stash",
+                "push",
+                "--include-untracked",
+                "--message",
+                self._auto_stash_message(branch),
+            ],
+            cwd=repo_root,
+            check=False,
+        )
+        if result.returncode != 0:
+            self._raise_git_failure(result, operation="stash")
+
+        if not self._find_branch_snapshot(repo_root, branch):
+            raise HTTPException(
+                status_code=502,
+                detail=f"Git did not create a recoverable branch snapshot for '{branch}'.",
+            )
+        return True
+
+    def _restore_branch_snapshot(self, repo_root: Path, branch: str) -> bool:
+        stash_ref = self._find_branch_snapshot(repo_root, branch)
+        if not stash_ref:
+            return False
+
+        result = self._run_git(
+            ["stash", "apply", "--index", stash_ref],
+            cwd=repo_root,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise _AutoStashRestoreError(
+                branch=branch,
+                stash_ref=stash_ref,
+                detail=self._git_error_text(result),
+            )
+
+        self._run_git(["stash", "drop", stash_ref], cwd=repo_root)
+        return True
+
+    def _discard_worktree_changes(self, repo_root: Path) -> None:
+        self._run_git(["reset", "--hard", "HEAD"], cwd=repo_root, check=False)
+        self._run_git(["clean", "-fd"], cwd=repo_root, check=False)
 
     def _default_branch(self, full_name: str) -> str:
         repository = self._repository_payload(full_name)
@@ -395,6 +563,7 @@ class GitHubService:
         permissions: dict[str, bool] = {}
         default_branch: str | None = None
         normalized_full_name: str | None = None
+        transport_error: str | None = None
 
         try:
             self.workspace_root.mkdir(parents=True, exist_ok=True)
@@ -417,11 +586,10 @@ class GitHubService:
             }
             clone_url = str(repository.get("clone_url") or f"https://github.com/{owner}/{name}.git")
             if git_available:
-                completed = self._run_git(
-                    ["ls-remote", clone_url],
-                    check=False,
-                )
+                completed = self._run_git(["ls-remote", "--heads", clone_url], check=False)
                 git_transport_connected = completed.returncode == 0
+                if not git_transport_connected:
+                    transport_error = self._git_error_text(completed)
         else:
             git_transport_connected = git_available
 
@@ -431,11 +599,17 @@ class GitHubService:
             and workspace_writable
             and git_transport_connected
         )
-        message = (
-            "GitHub API, Git transport, and managed workspace checks passed."
-            if connected
-            else "One or more GitHub connection checks failed."
-        )
+        if connected:
+            message = "GitHub API, Git transport, and managed workspace checks passed."
+        elif normalized_full_name and transport_error:
+            message = (
+                f"The GitHub API can see {normalized_full_name}, but Git transport cannot read "
+                "the repository. Grant the configured credential repository access and "
+                "Contents: Read permission; authorize organization SSO when required. "
+                f"Git reported: {transport_error}"
+            )
+        else:
+            message = "One or more GitHub connection checks failed."
 
         return GitHubConnectionTestResponse(
             connected=connected,
@@ -512,6 +686,9 @@ class GitHubService:
 
         self.workspace_root.mkdir(parents=True, exist_ok=True)
         target = self._checkout_path(full_name, require_exists=False)
+        saved_previous_changes = False
+        restored_target_changes = False
+        previous_ref: str | None = None
 
         with _IMPORT_LOCK:
             reused = target.exists()
@@ -523,40 +700,94 @@ class GitHubService:
                         detail=f"Managed workspace exists but is not a Git repository: {target}",
                     )
                 self._assert_origin_matches(target, full_name)
+                self._configure_origin_fetch_all_branches(target)
+                previous_ref = self._current_branch(target)
 
-                if refresh:
-                    staged, unstaged, untracked = self._changed_files(target)
-                    if staged or unstaged or untracked:
-                        raise HTTPException(
-                            status_code=409,
-                            detail="Cannot switch or refresh branches while the managed checkout has uncommitted changes.",
-                        )
-
-                    self._run_git(
-                        [
-                            "fetch",
-                            "--prune",
-                            "origin",
-                            f"refs/heads/{ref}:refs/remotes/origin/{ref}",
-                        ],
-                        cwd=target,
-                    )
-                    local_exists = self._run_git(
-                        ["show-ref", "--verify", "--quiet", f"refs/heads/{ref}"],
-                        cwd=target,
-                        check=False,
-                    ).returncode == 0
-                    if local_exists:
-                        self._run_git(["switch", ref], cwd=target)
-                        self._run_git(["merge", "--ff-only", f"origin/{ref}"], cwd=target)
-                    else:
+                if previous_ref == ref:
+                    if refresh:
+                        staged, unstaged, untracked = self._changed_files(target)
+                        if staged or unstaged or untracked:
+                            raise HTTPException(
+                                status_code=409,
+                                detail=(
+                                    f"Cannot refresh '{ref}' while it has local changes. "
+                                    "Switching to another branch is allowed; the changes will be "
+                                    "saved automatically for this branch."
+                                ),
+                            )
                         self._run_git(
-                            ["switch", "--create", ref, "--track", f"origin/{ref}"],
+                            [
+                                "fetch",
+                                "--prune",
+                                "origin",
+                                f"refs/heads/{ref}:refs/remotes/origin/{ref}",
+                            ],
                             cwd=target,
                         )
+                        self._run_git(["merge", "--ff-only", f"origin/{ref}"], cwd=target)
+                else:
+                    saved_previous_changes = self._save_branch_snapshot(target, previous_ref)
+
+                    try:
+                        self._run_git(
+                            [
+                                "fetch",
+                                "--prune",
+                                "origin",
+                                f"refs/heads/{ref}:refs/remotes/origin/{ref}",
+                            ],
+                            cwd=target,
+                        )
+                        local_exists = self._run_git(
+                            ["show-ref", "--verify", "--quiet", f"refs/heads/{ref}"],
+                            cwd=target,
+                            check=False,
+                        ).returncode == 0
+                        if local_exists:
+                            self._run_git(["switch", ref], cwd=target)
+                            self._run_git(["merge", "--ff-only", f"origin/{ref}"], cwd=target)
+                        else:
+                            self._run_git(
+                                ["switch", "--create", ref, "--track", f"origin/{ref}"],
+                                cwd=target,
+                            )
+                        restored_target_changes = self._restore_branch_snapshot(target, ref)
+                    except Exception as exc:
+                        self._discard_worktree_changes(target)
+                        current_after_failure = self._current_branch(target)
+                        if current_after_failure != previous_ref:
+                            self._run_git(["switch", previous_ref], cwd=target)
+
+                        rollback_error: str | None = None
+                        if saved_previous_changes:
+                            try:
+                                self._restore_branch_snapshot(target, previous_ref)
+                            except Exception as restore_exc:
+                                rollback_error = str(restore_exc)
+
+                        if isinstance(exc, _AutoStashRestoreError):
+                            detail = (
+                                f"Could not restore the saved changes for '{exc.branch}' after switching. "
+                                f"The checkout was returned to '{previous_ref}', and {exc.stash_ref} "
+                                f"was retained for manual recovery. Git reported: {exc.detail}"
+                            )
+                            if rollback_error:
+                                detail += f" Previous-branch recovery also needs attention: {rollback_error}"
+                            raise HTTPException(status_code=409, detail=detail) from exc
+
+                        if rollback_error:
+                            raise HTTPException(
+                                status_code=409,
+                                detail=(
+                                    f"Branch switch failed and the previous branch snapshot could not "
+                                    f"be restored automatically: {rollback_error}"
+                                ),
+                            ) from exc
+                        raise
             else:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 try:
+                    self._assert_git_transport_access(full_name, clone_url)
                     self._run_git(
                         [
                             "clone",
@@ -564,7 +795,7 @@ class GitHubService:
                             "1",
                             "--branch",
                             ref,
-                            "--single-branch",
+                            "--no-single-branch",
                             clone_url,
                             str(target),
                         ]
@@ -573,11 +804,15 @@ class GitHubService:
                     shutil.rmtree(target, ignore_errors=True)
                     raise
 
+        actual_ref = self._current_branch(target)
         return GitHubRepositoryImportResponse(
             full_name=f"{owner}/{name}",
-            ref=ref,
+            ref=actual_ref,
             repo_root=str(target),
             reused_existing_checkout=reused,
+            previous_ref=previous_ref,
+            saved_previous_changes=saved_previous_changes,
+            restored_target_changes=restored_target_changes,
         )
 
     def repository_status(self, full_name: str) -> GitHubRepositoryStatus:

@@ -39,6 +39,9 @@ export type GitHubRepositoryImportResponse = {
   ref: string;
   repo_root: string;
   reused_existing_checkout: boolean;
+  previous_ref?: string | null;
+  saved_previous_changes: boolean;
+  restored_target_changes: boolean;
 };
 
 // TODO: Replace renderer API-key access with a short-lived backend session token.

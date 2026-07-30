@@ -226,7 +226,12 @@ export const SourceControlPage = ({
               {selectedGitHubRepository ? (
                 <div className="mt-4 grid gap-3 sm:grid-cols-2">
                   <div>
-                    <FieldLabel>Current branch</FieldLabel>
+                    <div className="flex items-center justify-between">
+                      <FieldLabel>Current branch</FieldLabel>
+                      {githubActionLoading === "switch" ? (
+                        <LoaderCircle size={11} className="mb-1 animate-spin text-accent-light" />
+                      ) : null}
+                    </div>
                     <select
                       value={currentBranch ?? ""}
                       disabled={branchesLoading || busy}
@@ -240,6 +245,9 @@ export const SourceControlPage = ({
                       ))}
                     </select>
                     {branchesError ? <p className="mt-1 text-[10px] text-rose-300">{branchesError}</p> : null}
+                    <p className="mt-1 text-[10px] leading-4 text-faint">
+                      Local staged, unstaged, and untracked files are saved per branch and restored when you return.
+                    </p>
                   </div>
 
                   <div>
@@ -266,6 +274,13 @@ export const SourceControlPage = ({
                       </button>
                     </div>
                   </div>
+                </div>
+              ) : null}
+
+              {githubActionError ? (
+                <div className="mt-3 flex items-start gap-2 rounded-md border border-rose-500/20 bg-rose-500/8 p-2.5 text-[10px] leading-4 text-rose-300">
+                  <CircleAlert size={13} className="mt-0.5 shrink-0" />
+                  {githubActionError}
                 </div>
               ) : null}
 
@@ -487,12 +502,6 @@ export const SourceControlPage = ({
               </div>
             ) : null}
 
-            {githubActionError ? (
-              <div className="flex items-start gap-2 rounded-xl border border-rose-500/20 bg-rose-500/8 p-3 text-[11px] leading-5 text-rose-300">
-                <CircleAlert size={14} className="mt-0.5 shrink-0" />
-                {githubActionError}
-              </div>
-            ) : null}
           </div>
         </div>
       </div>

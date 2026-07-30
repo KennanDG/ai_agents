@@ -194,6 +194,9 @@ class GitHubRepositoryImportResponse(BaseModel):
     ref: str
     repo_root: str
     reused_existing_checkout: bool
+    previous_ref: str | None = None
+    saved_previous_changes: bool = False
+    restored_target_changes: bool = False
 
 
 class GitHubBranchSummary(BaseModel):
