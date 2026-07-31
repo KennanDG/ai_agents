@@ -7,6 +7,7 @@ import {
   FolderGit2,
   LoaderCircle,
   RotateCcw,
+  X,
 } from "lucide-react";
 import type { FileChange, RepositoryTreeEntry } from "../types";
 
@@ -21,6 +22,7 @@ interface SidebarProps {
   error?: string | null;
   onSelect: (path: string) => void;
   onRefresh: () => void;
+  onClearChanges?: () => void;
 }
 
 const statusColor = {
@@ -47,6 +49,7 @@ export const Sidebar = ({
   error,
   onSelect,
   onRefresh,
+  onClearChanges,
 }: SidebarProps) => {
   const fileEntries = entries.filter((entry) => entry.kind === "file");
   const [openDirs, setOpenDirs] = useState<Set<string>>(new Set());
@@ -143,21 +146,34 @@ export const Sidebar = ({
       <div className="min-h-0 flex-1 overflow-auto">
         {(changes.length > 0 || agentRunning) && (
           <div className="max-h-64 overflow-y-auto border-b border-line py-2">
-            <button
-              type="button"
-              onClick={() => setShowChanges((current) => !current)}
-              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted hover:bg-hover"
-            >
-              {showChanges ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-              <span>Agent changes · {changes.length}</span>
-              {agentRunning ? (
+            <div className="flex items-center gap-2 px-3 py-1.5 hover:bg-hover">
+              <button
+                type="button"
+                onClick={() => setShowChanges((current) => !current)}
+                className="flex flex-1 items-center gap-2 text-left text-[11px] font-semibold uppercase tracking-wider text-muted"
+              >
+                {showChanges ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                <span>Agent changes · {changes.length}</span>
+              </button>
+              {onClearChanges && changes.length > 0 && (
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label="Clear agent changes"
+                  title="Clear agent changes"
+                  onClick={onClearChanges}
+                >
+                  <X size={13} />
+                </button>
+              )}
+              {agentRunning && (
                 <LoaderCircle
                   size={12}
-                  className="ml-auto animate-spin text-accent-light"
+                  className="animate-spin text-accent-light"
                   aria-label="Agent is running"
                 />
-              ) : null}
-            </button>
+              )}
+            </div>
 
             {showChanges && agentRunning && changes.length === 0 ? (
               <div className="flex items-center gap-2 px-4 py-3 text-[10px] text-muted">

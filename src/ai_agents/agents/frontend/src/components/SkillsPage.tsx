@@ -49,7 +49,7 @@ Rules:
 `;
 
 const FieldLabel = ({ children }: { children: ReactNode }) => (
-  <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted">
+  <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">
     {children}
   </label>
 );
@@ -277,14 +277,14 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
                 }`}
               >
                 <div className="flex items-center justify-between gap-2">
-                  <span className="truncate font-mono text-[11px] text-ink-soft">{skill.name}</span>
+                  <span className={`truncate font-mono text-ink-soft ${selectedName === skill.name ? "text-xs" : "text-[11px]"}`}>{skill.name}</span>
                   {skill.custom ? (
                     <span className="rounded bg-accent/10 px-1.5 py-0.5 text-[8px] uppercase text-accent-light">
                       custom
                     </span>
                   ) : null}
                 </div>
-                <p className="mt-1 line-clamp-2 text-[9px] leading-4 text-faint">{skill.purpose}</p>
+                <p className={`mt-1 line-clamp-2 leading-4 text-faint ${selectedName === skill.name ? "text-xs" : "text-[9px]"}`}>{skill.purpose}</p>
               </button>
             ))}
           </div>
@@ -367,12 +367,12 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
             {tools.map((tool) => (
               <div key={`${tool.status}:${tool.module}:${tool.name}`} className="rounded-md border border-line bg-panel p-2.5">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="truncate font-mono text-[10px] text-ink-soft">{tool.name}</span>
+                  <span className="truncate font-mono text-xs text-ink-soft">{tool.name}</span>
                   <span className={`text-[8px] uppercase ${tool.status === "builtin" ? "text-emerald-300" : "text-amber-300"}`}>
                     {tool.status.replace("_", " ")}
                   </span>
                 </div>
-                <p className="mt-1 text-[9px] leading-4 text-faint">{tool.purpose || tool.module}</p>
+                <p className="mt-1 text-xs leading-5 text-faint">{tool.purpose || tool.module}</p>
               </div>
             ))}
           </div>

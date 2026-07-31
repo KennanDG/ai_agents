@@ -31,6 +31,8 @@ dependencies = [
     "websockets>=16.0",
     "groq>=0.37.1",
     "python-multipart>=0.0.32",
+    "anthropic>=0.120.2",
+    "langchain-anthropic>=1.5.3",
 ]
 
 
