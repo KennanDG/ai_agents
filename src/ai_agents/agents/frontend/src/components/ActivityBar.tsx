@@ -17,8 +17,8 @@ type ActivityBarProps = {
 };
 
 const primaryActions = [
-  { action: "agent" as const, label: "Agent configuration", icon: Bot },
   { action: "explorer" as const, label: "Explorer", icon: FileCode2 },
+  { action: "agent" as const, label: "Agent configuration", icon: Bot },
   { action: "search" as const, label: "Search", icon: Search, disabled: true },
   { action: "source-control" as const, label: "Source control", icon: GitBranch },
   { action: "skills" as const, label: "Skills", icon: Sparkles },

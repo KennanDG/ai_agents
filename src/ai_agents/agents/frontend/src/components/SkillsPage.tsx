@@ -251,7 +251,7 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
           <input
             ref={skillFileRef}
             type="file"
-            accept=".md,text/markdown,text/plain"
+            accept=".md"
             className="hidden"
             onChange={(event) => void readTextFile(event, "skill")}
           />
@@ -295,7 +295,7 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-sm font-semibold text-ink">Skill playbook</h2>
-                <p className="mt-1 text-[10px] leading-4 text-muted">
+                <p className="mt-1 text-[10px] leading-4 text-muted w-fit">
                   Coding skills are routed by the coding registry on every run. Voice skills are injected into the voice intake context by the companion backend patch.
                 </p>
               </div>
@@ -308,7 +308,7 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
                 ) : null}
                 <button
                   type="button"
-                  className="primary-button"
+                  className="primary-button size-auto w-28"
                   onClick={persistSkill}
                   disabled={saving || Boolean(selectedSkill && !selectedSkill.custom)}
                   title={selectedSkill && !selectedSkill.custom ? "Built-in skills are read-only" : "Save skill"}
@@ -386,7 +386,7 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
             <input
               ref={toolFileRef}
               type="file"
-              accept=".py,text/x-python,text/plain"
+              accept=".py"
               className="hidden"
               onChange={(event) => void readTextFile(event, "tool")}
             />
