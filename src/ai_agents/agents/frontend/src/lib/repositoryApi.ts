@@ -39,6 +39,9 @@ export type GitHubRepositoryImportResponse = {
   ref: string;
   repo_root: string;
   reused_existing_checkout: boolean;
+  previous_ref?: string | null;
+  saved_previous_changes: boolean;
+  restored_target_changes: boolean;
 };
 
 // TODO: Replace renderer API-key access with a short-lived backend session token.
@@ -180,4 +183,204 @@ export const fetchGitHubBranches = async ({
     { headers: authHeaders(apiKey) },
   );
   return readJson<GitHubBranchSummary[]>(response);
+};
+
+
+export type GitHubConnectionTestResponse = {
+  connected: boolean;
+  api_connected: boolean;
+  git_available: boolean;
+  git_transport_connected: boolean;
+  workspace_writable: boolean;
+  token_kind: "user" | "installation";
+  account?: string | null;
+  full_name?: string | null;
+  default_branch?: string | null;
+  permissions: GitHubRepositorySummary["permissions"];
+  message: string;
+};
+
+export type GitHubRepositoryStatus = {
+  full_name: string;
+  repo_root: string;
+  branch: string;
+  default_branch: string;
+  head_sha: string;
+  upstream?: string | null;
+  ahead: number;
+  behind: number;
+  dirty: boolean;
+  staged_files: string[];
+  unstaged_files: string[];
+  untracked_files: string[];
+};
+
+export type GitHubCreateBranchResponse = {
+  full_name: string;
+  branch: string;
+  sha: string;
+};
+
+export type GitHubPullResponse = {
+  full_name: string;
+  branch: string;
+  head_sha: string;
+  changed: boolean;
+};
+
+export type GitHubCommitResponse = {
+  full_name: string;
+  branch: string;
+  commit_sha: string;
+  committed_files: string[];
+};
+
+export type GitHubPushResponse = {
+  full_name: string;
+  branch: string;
+  commit_sha: string;
+  pushed: boolean;
+};
+
+export type GitHubPullRequestResponse = {
+  full_name: string;
+  number: number;
+  title: string;
+  html_url: string;
+  base: string;
+  head: string;
+  draft: boolean;
+  created: boolean;
+};
+
+const postJson = async <T>(
+  path: string,
+  config: ApiClientConfig,
+  body: Record<string, unknown>,
+): Promise<T> => {
+  const response = await fetch(apiUrl(path, config, {}), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...authHeaders(config.apiKey),
+    },
+    body: JSON.stringify(body),
+  });
+  return readJson<T>(response);
+};
+
+export const testGitHubConnection = async ({
+  apiBaseUrl,
+  apiKey,
+  fullName,
+}: ApiClientConfig & { fullName?: string | null }): Promise<GitHubConnectionTestResponse> => {
+  const response = await fetch(
+    apiUrl("/github/connection-test", { apiBaseUrl, apiKey }, { full_name: fullName ?? undefined }),
+    { headers: authHeaders(apiKey) },
+  );
+  return readJson<GitHubConnectionTestResponse>(response);
+};
+
+export const fetchGitHubRepositoryStatus = async ({
+  apiBaseUrl,
+  apiKey,
+  fullName,
+}: ApiClientConfig & { fullName: string }): Promise<GitHubRepositoryStatus> => {
+  const response = await fetch(
+    apiUrl("/github/repositories/status", { apiBaseUrl, apiKey }, { full_name: fullName }),
+    { headers: authHeaders(apiKey) },
+  );
+  return readJson<GitHubRepositoryStatus>(response);
+};
+
+export const createGitHubBranch = async ({
+  apiBaseUrl,
+  apiKey,
+  fullName,
+  branch,
+  base,
+}: ApiClientConfig & {
+  fullName: string;
+  branch: string;
+  base?: string | null;
+}): Promise<GitHubCreateBranchResponse> => {
+  return postJson<GitHubCreateBranchResponse>(
+    "/github/repositories/branches/create",
+    { apiBaseUrl, apiKey },
+    { full_name: fullName, branch, base: base ?? null },
+  );
+};
+
+export const pullGitHubBranch = async ({
+  apiBaseUrl,
+  apiKey,
+  fullName,
+}: ApiClientConfig & { fullName: string }): Promise<GitHubPullResponse> => {
+  return postJson<GitHubPullResponse>(
+    "/github/repositories/pull",
+    { apiBaseUrl, apiKey },
+    { full_name: fullName },
+  );
+};
+
+export const commitGitHubChanges = async ({
+  apiBaseUrl,
+  apiKey,
+  fullName,
+  message,
+  paths,
+}: ApiClientConfig & {
+  fullName: string;
+  message: string;
+  paths: string[];
+}): Promise<GitHubCommitResponse> => {
+  return postJson<GitHubCommitResponse>(
+    "/github/repositories/commit",
+    { apiBaseUrl, apiKey },
+    { full_name: fullName, message, paths },
+  );
+};
+
+export const pushGitHubBranch = async ({
+  apiBaseUrl,
+  apiKey,
+  fullName,
+}: ApiClientConfig & { fullName: string }): Promise<GitHubPushResponse> => {
+  return postJson<GitHubPushResponse>(
+    "/github/repositories/push",
+    { apiBaseUrl, apiKey },
+    { full_name: fullName },
+  );
+};
+
+export const createGitHubPullRequest = async ({
+  apiBaseUrl,
+  apiKey,
+  fullName,
+  title,
+  body,
+  base,
+  head,
+  draft = true,
+}: ApiClientConfig & {
+  fullName: string;
+  title: string;
+  body?: string;
+  base?: string | null;
+  head?: string | null;
+  draft?: boolean;
+}): Promise<GitHubPullRequestResponse> => {
+  return postJson<GitHubPullRequestResponse>(
+    "/github/repositories/pull-requests",
+    { apiBaseUrl, apiKey },
+    {
+      full_name: fullName,
+      title,
+      body: body ?? "",
+      base: base ?? null,
+      head: head ?? null,
+      draft,
+      maintainer_can_modify: true,
+    },
+  );
 };

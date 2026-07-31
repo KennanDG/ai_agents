@@ -20,6 +20,50 @@ class Settings(BaseSettings):
         return None
 
 
+    def resolved_deepseek_api_key(self) -> str | None:
+        if self.deepseek_api_key:
+            return self.deepseek_api_key
+
+        if self.deepseek_secret_arn:
+            self.deepseek_api_key = get_secret_json(self.deepseek_secret_arn).get("DEEPSEEK_API_KEY")
+            return self.deepseek_api_key
+
+        return None
+
+
+    def resolved_openrouter_api_key(self) -> str | None:
+        if self.openrouter_api_key:
+            return self.openrouter_api_key
+
+        if self.openrouter_secret_arn:
+            self.openrouter_api_key = get_secret_json(self.openrouter_secret_arn).get("OPENROUTER_API_KEY")
+            return self.openrouter_api_key
+
+        return None
+
+
+    def resolved_openai_api_key(self) -> str | None:
+        if self.openai_api_key:
+            return self.openai_api_key
+
+        if self.openai_secret_arn:
+            self.openai_api_key = get_secret_json(self.openai_secret_arn).get("OPENAI_API_KEY")
+            return self.openai_api_key
+
+        return None
+
+
+    def resolved_anthropic_api_key(self) -> str | None:
+        if self.anthropic_api_key:
+            return self.anthropic_api_key
+
+        if self.anthropic_secret_arn:
+            self.anthropic_api_key = get_secret_json(self.anthropic_secret_arn).get("ANTHROPIC_API_KEY")
+            return self.anthropic_api_key
+
+        return None
+
+
     def resolved_qdrant_api_key(self) -> str | None:
         if self.qdrant_api_key:
             return self.qdrant_api_key
@@ -101,6 +145,42 @@ class Settings(BaseSettings):
         alias="GITHUB_WORKSPACE_ROOT",
     )
     github_timeout_seconds: int = Field(default=120, alias="GITHUB_TIMEOUT_SECONDS")
+    github_commit_author_name: str = Field(
+        default="AI Agents",
+        alias="GITHUB_COMMIT_AUTHOR_NAME",
+    )
+    github_commit_author_email: str = Field(
+        default="ai-agents@users.noreply.github.com",
+        alias="GITHUB_COMMIT_AUTHOR_EMAIL",
+    )
+    github_allow_default_branch_push: bool = Field(
+        default=False,
+        alias="GITHUB_ALLOW_DEFAULT_BRANCH_PUSH",
+    )
+    github_max_commit_files: int = Field(
+        default=100,
+        ge=1,
+        le=500,
+        alias="GITHUB_MAX_COMMIT_FILES",
+    )
+    github_max_file_size_bytes: int = Field(
+        default=5_000_000,
+        ge=1,
+        alias="GITHUB_MAX_FILE_SIZE_BYTES",
+    )
+    github_blocked_path_patterns: List[str] = Field(
+        default_factory=lambda: [
+            ".env",
+            ".env.*",
+            "*.pem",
+            "*.key",
+            "id_rsa",
+            "id_ed25519",
+            "*credentials*",
+            "*secrets*",
+        ],
+        alias="GITHUB_BLOCKED_PATH_PATTERNS",
+    )
 
     # LangChain
     langchain_api_key: str | None = Field(default=None, alias="LANGCHAIN_API_KEY")
@@ -108,6 +188,32 @@ class Settings(BaseSettings):
     langchain_secret_arn: str | None = Field(default=None, alias="LANGCHAIN_SECRET_ARN")
     langchain_project : str = Field(default="ai-agents-dev", alias="LANGCHAIN_PROJECT")
 
+
+    # Chat model routing. Model IDs can be overridden by the runtime admin API.
+    coding_provider: Literal["groq", "deepseek", "openrouter", "openai", "anthropic"] = Field(
+        default="groq",
+        alias="CODING_PROVIDER",
+    )
+    reasoning_provider: Literal["groq", "deepseek", "openrouter", "openai", "anthropic"] = Field(
+        default="deepseek",
+        alias="REASONING_PROVIDER",
+    )
+    caption_provider: Literal["groq", "openrouter", "openai", "anthropic"] = Field(
+        default="groq",
+        alias="CAPTION_PROVIDER",
+    )
+    voice_chat_provider: Literal["groq", "deepseek", "openrouter", "openai", "anthropic"] = Field(
+        default="groq",
+        alias="VOICE_CHAT_PROVIDER",
+    )
+    voice_stt_provider: Literal["groq", "openai"] = Field(
+        default="groq",
+        alias="VOICE_STT_PROVIDER",
+    )
+    voice_tts_provider: Literal["groq", "openai"] = Field(
+        default="groq",
+        alias="VOICE_TTS_PROVIDER",
+    )
 
     # Groq
     chat_model: str = Field(default="llama-3.1-8b-instant", alias="CHAT_MODEL")                   
@@ -118,8 +224,32 @@ class Settings(BaseSettings):
     coding_model: str = Field(default="openai/gpt-oss-120b", alias="CODING_MODEL") 
     reasoning_model: str = Field(default="deepseek-v4-pro", alias="REASONING_MODEL") 
     groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
-    groq_api_url: str | None = Field(default="https://api.groq.com/openai/v1", alias="GROQ_URL")
+    groq_api_url: str = Field(default="https://api.groq.com/openai/v1", alias="GROQ_URL")
     groq_secret_arn: str | None = Field(default=None, alias="GROQ_SECRET_ARN")
+
+    # OpenAI-compatible chat providers used by the coding and reasoning slots.
+    deepseek_api_key: str | None = Field(default=None, alias="DEEPSEEK_API_KEY")
+    deepseek_api_url: str = Field(default="https://api.deepseek.com", alias="DEEPSEEK_URL")
+    deepseek_secret_arn: str | None = Field(default=None, alias="DEEPSEEK_SECRET_ARN")
+
+    openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
+    openrouter_api_url: str = Field(default="https://openrouter.ai/api/v1", alias="OPENROUTER_URL")
+    openrouter_secret_arn: str | None = Field(default=None, alias="OPENROUTER_SECRET_ARN")
+
+    openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
+    openai_api_url: str = Field(default="https://api.openai.com/v1", alias="OPENAI_URL")
+    openai_secret_arn: str | None = Field(default=None, alias="OPENAI_SECRET_ARN")
+
+    anthropic_api_key: str | None = Field(default=None, alias="ANTHROPIC_API_KEY")
+    anthropic_api_url: str = Field(default="https://api.anthropic.com", alias="ANTHROPIC_URL")
+    anthropic_secret_arn: str | None = Field(default=None, alias="ANTHROPIC_SECRET_ARN")
+
+    # Non-secret runtime model selections are persisted here. Provider secrets remain
+    # in environment/Secrets Manager or in the current backend process only.
+    runtime_agent_config_path: str = Field(
+        default=".ai-agents/runtime-agent-config.json",
+        alias="AI_AGENTS_RUNTIME_CONFIG_PATH",
+    )
     
 
     # Qdrant
@@ -134,7 +264,7 @@ class Settings(BaseSettings):
 
 
     # Jina AI
-    embedding_model: str = Field(default="jina-embeddings-v2-base-en", alias="EMBEDDING_MODEL")    # Doc embedding
+    embedding_model: str = Field(default="google_genai:gemini-embedding-2", alias="EMBEDDING_MODEL")    # Doc embedding
     rerank_model: str = Field(default="jina-reranker-v3", alias="RERANK_MODEL")
     jina_api_key: str | None = Field(default=None, alias="JINA_API_KEY")
     jina_api_url: str | None = Field(default="https://api.jina.ai/v1", alias="JINA_URL")

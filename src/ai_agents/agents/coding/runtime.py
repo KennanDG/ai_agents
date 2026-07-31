@@ -5,7 +5,7 @@ from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 
-from ai_agents.agents.coding.settings import CodingAgentSettings
+from ai_agents.agents.coding.coding_agent_settings import CodingAgentSettings
 from ai_agents.agents.coding.state import CodingAgentState
 
 

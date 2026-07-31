@@ -24,7 +24,7 @@ from ai_agents.agents.coding.memory import (
     CodingAgentRuntimeContext,
     coding_agent_persistence,
 )
-from ai_agents.agents.coding.settings import settings as default_coding_settings
+from ai_agents.agents.coding.coding_agent_settings import settings as default_coding_settings
 from ai_agents.api.auth import authorize_websocket, generate_websocket_token
 from ai_agents.api.schemas import (
     CodingAgentClientMessage,
@@ -42,8 +42,14 @@ from ai_agents.agents.coding.sandbox import (
     create_coding_sandbox,
 )
 from ai_agents.agents.coding.utils.validation import validation_failed_results
+from ai_agents.config.settings import settings as config_settings
 
 
+
+IGNORED_REPOSITORY_FILES = {
+    ".DS_Store",
+    "Thumbs.db",
+}
 
 IGNORED_REPOSITORY_DIRS = {
     ".git",
@@ -65,9 +71,6 @@ MAX_ATTACHED_FILES = 10
 MAX_ATTACHMENT_CHARS = 50_000
 MAX_TOTAL_ATTACHMENT_CHARS = 150_000
 MAX_ATTACHED_IMAGE_BYTES = 5_000_000
-
-GROQ_API_URL = os.getenv("GROQ_API_URL", "https://api.groq.com/openai/v1")
-VISION_MODEL = os.getenv("VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
 
 ALLOWED_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp"}
 
@@ -221,6 +224,9 @@ def repository_tree(
                 return RepositoryTreeResponse(repo_root=str(root), entries=entries)
 
         for file_name in sorted(file_names):
+            if file_name in IGNORED_REPOSITORY_FILES:
+                continue
+
             file_path = current_path / file_name
 
             try:
@@ -351,8 +357,8 @@ def _describe_image_attachment(
     mime_type: str,
     data_url: str,
 ) -> str:
-    api_key = os.getenv("GROQ_API_KEY")
-    vision_model_name = VISION_MODEL
+    api_key = config_settings.resolved_groq_api_key()
+    vision_model_name = config_settings.caption_model
 
     if not api_key or not vision_model_name:
         raise RuntimeError(
@@ -362,7 +368,7 @@ def _describe_image_attachment(
     vision_model = ChatOpenAI(
         model=vision_model_name,
         api_key=api_key,
-        base_url=GROQ_API_URL,
+        base_url=config_settings.groq_api_url,
         max_retries=2,
     )
 

@@ -9,13 +9,13 @@
   --color-line-strong: #333a48;
   --color-hover: #171c25;
   --color-selected: #18202d;
-  --color-accent: #6d5dfc;
-  --color-accent-light: #9b90ff;
+  --color-accent: #dc2626;
+  --color-accent-light: #f87171;
   --color-ink: #f1f3f8;
   --color-ink-soft: #c5cad5;
   --color-muted: #8b92a3;
   --color-faint: #5f6675;
-  --shadow-glow: 0 0 20px rgb(109 93 252 / 0.2);
+  --shadow-glow: 0 0 20px rgb(220 38 38 / 0.2);
 }
 
 :root {
@@ -38,6 +38,8 @@ body,
 }
 
 button,
+input,
+select,
 textarea {
   font: inherit;
 }
@@ -47,6 +49,8 @@ button {
 }
 
 button:focus-visible,
+input:focus-visible,
+select:focus-visible,
 textarea:focus-visible {
   outline: 2px solid var(--color-accent-light);
   outline-offset: 2px;
@@ -95,7 +99,7 @@ textarea:focus-visible {
   }
 
   .primary-button {
-    @apply inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-3 text-[10px] font-semibold text-white transition-colors hover:bg-accent-light;
+    @apply inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-3 text-[10px] font-semibold text-white shadow-glow transition-colors hover:bg-accent-light focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50;
   }
 
   .secondary-button {

@@ -8,6 +8,7 @@ from ai_agents.api.routers.rag import router as rag_router
 from ai_agents.api.routers.coding_agent import router as coding_agent_router
 from ai_agents.api.routers.voice_agent import router as voice_agent_router
 from ai_agents.api.routers.github import router as github_router
+from ai_agents.api.routers.admin import router as admin_router
 from ai_agents.api.auth import ApiKeyMiddleware
 
 
@@ -37,6 +38,7 @@ def create_app() -> FastAPI:
     app.include_router(coding_agent_router)
     app.include_router(voice_agent_router)
     app.include_router(github_router)
+    app.include_router(admin_router)
 
     return app
 
