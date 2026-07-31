@@ -4,39 +4,19 @@ import json
 import os
 import threading
 from pathlib import Path
-from typing import Any, Literal, Mapping
+from typing import Any, Mapping
 
 from ai_agents.config.settings import settings
-
-
-ChatProvider = Literal["groq", "deepseek", "openrouter", "openai"]
-
-_PUBLIC_FIELDS = (
-    "coding_provider",
-    "coding_model",
-    "reasoning_provider",
-    "reasoning_model",
-    "caption_model",
-    "voice_chat_model",
-    "voice_stt_model",
-    "voice_tts_model",
-    "voice_tts_voice",
-    "voice_tts_enabled",
+from ai_agents.config.constants import (
+    ChatProvider,
+    PROVIDER_CAPABILITIES,
+    PUBLIC_FIELDS,
+    PROVIDER_FIELDS,
+    PROVIDER_URL_FIELDS,
+    PROVIDER_SLOT_CAPABILITY
 )
 
-_PROVIDER_FIELDS: dict[ChatProvider, tuple[str, str, str | None]] = {
-    "groq": ("groq_api_key", "GROQ_API_KEY", "groq_secret_arn"),
-    "deepseek": ("deepseek_api_key", "DEEPSEEK_API_KEY", "deepseek_secret_arn"),
-    "openrouter": ("openrouter_api_key", "OPENROUTER_API_KEY", "openrouter_secret_arn"),
-    "openai": ("openai_api_key", "OPENAI_API_KEY", "openai_secret_arn"),
-}
 
-_PROVIDER_URL_FIELDS: dict[ChatProvider, str] = {
-    "groq": "groq_api_url",
-    "deepseek": "deepseek_api_url",
-    "openrouter": "openrouter_api_url",
-    "openai": "openai_api_url",
-}
 
 
 class RuntimeAgentConfigurationStore:
@@ -54,7 +34,7 @@ class RuntimeAgentConfigurationStore:
         self._load_and_apply()
 
     def _defaults(self) -> dict[str, Any]:
-        return {field: getattr(settings, field) for field in _PUBLIC_FIELDS}
+        return {field: getattr(settings, field) for field in PUBLIC_FIELDS}
 
     def _load_file(self) -> dict[str, Any]:
         if not self.path.exists():
@@ -70,14 +50,14 @@ class RuntimeAgentConfigurationStore:
     def _validate_public_values(self, values: Mapping[str, Any]) -> dict[str, Any]:
         result = self._defaults()
 
-        for field in _PUBLIC_FIELDS:
+        for field in PUBLIC_FIELDS:
             if field not in values:
                 continue
             value = values[field]
 
-            if field in {"coding_provider", "reasoning_provider"}:
-                if value not in _PROVIDER_FIELDS:
-                    raise ValueError(f"Unsupported chat provider for {field}: {value}")
+            if field in PROVIDER_SLOT_CAPABILITY:
+                if value not in PROVIDER_FIELDS:
+                    raise ValueError(f"Unsupported provider for {field}: {value}")
                 result[field] = value
                 continue
 
@@ -92,10 +72,18 @@ class RuntimeAgentConfigurationStore:
 
             result[field] = value.strip()
 
+        for provider_field, capability in PROVIDER_SLOT_CAPABILITY.items():
+            provider = result[provider_field]
+            if capability not in PROVIDER_CAPABILITIES[provider]:
+                raise ValueError(
+                    f"Provider '{provider}' does not support the {capability} capability "
+                    f"required by {provider_field}."
+                )
+
         return result
 
     def _apply_public_values(self, values: Mapping[str, Any]) -> None:
-        for field in _PUBLIC_FIELDS:
+        for field in PUBLIC_FIELDS:
             if field in values:
                 setattr(settings, field, values[field])
 
@@ -108,7 +96,7 @@ class RuntimeAgentConfigurationStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(self.path.suffix + ".tmp")
         temporary.write_text(
-            json.dumps({field: values[field] for field in _PUBLIC_FIELDS}, indent=2, sort_keys=True),
+            json.dumps({field: values[field] for field in PUBLIC_FIELDS}, indent=2, sort_keys=True),
             encoding="utf-8",
         )
         try:
@@ -122,12 +110,12 @@ class RuntimeAgentConfigurationStore:
             return
 
         for provider, raw_value in secrets.items():
-            if provider not in _PROVIDER_FIELDS:
+            if provider not in PROVIDER_FIELDS:
                 raise ValueError(f"Unsupported secret provider: {provider}")
             if not isinstance(raw_value, str) or not raw_value.strip():
                 continue
 
-            settings_field, environment_name, _ = _PROVIDER_FIELDS[provider]  # type: ignore[index]
+            settings_field, environment_name, _ = PROVIDER_FIELDS[provider]  # type: ignore[index]
             value = raw_value.strip()
             setattr(settings, settings_field, value)
             os.environ[environment_name] = value
@@ -146,7 +134,7 @@ class RuntimeAgentConfigurationStore:
             return self.public_snapshot()
 
     def secret_configured(self, provider: ChatProvider) -> bool:
-        settings_field, environment_name, secret_arn_field = _PROVIDER_FIELDS[provider]
+        settings_field, environment_name, secret_arn_field = PROVIDER_FIELDS[provider]
         return bool(
             getattr(settings, settings_field, None)
             or os.getenv(environment_name)
@@ -159,17 +147,20 @@ class RuntimeAgentConfigurationStore:
         if callable(resolver):
             return resolver()
 
-        settings_field, environment_name, _ = _PROVIDER_FIELDS[provider]
+        settings_field, environment_name, _ = PROVIDER_FIELDS[provider]
         return getattr(settings, settings_field, None) or os.getenv(environment_name)
 
     def provider_base_url(self, provider: ChatProvider) -> str:
-        return str(getattr(settings, _PROVIDER_URL_FIELDS[provider])).rstrip("/")
+        value = getattr(settings, PROVIDER_URL_FIELDS[provider])
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"No base URL is configured for provider '{provider}'.")
+        return value.rstrip("/")
 
     def public_snapshot(self) -> dict[str, Any]:
-        snapshot = {field: getattr(settings, field) for field in _PUBLIC_FIELDS}
+        snapshot = {field: getattr(settings, field) for field in PUBLIC_FIELDS}
         snapshot["secrets_configured"] = {
             provider: self.secret_configured(provider)
-            for provider in _PROVIDER_FIELDS
+            for provider in PROVIDER_FIELDS
         }
         snapshot["secrets_persistence"] = "session_only"
         return snapshot

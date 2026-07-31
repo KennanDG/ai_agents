@@ -21,16 +21,27 @@ async function readJson<T>(response: Response): Promise<T> {
   throw new Error(message);
 }
 
-export type ChatProvider = "groq" | "deepseek" | "openrouter" | "openai";
+export type ChatProvider =
+  | "groq"
+  | "deepseek"
+  | "openrouter"
+  | "openai"
+  | "anthropic";
+
+export type ModelCapability = "chat" | "vision" | "stt" | "tts";
 
 export type AgentConfiguration = {
   coding_provider: ChatProvider;
   coding_model: string;
   reasoning_provider: ChatProvider;
   reasoning_model: string;
+  caption_provider: ChatProvider;
   caption_model: string;
+  voice_chat_provider: ChatProvider;
   voice_chat_model: string;
+  voice_stt_provider: ChatProvider;
   voice_stt_model: string;
+  voice_tts_provider: ChatProvider;
   voice_tts_model: string;
   voice_tts_voice: string;
   voice_tts_enabled: boolean;
@@ -43,6 +54,15 @@ export type UpdateAgentConfiguration = Omit<
   "secrets_configured" | "secrets_persistence"
 > & {
   secrets?: Partial<Record<ChatProvider, string>>;
+};
+
+export type ModelCatalogResponse = {
+  provider: ChatProvider;
+  capability: ModelCapability;
+  models: string[];
+  source: "live" | "fallback";
+  secret_configured: boolean;
+  error?: string | null;
 };
 
 export const fetchAgentConfiguration = async ({
@@ -71,6 +91,22 @@ export const updateAgentConfiguration = async ({
     body: JSON.stringify(configuration),
   });
   return readJson<AgentConfiguration>(response);
+};
+
+export const fetchAvailableModels = async ({
+  apiBaseUrl,
+  apiKey,
+  provider,
+  capability,
+}: ApiClientConfig & {
+  provider: ChatProvider;
+  capability: ModelCapability;
+}): Promise<ModelCatalogResponse> => {
+  const url = new URL("/admin/models", apiBaseUrl);
+  url.searchParams.set("provider", provider);
+  url.searchParams.set("capability", capability);
+  const response = await fetch(url, { headers: authHeaders(apiKey) });
+  return readJson<ModelCatalogResponse>(response);
 };
 
 export type AgentKind = "coding" | "voice";

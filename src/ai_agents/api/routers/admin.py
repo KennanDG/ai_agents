@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ast
 import os
-import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -10,13 +9,22 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 
 from ai_agents.agents.coding.registry import SkillRegistry
+from ai_agents.config.model_catalog import ModelCapability, discover_models
 from ai_agents.config.runtime_configuration import runtime_agent_configuration
+from ai_agents.config.constants import ChatProvider, AgentKind
 
+from ai_agents.api.schemas import (
+    NAME_RE,
+    AgentConfigurationUpdate,
+    SkillWriteRequest,
+    ToolQuarantineRequest,
+    SkillSummary,
+    ToolSummary
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
-AgentKind = Literal["coding", "voice"]
-ChatProvider = Literal["groq", "deepseek", "openrouter", "openai"]
+
 
 _AI_AGENTS_ROOT = Path(__file__).resolve().parents[2]
 _SKILL_DIRS: dict[AgentKind, Path] = {
@@ -28,92 +36,10 @@ _TOOL_DIRS: dict[AgentKind, Path] = {
     "voice": _AI_AGENTS_ROOT / "agents" / "voice" / "tools",
 }
 
-_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{1,63}$")
+
 _CUSTOM_PREFIX = "custom_"
-_MAX_SKILL_CHARS = 50_000
-_MAX_TOOL_CHARS = 100_000
 
 
-class AgentConfigurationUpdate(BaseModel):
-    coding_provider: ChatProvider
-    coding_model: str = Field(min_length=1, max_length=255)
-    reasoning_provider: ChatProvider
-    reasoning_model: str = Field(min_length=1, max_length=255)
-    caption_model: str = Field(min_length=1, max_length=255)
-    voice_chat_model: str = Field(min_length=1, max_length=255)
-    voice_stt_model: str = Field(min_length=1, max_length=255)
-    voice_tts_model: str = Field(min_length=1, max_length=255)
-    voice_tts_voice: str = Field(min_length=1, max_length=100)
-    voice_tts_enabled: bool = True
-    secrets: dict[ChatProvider, str] = Field(default_factory=dict)
-
-    @field_validator(
-        "coding_model",
-        "reasoning_model",
-        "caption_model",
-        "voice_chat_model",
-        "voice_stt_model",
-        "voice_tts_model",
-        "voice_tts_voice",
-    )
-    @classmethod
-    def normalize_text(cls, value: str) -> str:
-        return value.strip()
-
-
-class SkillWriteRequest(BaseModel):
-    agent: AgentKind
-    name: str
-    content: str = Field(min_length=1, max_length=_MAX_SKILL_CHARS)
-    overwrite: bool = False
-
-    @field_validator("name")
-    @classmethod
-    def validate_name(cls, value: str) -> str:
-        normalized = value.strip().lower().replace("-", "_")
-        if not _NAME_RE.fullmatch(normalized):
-            raise ValueError(
-                "Skill names must start with a letter and contain only lowercase "
-                "letters, numbers, underscores, or hyphens."
-            )
-        return normalized
-
-
-class ToolQuarantineRequest(BaseModel):
-    agent: AgentKind
-    name: str
-    purpose: str = Field(min_length=1, max_length=500)
-    source: str = Field(min_length=1, max_length=_MAX_TOOL_CHARS)
-
-    @field_validator("name")
-    @classmethod
-    def validate_name(cls, value: str) -> str:
-        normalized = value.strip().lower().replace("-", "_")
-        if not _NAME_RE.fullmatch(normalized):
-            raise ValueError("Tool names must use lowercase snake_case.")
-        return normalized
-
-    @field_validator("purpose")
-    @classmethod
-    def normalize_purpose(cls, value: str) -> str:
-        return value.strip()
-
-
-class SkillSummary(BaseModel):
-    agent: AgentKind
-    name: str
-    purpose: str
-    allowed_tools: list[str] = Field(default_factory=list)
-    content: str
-    custom: bool
-
-
-class ToolSummary(BaseModel):
-    agent: AgentKind
-    name: str
-    module: str
-    purpose: str
-    status: Literal["builtin", "pending_review"]
 
 
 def _safe_agent_dir(mapping: dict[AgentKind, Path], agent: AgentKind) -> Path:
@@ -255,6 +181,15 @@ def get_agent_configuration() -> dict[str, Any]:
     return runtime_agent_configuration.public_snapshot()
 
 
+@router.get("/models")
+def list_available_models(
+    provider: ChatProvider = Query(...),
+    capability: ModelCapability = Query(...),
+) -> dict[str, Any]:
+    """Return live compatible models when credentials permit, otherwise fallbacks."""
+    return discover_models(provider, capability)
+
+
 @router.put("/agent-configuration")
 def update_agent_configuration(request: AgentConfigurationUpdate) -> dict[str, Any]:
     values = request.model_dump(exclude={"secrets"})
@@ -306,7 +241,7 @@ def save_skill(request: SkillWriteRequest) -> SkillSummary:
 @router.delete("/skills/{agent}/{name}")
 def delete_skill(agent: AgentKind, name: str) -> dict[str, bool]:
     normalized = name.strip().lower().replace("-", "_")
-    if not _NAME_RE.fullmatch(normalized) or not normalized.startswith(_CUSTOM_PREFIX):
+    if not NAME_RE.fullmatch(normalized) or not normalized.startswith(_CUSTOM_PREFIX):
         raise HTTPException(status_code=403, detail="Only custom_ skills may be deleted.")
 
     skill_dir = _safe_agent_dir(_SKILL_DIRS, agent)

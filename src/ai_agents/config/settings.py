@@ -53,6 +53,17 @@ class Settings(BaseSettings):
         return None
 
 
+    def resolved_anthropic_api_key(self) -> str | None:
+        if self.anthropic_api_key:
+            return self.anthropic_api_key
+
+        if self.anthropic_secret_arn:
+            self.anthropic_api_key = get_secret_json(self.anthropic_secret_arn).get("ANTHROPIC_API_KEY")
+            return self.anthropic_api_key
+
+        return None
+
+
     def resolved_qdrant_api_key(self) -> str | None:
         if self.qdrant_api_key:
             return self.qdrant_api_key
@@ -179,13 +190,29 @@ class Settings(BaseSettings):
 
 
     # Chat model routing. Model IDs can be overridden by the runtime admin API.
-    coding_provider: Literal["groq", "deepseek", "openrouter", "openai"] = Field(
+    coding_provider: Literal["groq", "deepseek", "openrouter", "openai", "anthropic"] = Field(
         default="groq",
         alias="CODING_PROVIDER",
     )
-    reasoning_provider: Literal["groq", "deepseek", "openrouter", "openai"] = Field(
+    reasoning_provider: Literal["groq", "deepseek", "openrouter", "openai", "anthropic"] = Field(
         default="deepseek",
         alias="REASONING_PROVIDER",
+    )
+    caption_provider: Literal["groq", "openrouter", "openai", "anthropic"] = Field(
+        default="groq",
+        alias="CAPTION_PROVIDER",
+    )
+    voice_chat_provider: Literal["groq", "deepseek", "openrouter", "openai", "anthropic"] = Field(
+        default="groq",
+        alias="VOICE_CHAT_PROVIDER",
+    )
+    voice_stt_provider: Literal["groq", "openai"] = Field(
+        default="groq",
+        alias="VOICE_STT_PROVIDER",
+    )
+    voice_tts_provider: Literal["groq", "openai"] = Field(
+        default="groq",
+        alias="VOICE_TTS_PROVIDER",
     )
 
     # Groq
@@ -197,7 +224,7 @@ class Settings(BaseSettings):
     coding_model: str = Field(default="openai/gpt-oss-120b", alias="CODING_MODEL") 
     reasoning_model: str = Field(default="deepseek-v4-pro", alias="REASONING_MODEL") 
     groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
-    groq_api_url: str | None = Field(default="https://api.groq.com/openai/v1", alias="GROQ_URL")
+    groq_api_url: str = Field(default="https://api.groq.com/openai/v1", alias="GROQ_URL")
     groq_secret_arn: str | None = Field(default=None, alias="GROQ_SECRET_ARN")
 
     # OpenAI-compatible chat providers used by the coding and reasoning slots.
@@ -212,6 +239,10 @@ class Settings(BaseSettings):
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     openai_api_url: str = Field(default="https://api.openai.com/v1", alias="OPENAI_URL")
     openai_secret_arn: str | None = Field(default=None, alias="OPENAI_SECRET_ARN")
+
+    anthropic_api_key: str | None = Field(default=None, alias="ANTHROPIC_API_KEY")
+    anthropic_api_url: str = Field(default="https://api.anthropic.com", alias="ANTHROPIC_URL")
+    anthropic_secret_arn: str | None = Field(default=None, alias="ANTHROPIC_SECRET_ARN")
 
     # Non-secret runtime model selections are persisted here. Provider secrets remain
     # in environment/Secrets Manager or in the current backend process only.

@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional, Union, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from pydantic import BaseModel, Field
+from ai_agents.config.constants import ChatProvider, AgentKind
 
+
+
+NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{1,63}$")
+_MAX_SKILL_CHARS = 50_000
+_MAX_TOOL_CHARS = 100_000
 
 
 class HealthResponse(BaseModel):
@@ -167,6 +173,11 @@ class RepositoryFileResponse(BaseModel):
     size: int
 
 
+
+
+
+
+############################## GITHUB ##############################
 class GitHubRepositoryImportRequest(BaseModel):
     full_name: str = Field(..., examples=["owner/repository"])
     ref: str | None = Field(default=None, description="Branch to check out.")
@@ -307,6 +318,104 @@ class GitHubPullRequestResponse(BaseModel):
 
 
 
+
+############################## ADMIN ##############################
+
+class AgentConfigurationUpdate(BaseModel):
+    coding_provider: ChatProvider
+    coding_model: str = Field(min_length=1, max_length=255)
+    reasoning_provider: ChatProvider
+    reasoning_model: str = Field(min_length=1, max_length=255)
+    caption_provider: ChatProvider
+    caption_model: str = Field(min_length=1, max_length=255)
+    voice_chat_provider: ChatProvider
+    voice_chat_model: str = Field(min_length=1, max_length=255)
+    voice_stt_provider: ChatProvider
+    voice_stt_model: str = Field(min_length=1, max_length=255)
+    voice_tts_provider: ChatProvider
+    voice_tts_model: str = Field(min_length=1, max_length=255)
+    voice_tts_voice: str = Field(min_length=1, max_length=100)
+    voice_tts_enabled: bool = True
+    secrets: dict[ChatProvider, str] = Field(default_factory=dict)
+
+    @field_validator(
+        "coding_model",
+        "reasoning_model",
+        "caption_model",
+        "voice_chat_model",
+        "voice_stt_model",
+        "voice_tts_model",
+        "voice_tts_voice",
+    )
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        return value.strip()
+
+
+class SkillWriteRequest(BaseModel):
+    agent: AgentKind
+    name: str
+    content: str = Field(min_length=1, max_length=_MAX_SKILL_CHARS)
+    overwrite: bool = False
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        normalized = value.strip().lower().replace("-", "_")
+        if not NAME_RE.fullmatch(normalized):
+            raise ValueError(
+                "Skill names must start with a letter and contain only lowercase "
+                "letters, numbers, underscores, or hyphens."
+            )
+        return normalized
+
+
+class ToolQuarantineRequest(BaseModel):
+    agent: AgentKind
+    name: str
+    purpose: str = Field(min_length=1, max_length=500)
+    source: str = Field(min_length=1, max_length=_MAX_TOOL_CHARS)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        normalized = value.strip().lower().replace("-", "_")
+        if not NAME_RE.fullmatch(normalized):
+            raise ValueError("Tool names must use lowercase snake_case.")
+        return normalized
+
+    @field_validator("purpose")
+    @classmethod
+    def normalize_purpose(cls, value: str) -> str:
+        return value.strip()
+
+
+class SkillSummary(BaseModel):
+    agent: AgentKind
+    name: str
+    purpose: str
+    allowed_tools: list[str] = Field(default_factory=list)
+    content: str
+    custom: bool
+
+
+class ToolSummary(BaseModel):
+    agent: AgentKind
+    name: str
+    module: str
+    purpose: str
+    status: Literal["builtin", "pending_review"]
+
+
+
+
+
+
+
+
+
+
+
 ############################## RAG ##############################
 class RagQueryRequest(BaseModel):
     question: str = Field(..., min_length=1)
@@ -349,3 +458,15 @@ class SourceRow(BaseModel):
 
 class SourcesListResponse(BaseModel):
     sources: List[SourceRow]
+
+
+
+
+
+
+
+
+
+
+
+

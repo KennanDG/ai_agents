@@ -9,9 +9,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from groq import Groq
-
 from ai_agents.agents.voice.graph import build_voice_agent_graph
+from ai_agents.agents.voice.provider_clients import build_audio_client
 from ai_agents.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -23,11 +22,13 @@ DEFAULT_TTS_MAX_CHUNKS = 20
 
 class VoiceAgentService:
     def __init__(self) -> None:
-        api_key = settings.resolved_groq_api_key()
-        if not api_key:
-            raise RuntimeError("GROQ_API_KEY is required for the voice agent.")
-
-        self.client = Groq(api_key=api_key)
+        # Keep STT and TTS independently routable. The runtime configuration store
+        # clears the cached voice service after settings change, so new turns rebuild
+        # these clients with the selected providers and current credentials.
+        self.stt_provider = getattr(settings, "voice_stt_provider", "groq")
+        self.tts_provider = getattr(settings, "voice_tts_provider", "groq")
+        self.stt_client = build_audio_client(self.stt_provider)
+        self.tts_client = build_audio_client(self.tts_provider)
         self.graph = build_voice_agent_graph()
 
     def transcribe_audio(
@@ -40,7 +41,7 @@ class VoiceAgentService:
         file_obj = io.BytesIO(audio_bytes)
         file_obj.name = filename or "voice-input.webm"
 
-        result = self.client.audio.transcriptions.create(
+        result = self.stt_client.audio.transcriptions.create(
             model=settings.voice_stt_model,
             file=(file_obj.name, file_obj, content_type or "audio/webm"),
             response_format="json",
@@ -58,14 +59,16 @@ class VoiceAgentService:
         )
 
         try:
-            configured_value = int(configured)
+            configured_value = max(1, int(configured))
         except (TypeError, ValueError):
             configured_value = GROQ_ORPHEUS_MAX_INPUT_CHARS
 
-        return min(
-            GROQ_ORPHEUS_MAX_INPUT_CHARS,
-            max(1, configured_value),
-        )
+        # The 200-character request ceiling belongs to Groq's Orpheus models.
+        # Other providers use the administrator-configured limit without this cap.
+        if getattr(settings, "voice_tts_provider", "groq") == "groq":
+            return min(GROQ_ORPHEUS_MAX_INPUT_CHARS, configured_value)
+
+        return configured_value
 
     @classmethod
     def _tts_inputs(cls, text: str) -> list[str]:
@@ -224,7 +227,7 @@ class VoiceAgentService:
                     len(tts_input),
                 )
 
-                response = self.client.audio.speech.create(
+                response = self.tts_client.audio.speech.create(
                     model=settings.voice_tts_model,
                     voice=settings.voice_tts_voice,
                     input=tts_input,
@@ -259,7 +262,7 @@ class VoiceAgentService:
 
             error_text = str(exc)
 
-            if "model_terms_required" in error_text:
+            if self.tts_provider == "groq" and "model_terms_required" in error_text:
                 return (
                     None,
                     None,
