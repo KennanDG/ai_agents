@@ -43,7 +43,7 @@ from ai_agents.agents.coding.model_factory import coding_model, reasoning_model
 from ai_agents.agents.coding.routing import patch_attempts_remaining
 from ai_agents.agents.coding.runtime import allow_write as resolve_allow_write
 from ai_agents.agents.coding.runtime import repo_root as resolve_repo_root
-from ai_agents.agents.coding.schemas import (
+from ai_agents.agents.coding.coding_agent_schemas import (
     ContextDecision,
     PatchDecision,
     PlanDecision,

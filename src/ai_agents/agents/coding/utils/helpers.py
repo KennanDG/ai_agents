@@ -5,7 +5,7 @@ from ai_agents.agents.coding.utils.search import (
     filter_context_paths,
     legacy_queries_to_search_requests,
 )
-from ai_agents.agents.coding.schemas import (
+from ai_agents.agents.coding.coding_agent_schemas import (
     PlanDecision,
     RepoNavigationDecision,
 )
@@ -16,7 +16,7 @@ from ai_agents.agents.coding.utils.text import bullets, dedupe
 
 
 from ai_agents.agents.coding.registry import SkillRegistry, route_skill
-from ai_agents.agents.coding.schemas import (
+from ai_agents.agents.coding.coding_agent_schemas import (
     PlanDecision,
     RepoNavigationDecision,
 )
