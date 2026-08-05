@@ -2,18 +2,13 @@ from __future__ import annotations
 
 from typing import TypeVar
 
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.output_parsers import PydanticOutputParser
-from langchain_groq import ChatGroq
-from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
-from ai_agents.agents.coding.utils.constants import LLM_DECISION_MAX_ATTEMPTS
 from ai_agents.agents.coding.runtime import node_config
 from ai_agents.agents.coding.state import CodingAgentState
 from ai_agents.agents.coding.utils.text import message_content_to_text
-
-
-
 
 
 DecisionT = TypeVar("DecisionT", bound=BaseModel)
@@ -21,31 +16,31 @@ DecisionT = TypeVar("DecisionT", bound=BaseModel)
 
 def invoke_parsed_decision(
     *,
-    model : ChatGroq | ChatOpenAI,
+    model: BaseChatModel,
     schema: type[DecisionT],
     node_name: str,
     state: CodingAgentState,
     system_prompt: str,
     user_prompt: str,
-    max_attempts: int = LLM_DECISION_MAX_ATTEMPTS,
+    max_attempts: int = 1,
 ) -> DecisionT:
-    """
-    Calls the model as a normal chat completion and parses the response locally.
+    """Invoke a model and parse one bounded structured decision.
 
-    This intentionally avoids llm.with_structured_output(...), because Groq may
-    convert that into provider tool-calling. The graph runner owns all repository
-    operations; the model only returns a structured decision object.
+    Graph-level retries and provider retries already exist. Keeping parser retries at one
+    by default prevents a malformed response from multiplying latency across every node.
+    The patch node may explicitly request two attempts because it is the only expensive
+    decision that directly produces repository edits.
     """
+
     parser = PydanticOutputParser(pydantic_object=schema)
     last_error: Exception | None = None
 
     for attempt in range(1, max_attempts + 1):
         retry_feedback = ""
-
         if last_error is not None:
             retry_feedback = (
-                "\n\nPrevious attempt failed to parse or execute cleanly. "
-                "Fix the response and return only the structured object.\n"
+                "\n\nPrevious response could not be parsed. Return only the corrected "
+                "structured object.\n"
                 f"Parser/runtime error:\n{last_error}"
             )
 
@@ -55,9 +50,8 @@ def invoke_parsed_decision(
                     "system",
                     f"{system_prompt}\n\n"
                     "Do not call tools or functions. The LangGraph runner executes "
-                    "all repository operations after your response is parsed.\n"
-                    "Return only the structured object requested below. Do not wrap "
-                    "the response in markdown fences.\n\n"
+                    "repository operations after parsing your response.\n"
+                    "Return only the requested structured object without markdown fences.\n\n"
                     f"{parser.get_format_instructions()}",
                 ),
                 ("human", f"{user_prompt}{retry_feedback}"),

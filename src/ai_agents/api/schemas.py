@@ -46,7 +46,7 @@ class CodingAgentRunRequest(BaseModel):
     setup_memory: bool = False
     max_iterations: int | None = Field(default=3, ge=1, le=8)
 
-    attached_files: list[CodingAgentAttachedFile] = Field(default_factory=list, max_length=10)
+    attached_files: list[CodingAgentAttachedFile] = Field(default_factory=list, max_length=20)
 
 
 class CodingAgentRunResult(BaseModel):
@@ -55,6 +55,9 @@ class CodingAgentRunResult(BaseModel):
 
     report: str | None = None
     selected_skill: str | None = None
+    task_mode: Literal["simple", "standard", "parallel"] | None = None
+    subtasks: List[Dict[str, Any]] = Field(default_factory=list)
+    context_worker_count: int = 0
     route_confidence: float | None = None
     route_reason: str | None = None
 

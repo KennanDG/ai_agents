@@ -7,6 +7,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_groq import ChatGroq
 from langchain_openai import ChatOpenAI
 
+from ai_agents.agents.coding.coding_agent_settings import settings as coding_settings
 from ai_agents.config.runtime_configuration import (
     ChatProvider,
     runtime_agent_configuration,
@@ -32,50 +33,48 @@ def build_chat_model(
     max_tokens: int | None = None,
 ) -> BaseChatModel:
     api_key = _require_api_key(provider)
-    optional: dict[str, Any] = {}
-    # Current Claude 5 models reject non-default sampling parameters. Omitting the
-    # parameter also remains compatible with earlier Anthropic models.
+    optional: dict[str, Any] = {
+        "max_retries": 1,
+        "timeout": coding_settings.model_timeout_seconds,
+    }
+
+    # Current Claude reasoning models can reject non-default sampling parameters.
     if temperature is not None and provider != "anthropic":
         optional["temperature"] = temperature
     if max_tokens is not None:
         optional["max_tokens"] = max_tokens
 
     if provider == "groq":
-        return ChatGroq(
-            model=model_name,
-            api_key=api_key,
-            max_retries=2,
-            **optional,
-        )
+        return ChatGroq(model=model_name, api_key=api_key, **optional)
 
     if provider == "anthropic":
-        return ChatAnthropic(
-            model=model_name,
-            api_key=api_key,
-            max_retries=2,
-            **optional,
-        )
+        return ChatAnthropic(model=model_name, api_key=api_key, **optional)
 
     return ChatOpenAI(
         model=model_name,
         api_key=api_key,
         base_url=runtime_agent_configuration.provider_base_url(provider),
-        max_retries=2,
         **optional,
     )
 
 
-def coding_model() -> BaseChatModel:
+def coding_model(*, max_tokens: int | None = None) -> BaseChatModel:
+    """Fast model used for bounded planning and optional routing/navigation."""
+
     return build_chat_model(
         provider=settings.coding_provider,
         model_name=settings.coding_model,
+        max_tokens=max_tokens,
     )
 
 
-def reasoning_model() -> BaseChatModel:
+def reasoning_model(*, max_tokens: int | None = None) -> BaseChatModel:
+    """Higher-quality model reserved for patch generation and repair loops."""
+
     return build_chat_model(
         provider=settings.reasoning_provider,
         model_name=settings.reasoning_model,
+        max_tokens=max_tokens,
     )
 
 

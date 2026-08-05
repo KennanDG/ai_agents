@@ -67,9 +67,9 @@ IGNORED_REPOSITORY_DIRS = {
 }
 
 MAX_REPOSITORY_FILE_BYTES = 1_000_000
-MAX_ATTACHED_FILES = 10
-MAX_ATTACHMENT_CHARS = 50_000
-MAX_TOTAL_ATTACHMENT_CHARS = 150_000
+MAX_ATTACHED_FILES = default_coding_settings.max_attached_files
+MAX_ATTACHMENT_CHARS = default_coding_settings.max_attachment_storage_chars
+MAX_TOTAL_ATTACHMENT_CHARS = default_coding_settings.max_total_attachment_storage_chars
 MAX_ATTACHED_IMAGE_BYTES = 5_000_000
 
 ALLOWED_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp"}
@@ -604,19 +604,25 @@ def _normalize_attached_files(
             errors.append(f"Skipped attachment {name}: empty content.")
             continue
 
-        remaining = MAX_TOTAL_ATTACHMENT_CHARS - total_chars
+        # Preserve complete text at intake. Prompt-time context selection happens
+        # later in parallel workers, so silently truncating here only guarantees that
+        # the patcher can never recover the omitted section.
+        if len(content) > MAX_ATTACHMENT_CHARS:
+            errors.append(
+                f"Skipped attachment {name}: {len(content)} characters exceeds the "
+                f"{MAX_ATTACHMENT_CHARS}-character intake ceiling. Attach it as a "
+                "repository file/path or raise CODING_AGENT_MAX_ATTACHMENT_STORAGE_CHARS."
+            )
+            continue
 
-        if remaining <= 0:
-            errors.append("Skipped remaining attachments: total attachment context limit reached.")
-            break
-
-        content, truncated_by_file_limit = _truncate_text(
-            content,
-            min(MAX_ATTACHMENT_CHARS, remaining),
-        )
+        if total_chars + len(content) > MAX_TOTAL_ATTACHMENT_CHARS:
+            errors.append(
+                f"Skipped attachment {name}: total attachment storage would exceed "
+                f"{MAX_TOTAL_ATTACHMENT_CHARS} characters."
+            )
+            continue
 
         total_chars += len(content)
-
         normalized.append(
             {
                 "name": name,
@@ -625,11 +631,7 @@ def _normalize_attached_files(
                 "mime_type": mime_type,
                 "size": attached.size,
                 "content": content,
-                "truncated": (
-                    bool(attached.truncated)
-                    or truncated_by_file_limit
-                    or total_chars >= MAX_TOTAL_ATTACHMENT_CHARS
-                ),
+                "truncated": bool(attached.truncated),
             }
         )
 
@@ -660,6 +662,13 @@ def _public_result(state: dict[str, Any], thread_id: str) -> CodingAgentRunResul
         status=str(state.get("status", "unknown")),
         report=state.get("report"),
         selected_skill=state.get("selected_skill"),
+        task_mode=state.get("task_mode"),
+        subtasks=list(state.get("subtasks") or []),
+        context_worker_count=sum(
+            1
+            for item in state.get("context_worker_results", [])
+            if int(item.get("generation", -1)) == int(state.get("context_generation", 0))
+        ),
         route_confidence=state.get("route_confidence"),
         route_reason=state.get("route_reason"),
         plan=list(state.get("plan") or []),
@@ -782,6 +791,11 @@ def _stream_coding_agent_worker(
             "continue_loop": False,
             "remaining_tasks": [],
             "loop_notes": [],
+            "task_mode": "standard",
+            "subtasks": [],
+            "context_generation": 0,
+            "context_worker_results": [],
+            "requested_context": [],
         }
 
         final_state = dict(initial_state)

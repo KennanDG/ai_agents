@@ -33,7 +33,31 @@ class SkillRouteDecision(BaseModel):
     )
 
 
+
+
+TaskMode = Literal["simple", "standard", "parallel"]
+
+
+class SubtaskDecision(BaseModel):
+    id: str = Field(description="Stable short identifier for the context worker.")
+    objective: str = Field(description="Focused implementation concern for this worker.")
+
+    search_requests: list[SearchRequest] = Field(
+        default_factory=list,
+        description="Narrow structured searches for this subtask.",
+    )
+
+    candidate_paths: list[str] = Field(
+        default_factory=list,
+        description="Known repo-relative files that this worker should inspect.",
+    )
+
+
 class PlanDecision(BaseModel):
+    task_mode: TaskMode = Field(
+        default="standard",
+        description="Use simple for one localized edit, parallel for independent concerns.",
+    )
     plan: list[str] = Field(
         default_factory=list,
         description="Short implementation plan steps.",
@@ -49,6 +73,13 @@ class PlanDecision(BaseModel):
     validation_commands: list[str] = Field(
         default_factory=list,
         description="Safe validation commands to run after edits.",
+    )
+    subtasks: list[SubtaskDecision] = Field(
+        default_factory=list,
+        description=(
+            "Independent read-only context work. Keep to at most four items and do not "
+            "split changes that must be reasoned about atomically."
+        ),
     )
 
 
@@ -131,9 +162,28 @@ class FileEdit(BaseModel):
     reason: str = Field(default="", description="Why this edit is needed.")
 
 
+
+
+class ContextRequest(BaseModel):
+    path: str = Field(description="Repo-relative file needing more exact context.")
+    start_line: int | None = Field(default=None, ge=1)
+    end_line: int | None = Field(default=None, ge=1)
+    terms: list[str] = Field(default_factory=list)
+    reason: str = Field(default="")
+
+
 class PatchDecision(BaseModel):
     summary: str = ""
     edits: list[FileEdit] = Field(default_factory=list)
+
+    context_requests: list[ContextRequest] = Field(
+        default_factory=list,
+        description=(
+            "Exact file ranges or search terms needed before patching. Use this instead "
+            "of guessing when a large file was represented by selected chunks."
+        ),
+    )
+    
     validation_commands: list[str] = Field(default_factory=list)
 
 

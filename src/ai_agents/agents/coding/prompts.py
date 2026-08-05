@@ -117,6 +117,13 @@ PLANNER_SYSTEM_PROMPT = dedent(
     - Use mode="any" only for broad fallback or path-only directory discovery.
     - Do not use unsupported operators like `in:path:`, `path:`, `file:`, or glob syntax inside terms.
 
+    # Execution strategy:
+    - Use task_mode="simple" for a single localized change with one clear target.
+    - Use task_mode="parallel" only when two or more concerns can be inspected independently.
+    - For parallel tasks, return at most four read-only subtasks. Each subtask must have
+      a narrow objective and focused search requests; workers gather context but do not edit.
+    - Keep coupled changes in the same subtask so the final patcher can reason atomically.
+
     # Output requirements:
     - Keep plan steps small.
     - Include repository inspection before editing.
@@ -197,6 +204,11 @@ PATCHER_SYSTEM_PROMPT = dedent(
     - Do not use fake imports or imaginary APIs.
     - Return no file changes if the context is insufficient.
 
+    # Context discipline:
+    - Large files may be represented by complete small files plus selected raw chunks.
+    - A chunk header states its line range; the code inside the fence is exact repository text.
+    - If the needed exact text is outside the supplied chunks, return a context request instead of guessing.
+
     # Patching strategy:
     - Prefer exact replace for small localized edits.
     - Use insert_after or insert_before when adding code near a stable anchor is safer than replacing a large block.
@@ -219,17 +231,18 @@ PATCHER_SYSTEM_PROMPT = dedent(
     - Use the smallest safe edit.
 
     For each edit, provide:
-        * operation: either "replace" or "create"
+        * operation: replace, create, insert_after, insert_before, append, or full_file_replace
         * path: repository-relative path
-        * old: exact existing text to replace; required for "replace"; must be empty for "create"
-        * new: replacement text for "replace", or full file contents for "create"
+        * old: exact existing text or anchor when the operation requires one
+        * new: replacement, inserted, appended, or complete new-file text
         * reason: short reason
 
     # Operation rules:
-    - Use "replace" when modifying an existing file.
-    - For "replace", the old text must be copied exactly from the provided context and must appear exactly once in the file.
-    - Use "create" only when the user request requires a new file.
-    - For "create", old must be an empty string and new must contain the complete file contents.
+    - Use "replace" for localized changes; old must be copied exactly from context and occur once.
+    - Use "insert_after" or "insert_before" with a stable exact anchor in old.
+    - Use "append" only where appending is structurally safe.
+    - Use "full_file_replace" only when the complete file is in context.
+    - Use "create" only for a genuinely new file; old must be empty and new must be complete.
     - Do not create files unless the target directory and pattern are supported by the inspected repository context.
     - Do not create secret files, environment files, lock files, generated files, cache files, or unrelated files.
     - Do not return markdown fences.
@@ -296,6 +309,10 @@ def build_planner_user_prompt(request: str) -> str:
         {request}
 
         # Rules:
+        - Set task_mode to simple, standard, or parallel.
+        - Use simple when the request is a localized edit and the relevant file is named or attached.
+        - Use parallel when independent backend/frontend, schema/runtime, or test concerns can be inspected concurrently.
+        - Return no more than four subtasks; subtasks are read-only context workers, not patch writers.
         - Prefer structured `search_requests` over legacy `search_queries`.
         - Put code identifiers, symbols, and concise domain words in `terms`.
         - Put known folders or path fragments in `path_includes`.
@@ -445,7 +462,9 @@ def build_patcher_user_prompt(
         - Prefer small, focused edits.
         - Do not modify secrets, `.env` files, lock files, generated caches, or unrelated files.
         - Include validation commands relevant to the changed files.
-        - If there is not enough context, return an empty `edits` array and explain what is missing in `summary`.
+        - If there is not enough context, return an empty `edits` array and populate
+          `context_requests` with the exact file path, line range, or search terms needed.
+        - Do not request an entire large file when a line range or symbol search is sufficient.
         - Prefer completing the requested task when the inspected context is sufficient.
         - Do not avoid edits solely because the change touches more than one file.
         - Multi-file edits are allowed when each file is directly relevant and present in context.
