@@ -56,7 +56,9 @@ def _models_url(provider: ChatProvider) -> str:
 
     base_url = runtime_agent_configuration.provider_base_url(provider).rstrip("/")
     if provider == "anthropic":
-        return f"{base_url}/v1/models"
+        return f"{base_url}/v1/models"    
+    if provider == "google":
+        return f"{base_url}/models"
     if provider == "openrouter":
         return f"{base_url}/models/user"
     return f"{base_url}/models"
@@ -256,6 +258,8 @@ def _matches_capability(
     lowered = model_id.lower()
 
     if provider == "anthropic":
+        return capability in {"chat", "vision"}    
+    if provider == "google":
         return capability in {"chat", "vision"}
 
     if provider == "deepseek":

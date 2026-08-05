@@ -45,8 +45,9 @@ const CHAT_PROVIDERS: ChatProvider[] = [
   "openrouter",
   "openai",
   "anthropic",
+  "google",
 ];
-const VISION_PROVIDERS: ChatProvider[] = ["groq", "openrouter", "openai", "anthropic"];
+const VISION_PROVIDERS: ChatProvider[] = ["groq", "openrouter", "openai", "anthropic", "google"];
 const AUDIO_PROVIDERS: ChatProvider[] = ["groq", "openai"];
 
 const PROVIDERS: ChatProvider[] = CHAT_PROVIDERS;
@@ -57,6 +58,7 @@ const providerLabel: Record<ChatProvider, string> = {
   openrouter: "OpenRouter",
   openai: "OpenAI",
   anthropic: "Anthropic",
+  google: "Google",
 };
 
 const emptySecrets = (): Record<ChatProvider, string> => ({
@@ -65,6 +67,7 @@ const emptySecrets = (): Record<ChatProvider, string> => ({
   openrouter: "",
   openai: "",
   anthropic: "",
+  google: "",
 });
 
 const catalogKey = (provider: ChatProvider, capability: ModelCapability) =>

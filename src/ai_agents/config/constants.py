@@ -3,7 +3,7 @@ from typing import Any, Literal, Mapping
 
 QDRANT_ID_NAMESPACE = uuid.UUID("4c0f9c2a-3db6-4f6d-9dd4-6c5c3c70a3f1")
 
-ChatProvider = Literal["groq", "deepseek", "openrouter", "openai", "anthropic"]
+ChatProvider = Literal["groq", "deepseek", "openrouter", "openai", "anthropic", "google"]
 ModelCapability = Literal["chat", "vision", "stt", "tts"]
 AgentKind = Literal["coding", "voice"]
 
@@ -13,6 +13,7 @@ PROVIDER_CAPABILITIES: dict[ChatProvider, frozenset[ModelCapability]] = {
     "openrouter": frozenset({"chat", "vision"}),
     "openai": frozenset({"chat", "vision", "stt", "tts"}),
     "anthropic": frozenset({"chat", "vision"}),
+    "google": frozenset({"chat", "vision"}),
 }
 
 PUBLIC_FIELDS = (
@@ -39,6 +40,7 @@ PROVIDER_FIELDS: dict[ChatProvider, tuple[str, str, str | None]] = {
     "openrouter": ("openrouter_api_key", "OPENROUTER_API_KEY", "openrouter_secret_arn"),
     "openai": ("openai_api_key", "OPENAI_API_KEY", "openai_secret_arn"),
     "anthropic": ("anthropic_api_key", "ANTHROPIC_API_KEY", "anthropic_secret_arn"),
+    "google": ("google_api_key", "GOOGLE_API_KEY", "google_secret_arn"),
 }
 
 
@@ -48,6 +50,7 @@ PROVIDER_URL_FIELDS: dict[ChatProvider, str] = {
     "openrouter": "openrouter_api_url",
     "openai": "openai_api_url",
     "anthropic": "anthropic_api_url",
+    "google": "google_api_url",
 }
 
 
@@ -114,6 +117,16 @@ FALLBACK_MODELS: dict[tuple[ChatProvider, ModelCapability], list[str]] = {
         "claude-sonnet-5",
         "claude-opus-5",
         "claude-haiku-4-5",
+    ],
+    ("google", "chat"): [
+        "gemini-2.0-flash",
+        "gemini-2.0-pro",
+        "gemini-1.5-pro",
+    ],
+    ("google", "vision"): [
+        "gemini-2.0-flash",
+        "gemini-2.0-pro",
+        "gemini-1.5-pro",
     ],
 }
 

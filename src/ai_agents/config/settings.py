@@ -121,6 +121,16 @@ class Settings(BaseSettings):
         return None
 
 
+    def resolved_google_api_key(self) -> str | None:
+        if self.google_api_key:
+            return self.google_api_key
+
+        if self.google_secret_arn:
+            self.google_api_key = get_secret_json(self.google_secret_arn).get("GOOGLE_API_KEY")
+            return self.google_api_key
+
+        return None
+
     model_config = SettingsConfigDict(
         env_file=os.getenv("ENV_FILE", ".env"),
         extra="ignore"
@@ -190,19 +200,19 @@ class Settings(BaseSettings):
 
 
     # Chat model routing. Model IDs can be overridden by the runtime admin API.
-    coding_provider: Literal["groq", "deepseek", "openrouter", "openai", "anthropic"] = Field(
+    coding_provider: Literal["groq", "deepseek", "openrouter", "openai", "anthropic", "google"] = Field(
         default="groq",
         alias="CODING_PROVIDER",
     )
-    reasoning_provider: Literal["groq", "deepseek", "openrouter", "openai", "anthropic"] = Field(
+    reasoning_provider: Literal["groq", "deepseek", "openrouter", "openai", "anthropic", "google"] = Field(
         default="deepseek",
         alias="REASONING_PROVIDER",
     )
-    caption_provider: Literal["groq", "openrouter", "openai", "anthropic"] = Field(
+    caption_provider: Literal["groq", "openrouter", "openai", "anthropic", "google"] = Field(
         default="groq",
         alias="CAPTION_PROVIDER",
     )
-    voice_chat_provider: Literal["groq", "deepseek", "openrouter", "openai", "anthropic"] = Field(
+    voice_chat_provider: Literal["groq", "deepseek", "openrouter", "openai", "anthropic", "google"] = Field(
         default="groq",
         alias="VOICE_CHAT_PROVIDER",
     )
@@ -242,7 +252,10 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str | None = Field(default=None, alias="ANTHROPIC_API_KEY")
     anthropic_api_url: str = Field(default="https://api.anthropic.com", alias="ANTHROPIC_URL")
-    anthropic_secret_arn: str | None = Field(default=None, alias="ANTHROPIC_SECRET_ARN")
+    anthropic_secret_arn: str | None = Field(default=None, alias="ANTHROPIC_SECRET_ARN")    
+    google_api_key: str | None = Field(default=None, alias="GOOGLE_API_KEY")
+    google_api_url: str = Field(default="https://generativelanguage.googleapis.com/v1beta", alias="GOOGLE_URL")
+    google_secret_arn: str | None = Field(default=None, alias="GOOGLE_SECRET_ARN")
 
     # Non-secret runtime model selections are persisted here. Provider secrets remain
     # in environment/Secrets Manager or in the current backend process only.

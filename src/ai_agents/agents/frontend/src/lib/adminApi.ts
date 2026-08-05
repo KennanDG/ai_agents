@@ -26,7 +26,8 @@ export type ChatProvider =
   | "deepseek"
   | "openrouter"
   | "openai"
-  | "anthropic";
+  | "anthropic"
+  | "google";
 
 export type ModelCapability = "chat" | "vision" | "stt" | "tts";
 

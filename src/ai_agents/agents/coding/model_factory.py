@@ -50,6 +50,20 @@ def build_chat_model(
     if provider == "anthropic":
         return ChatAnthropic(model=model_name, api_key=api_key, **optional)
 
+    if provider == "google":
+        try:
+            from langchain_google_genai import ChatGoogleGenerativeAI  # type: ignore[import-not-found]
+        except ImportError:
+            raise RuntimeError(
+                "Google provider requires langchain-google-genai. Install it with pip."
+            )
+        return ChatGoogleGenerativeAI(
+            model=model_name,
+            google_api_key=api_key,
+            client_options={"api_endpoint": runtime_agent_configuration.provider_base_url(provider)},
+            **optional,
+        )
+
     return ChatOpenAI(
         model=model_name,
         api_key=api_key,
