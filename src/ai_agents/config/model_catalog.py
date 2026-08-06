@@ -71,10 +71,13 @@ def _headers(provider: ChatProvider, api_key: str | None) -> dict[str, str]:
     }
     if provider == "anthropic":
         if api_key:
-            headers["x-api-key"] = api_key
+            headers["x-api-key"] = api_key.strip()
         headers["anthropic-version"] = "2023-06-01"
+    elif provider == "google":
+        if api_key:
+            headers["x-goog-api-key"] = api_key.strip()
     elif api_key:
-        headers["authorization"] = f"Bearer {api_key}"
+        headers["authorization"] = f"Bearer {api_key.strip()}"
     return headers
 
 
@@ -316,6 +319,8 @@ def _extract_models(
         model_id = _model_id(item)
         if model_id is None or not isinstance(item, dict):
             continue
+        if provider == "google" and model_id.startswith("models/"):
+            model_id = model_id.removeprefix("models/")
         if _matches_capability(provider, capability, item, model_id):
             models.append(model_id)
 

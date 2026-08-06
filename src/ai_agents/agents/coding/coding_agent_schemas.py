@@ -74,6 +74,10 @@ class PlanDecision(BaseModel):
         default_factory=list,
         description="Safe validation commands to run after edits.",
     )
+    web_search_query: str = Field(
+        default="",
+        description="Optional web search query when current context is insufficient and external information is needed.",
+    )
     subtasks: list[SubtaskDecision] = Field(
         default_factory=list,
         description=(

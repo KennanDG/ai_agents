@@ -124,6 +124,11 @@ PLANNER_SYSTEM_PROMPT = dedent(
       a narrow objective and focused search requests; workers gather context but do not edit.
     - Keep coupled changes in the same subtask so the final patcher can reason atomically.
 
+    # Web search:
+    - Provide an optional `web_search_query` when the current repository context is clearly insufficient
+      and up-to-date external information (docs, release notes, API references, etc.) is likely needed.
+    - Leave `web_search_query` empty when the request can be handled with repository files alone.
+
     # Output requirements:
     - Keep plan steps small.
     - Include repository inspection before editing.
@@ -319,6 +324,7 @@ def build_planner_user_prompt(request: str) -> str:
         - Put file types such as `.py`, `.md`, `.tsx`, or `.sql` in `file_extensions`.
         - Use `mode="all"` by default, `mode="symbol"` for Python symbol lookup, and `mode="any"` only for broad fallback or path-only discovery.
         - Do not use unsupported search syntax such as `in:path:`, `path:`, `file:`, or shell globs inside `terms`.
+        - Provide a `web_search_query` only when the repository alone cannot satisfy the request (e.g., a new library, external API docs, or a framework version not yet visible in the repo).
         - Validation commands must be safe.
         - Do not invent specific files unless the request clearly names them.
 

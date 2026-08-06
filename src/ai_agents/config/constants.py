@@ -119,14 +119,14 @@ FALLBACK_MODELS: dict[tuple[ChatProvider, ModelCapability], list[str]] = {
         "claude-haiku-4-5",
     ],
     ("google", "chat"): [
-        "gemini-2.0-flash",
-        "gemini-2.0-pro",
-        "gemini-1.5-pro",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-2.5-pro",
     ],
     ("google", "vision"): [
-        "gemini-2.0-flash",
-        "gemini-2.0-pro",
-        "gemini-1.5-pro",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-2.5-pro",
     ],
 }
 

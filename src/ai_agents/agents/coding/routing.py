@@ -8,8 +8,9 @@ from ai_agents.agents.coding.state import CodingAgentState
 
 
 def route_after_plan(state: CodingAgentState) -> str:
+    if (state.get("web_search_query") or "").strip():
+        return "web_search"
     selected_skill = state.get("selected_skill")
-
     if selected_skill == "web_search":
         return "web_search"
     if selected_skill == "gmail_access":

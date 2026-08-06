@@ -436,6 +436,7 @@ def plan_node(
             "search_queries": decision.search_queries,
             "subtasks": subtasks,
             "validation_commands": decision.validation_commands,
+            "web_search_query": decision.web_search_query or "",
             "status": "planned",
         }
     except Exception as exc:
@@ -449,6 +450,7 @@ def plan_node(
             "search_requests": deterministic_search,
             "search_queries": [],
             "subtasks": _fallback_subtasks(state, deterministic_search),
+            "web_search_query": "",
             "errors": [
                 *state.get("errors", []),
                 f"LLM planning failed; used deterministic fallback plan: {exc}",
@@ -1591,13 +1593,17 @@ Errors:
 
 def web_search_node(state: CodingAgentState) -> CodingAgentState:
     """
-    Perform web search if the selected skill is web_search.
-    Uses the user request as the search query.
+    Perform web search when a dynamic query is present or when the web_search
+    skill is selected. Clears the dynamic query after search.
     """
-    if state.get("selected_skill") != "web_search":
+    dynamic_query = (state.get("web_search_query") or "").strip()
+    if dynamic_query:
+        query = dynamic_query
+    elif state.get("selected_skill") == "web_search":
+        query = state.get("user_request", "")
+    else:
         return {"status": "web_search_skipped"}
 
-    query = state.get("user_request", "")
     if not query:
         return {
             "web_search_results": "",
@@ -1608,11 +1614,13 @@ def web_search_node(state: CodingAgentState) -> CodingAgentState:
         results = web_search(query, num_results=5)
         return {
             "web_search_results": results,
+            "web_search_query": "",
             "status": "web_search_completed",
         }
     except Exception as exc:
         return {
             "web_search_results": f"Web search failed: {exc}",
+            "web_search_query": "",
             "errors": [*state.get("errors", []), f"Web search failed: {exc}"],
             "status": "web_search_failed",
         }

@@ -60,7 +60,8 @@ class CodingAgentState(TypedDict, total=False):
 
     plan: list[str]
     search_requests: list[dict[str, Any]]
-    search_queries: list[str]  # legacy fallback while migrating to structured search
+    search_queries: list[str]  # legacy fallback while migrating to structured search    
+    web_search_query: str
     search_results: list[dict[str, Any]]
 
     long_term_memories: list[str]
