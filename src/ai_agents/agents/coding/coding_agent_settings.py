@@ -73,7 +73,18 @@ class CodingAgentSettings:
         "CODING_AGENT_LLM_NAVIGATION_ENABLED", False
     )
     model_timeout_seconds: int = _env_int("CODING_AGENT_MODEL_TIMEOUT_SECONDS", 120)
-    simple_patch_max_tokens: int = _env_int("CODING_AGENT_SIMPLE_PATCH_MAX_TOKENS", 6_000)
+    # Output-token budgets. These are run-time tunable, but the API enforces
+    # conservative lower/upper bounds so one user cannot create an unbounded run.
+    route_max_tokens: int = _env_int("CODING_AGENT_ROUTE_MAX_TOKENS", 900)
+    planner_max_tokens: int = _env_int("CODING_AGENT_PLANNER_MAX_TOKENS", 3_000)
+    repo_navigation_max_tokens: int = _env_int(
+        "CODING_AGENT_REPO_NAVIGATION_MAX_TOKENS", 1_600
+    )
+    simple_patch_max_tokens: int = _env_int(
+        "CODING_AGENT_SIMPLE_PATCH_MAX_TOKENS", 8_000
+    )
+    patch_max_tokens: int = _env_int("CODING_AGENT_PATCH_MAX_TOKENS", 20_000)
+    progress_max_tokens: int = _env_int("CODING_AGENT_PROGRESS_MAX_TOKENS", 1_200)
 
     dry_run: bool = True
     allow_write: bool = False

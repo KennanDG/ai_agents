@@ -77,8 +77,9 @@ class PlanDecision(BaseModel):
     subtasks: list[SubtaskDecision] = Field(
         default_factory=list,
         description=(
-            "Independent read-only context work. Keep to at most four items and do not "
-            "split changes that must be reasoned about atomically."
+            "Independent read-only context work. Keep the count modest; the runtime "
+            "applies the configured worker cap (maximum six). Do not split changes "
+            "that must be reasoned about atomically."
         ),
     )
 

@@ -715,7 +715,32 @@ def _stream_coding_agent_worker(
     thread_id = request.thread_id or _new_thread_id()
 
     try:
-        cfg = default_coding_settings
+        cfg = replace(
+            default_coding_settings,
+            max_context_workers=(
+                request.subagent_count or config_settings.coding_subagent_count
+            ),
+            route_max_tokens=(
+                request.route_max_tokens or config_settings.coding_route_max_tokens
+            ),
+            planner_max_tokens=(
+                request.planner_max_tokens or config_settings.coding_planner_max_tokens
+            ),
+            repo_navigation_max_tokens=(
+                request.repo_navigation_max_tokens
+                or config_settings.coding_repo_navigation_max_tokens
+            ),
+            simple_patch_max_tokens=(
+                request.simple_patch_max_tokens
+                or config_settings.coding_simple_patch_max_tokens
+            ),
+            patch_max_tokens=(
+                request.patch_max_tokens or config_settings.coding_patch_max_tokens
+            ),
+            progress_max_tokens=(
+                request.progress_max_tokens or config_settings.coding_progress_max_tokens
+            ),
+        )
 
         if request.memory_enabled is not None:
             cfg = replace(cfg, memory_enabled=request.memory_enabled) # set up memory
@@ -760,6 +785,15 @@ def _stream_coding_agent_worker(
                     "repo_root": repo_root,
                     "workspace_root": workspace_root,
                     "allow_write": request.allow_write,
+                    "subagent_count": cfg.max_context_workers,
+                    "token_budgets": {
+                        "route": cfg.route_max_tokens,
+                        "planner": cfg.planner_max_tokens,
+                        "repo_navigation": cfg.repo_navigation_max_tokens,
+                        "simple_patch": cfg.simple_patch_max_tokens,
+                        "patch": cfg.patch_max_tokens,
+                        "progress": cfg.progress_max_tokens,
+                    },
                 },
             ),
         )
@@ -781,6 +815,15 @@ def _stream_coding_agent_worker(
             "sandbox_root": str(sandbox.sandbox_root),
             "sandbox_enabled": True,
             "allow_write": request.allow_write,
+            "runtime_settings": {
+                "max_context_workers": cfg.max_context_workers,
+                "route_max_tokens": cfg.route_max_tokens,
+                "planner_max_tokens": cfg.planner_max_tokens,
+                "repo_navigation_max_tokens": cfg.repo_navigation_max_tokens,
+                "simple_patch_max_tokens": cfg.simple_patch_max_tokens,
+                "patch_max_tokens": cfg.patch_max_tokens,
+                "progress_max_tokens": cfg.progress_max_tokens,
+            },
             "attached_files": attached_files,
             "attached_files_used": [],
             "attachment_errors": attachment_errors,

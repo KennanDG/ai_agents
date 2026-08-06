@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import os
 from pathlib import Path
 from typing import Any, Literal
@@ -12,6 +13,7 @@ from ai_agents.agents.coding.registry import SkillRegistry
 from ai_agents.config.model_catalog import ModelCapability, discover_models
 from ai_agents.config.runtime_configuration import runtime_agent_configuration
 from ai_agents.config.constants import ChatProvider, AgentKind
+from ai_agents.config.settings import settings as config_settings
 
 from ai_agents.api.schemas import (
     NAME_RE,
@@ -39,7 +41,78 @@ _TOOL_DIRS: dict[AgentKind, Path] = {
 
 _CUSTOM_PREFIX = "custom_"
 
+_CODING_RUNTIME_FIELDS = (
+    "coding_subagent_count",
+    "coding_route_max_tokens",
+    "coding_planner_max_tokens",
+    "coding_repo_navigation_max_tokens",
+    "coding_simple_patch_max_tokens",
+    "coding_patch_max_tokens",
+    "coding_progress_max_tokens",
+)
+_CODING_RUNTIME_BOUNDS = {
+    "coding_subagent_count": (1, 6),
+    "coding_route_max_tokens": (256, 2_000),
+    "coding_planner_max_tokens": (512, 6_000),
+    "coding_repo_navigation_max_tokens": (512, 4_000),
+    "coding_simple_patch_max_tokens": (2_000, 16_000),
+    "coding_patch_max_tokens": (4_000, 32_000),
+    "coding_progress_max_tokens": (512, 4_000),
+}
+_MODEL_CONFIGURATION_FIELDS = (
+    "coding_provider",
+    "coding_model",
+    "reasoning_provider",
+    "reasoning_model",
+    "caption_provider",
+    "caption_model",
+    "voice_chat_provider",
+    "voice_chat_model",
+    "voice_stt_provider",
+    "voice_stt_model",
+    "voice_tts_provider",
+    "voice_tts_model",
+    "voice_tts_voice",
+    "voice_tts_enabled",
+)
 
+
+def _coding_runtime_path() -> Path:
+    base = Path(config_settings.runtime_agent_config_path).expanduser().resolve()
+    return base.with_name(f"{base.stem}-coding-runtime{base.suffix}")
+
+
+def _coding_runtime_snapshot() -> dict[str, int]:
+    return {field: int(getattr(config_settings, field)) for field in _CODING_RUNTIME_FIELDS}
+
+
+def _load_coding_runtime_configuration() -> None:
+    path = _coding_runtime_path()
+    if not path.exists():
+        return
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(raw, dict):
+        return
+    for field in _CODING_RUNTIME_FIELDS:
+        value = raw.get(field)
+        minimum, maximum = _CODING_RUNTIME_BOUNDS[field]
+        if isinstance(value, int) and minimum <= value <= maximum:
+            setattr(config_settings, field, value)
+
+
+def _save_coding_runtime_configuration(values: dict[str, int]) -> None:
+    for field, value in values.items():
+        setattr(config_settings, field, value)
+    _atomic_write(
+        _coding_runtime_path(),
+        json.dumps(_coding_runtime_snapshot(), indent=2, sort_keys=True) + "\n",
+    )
+
+
+_load_coding_runtime_configuration()
 
 
 def _safe_agent_dir(mapping: dict[AgentKind, Path], agent: AgentKind) -> Path:
@@ -178,7 +251,10 @@ def _validate_quarantined_tool_source(name: str, source: str) -> str:
 
 @router.get("/agent-configuration")
 def get_agent_configuration() -> dict[str, Any]:
-    return runtime_agent_configuration.public_snapshot()
+    return {
+        **runtime_agent_configuration.public_snapshot(),
+        **_coding_runtime_snapshot(),
+    }
 
 
 @router.get("/models")
@@ -193,8 +269,19 @@ def list_available_models(
 @router.put("/agent-configuration")
 def update_agent_configuration(request: AgentConfigurationUpdate) -> dict[str, Any]:
     values = request.model_dump(exclude={"secrets"})
+    model_values = {field: values[field] for field in _MODEL_CONFIGURATION_FIELDS}
+    coding_values = {
+        field: int(values[field])
+        if values.get(field) is not None
+        else int(getattr(config_settings, field))
+        for field in _CODING_RUNTIME_FIELDS
+    }
     try:
-        snapshot = runtime_agent_configuration.update(values, secrets=request.secrets)
+        snapshot = runtime_agent_configuration.update(
+            model_values,
+            secrets=request.secrets,
+        )
+        _save_coding_runtime_configuration(coding_values)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -207,7 +294,7 @@ def update_agent_configuration(request: AgentConfigurationUpdate) -> dict[str, A
     except (ImportError, AttributeError):
         pass
 
-    return snapshot
+    return {**snapshot, **_coding_runtime_snapshot()}
 
 
 @router.get("/skills", response_model=list[SkillSummary])

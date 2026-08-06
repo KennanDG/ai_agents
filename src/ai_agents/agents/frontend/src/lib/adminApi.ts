@@ -46,6 +46,13 @@ export type AgentConfiguration = {
   voice_tts_model: string;
   voice_tts_voice: string;
   voice_tts_enabled: boolean;
+  coding_subagent_count: number;
+  coding_route_max_tokens: number;
+  coding_planner_max_tokens: number;
+  coding_repo_navigation_max_tokens: number;
+  coding_simple_patch_max_tokens: number;
+  coding_patch_max_tokens: number;
+  coding_progress_max_tokens: number;
   secrets_configured: Record<ChatProvider, boolean>;
   secrets_persistence: "session_only";
 };

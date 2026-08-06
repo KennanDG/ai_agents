@@ -46,6 +46,15 @@ class CodingAgentRunRequest(BaseModel):
     setup_memory: bool = False
     max_iterations: int | None = Field(default=3, ge=1, le=8)
 
+    # Optional per-run overrides. Defaults come from the saved admin profile.
+    subagent_count: int | None = Field(default=None, ge=1, le=6)
+    route_max_tokens: int | None = Field(default=None, ge=256, le=2_000)
+    planner_max_tokens: int | None = Field(default=None, ge=512, le=6_000)
+    repo_navigation_max_tokens: int | None = Field(default=None, ge=512, le=4_000)
+    simple_patch_max_tokens: int | None = Field(default=None, ge=2_000, le=16_000)
+    patch_max_tokens: int | None = Field(default=None, ge=4_000, le=32_000)
+    progress_max_tokens: int | None = Field(default=None, ge=512, le=4_000)
+
     attached_files: list[CodingAgentAttachedFile] = Field(default_factory=list, max_length=20)
 
 
@@ -339,6 +348,15 @@ class AgentConfigurationUpdate(BaseModel):
     voice_tts_model: str = Field(min_length=1, max_length=255)
     voice_tts_voice: str = Field(min_length=1, max_length=100)
     voice_tts_enabled: bool = True
+
+    coding_subagent_count: int | None = Field(default=None, ge=1, le=6)
+    coding_route_max_tokens: int | None = Field(default=None, ge=256, le=2_000)
+    coding_planner_max_tokens: int | None = Field(default=None, ge=512, le=6_000)
+    coding_repo_navigation_max_tokens: int | None = Field(default=None, ge=512, le=4_000)
+    coding_simple_patch_max_tokens: int | None = Field(default=None, ge=2_000, le=16_000)
+    coding_patch_max_tokens: int | None = Field(default=None, ge=4_000, le=32_000)
+    coding_progress_max_tokens: int | None = Field(default=None, ge=512, le=4_000)
+
     secrets: dict[ChatProvider, str] = Field(default_factory=dict)
 
     @field_validator(

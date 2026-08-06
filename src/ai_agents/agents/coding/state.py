@@ -37,6 +37,7 @@ class CodingAgentState(TypedDict, total=False):
     repo_root: str          # target root for searching/patching
     workspace_root: str     # project root for validation
     allow_write: bool
+    runtime_settings: dict[str, int]
 
     attached_files: list[dict[str, Any]]
     attached_files_used: list[str]

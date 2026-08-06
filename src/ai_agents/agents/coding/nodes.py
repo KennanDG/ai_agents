@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 
+from dataclasses import replace
 from pathlib import Path
 import re
 from typing import Any, Iterable, Literal
@@ -36,7 +37,8 @@ from ai_agents.agents.coding.prompts import (
 
 
 from ai_agents.agents.coding.registry import SkillRegistry, route_skill
-from ai_agents.agents.coding.model_factory import coding_model, reasoning_model
+from ai_agents.agents.coding.model_factory import build_chat_model
+from ai_agents.config.settings import settings as app_settings
 from ai_agents.agents.coding.routing import patch_attempts_remaining
 from ai_agents.agents.coding.runtime import allow_write as resolve_allow_write
 from ai_agents.agents.coding.runtime import repo_root as resolve_repo_root
@@ -86,6 +88,44 @@ from ai_agents.agents.coding.utils.helpers import(
 )
 
 
+_RUNTIME_SETTING_FIELDS = {
+    "max_context_workers",
+    "route_max_tokens",
+    "planner_max_tokens",
+    "repo_navigation_max_tokens",
+    "simple_patch_max_tokens",
+    "patch_max_tokens",
+    "progress_max_tokens",
+}
+
+
+def _settings_for_state(
+    state: CodingAgentState | dict[str, Any],
+    cfg: CodingAgentSettings = default_settings,
+) -> CodingAgentSettings:
+    raw = state.get("runtime_settings") or {}
+    overrides = {
+        key: int(value)
+        for key, value in raw.items()
+        if key in _RUNTIME_SETTING_FIELDS and isinstance(value, int)
+    }
+    return replace(cfg, **overrides) if overrides else cfg
+
+
+def _coding_node_model(max_tokens: int):
+    return build_chat_model(
+        provider=app_settings.coding_provider,
+        model_name=app_settings.coding_model,
+        max_tokens=max_tokens,
+    )
+
+
+def _reasoning_node_model(max_tokens: int):
+    return build_chat_model(
+        provider=app_settings.reasoning_provider,
+        model_name=app_settings.reasoning_model,
+        max_tokens=max_tokens,
+    )
 
 
 #################################### Nodes ####################################
@@ -114,6 +154,7 @@ def _classify_task_mode(
     state: CodingAgentState,
     cfg: CodingAgentSettings = default_settings,
 ) -> Literal["simple", "standard", "parallel"]:
+    cfg = _settings_for_state(state, cfg)
     request = state.get("user_request", "")
     lowered = request.lower()
     attached = state.get("attached_files", [])
@@ -224,6 +265,7 @@ def route_node(
     state: CodingAgentState,
     cfg: CodingAgentSettings = default_settings,
 ) -> CodingAgentState:
+    cfg = _settings_for_state(state, cfg)
     registry = SkillRegistry().load()
     task_mode = _classify_task_mode(state, cfg)
 
@@ -263,7 +305,7 @@ def route_node(
 
     try:
         decision: SkillRouteDecision = invoke_parsed_decision(
-            model=coding_model(max_tokens=900),
+            model=_coding_node_model(cfg.route_max_tokens),
             schema=SkillRouteDecision,
             node_name="route",
             state=state,
@@ -327,6 +369,7 @@ def plan_node(
     state: CodingAgentState,
     cfg: CodingAgentSettings = default_settings,
 ) -> CodingAgentState:
+    cfg = _settings_for_state(state, cfg)
     request = state["user_request"]
     task_mode = state.get("task_mode") or _classify_task_mode(state, cfg)
     deterministic_search = _deterministic_search_requests(state)
@@ -369,7 +412,7 @@ def plan_node(
 
     try:
         decision: PlanDecision = invoke_parsed_decision(
-            model=coding_model(max_tokens=2_400),
+            model=_coding_node_model(cfg.planner_max_tokens),
             schema=PlanDecision,
             node_name="plan",
             state=state,
@@ -421,6 +464,7 @@ def repo_navigator_node(
 ) -> CodingAgentState:
     """Select files deterministically; use an LLM navigator only as an opt-in fallback."""
 
+    cfg = _settings_for_state(state, cfg)
     repo_root = resolve_repo_root(state, cfg)
     errors = list(state.get("errors", []))
     search_requests = _search_requests_from_state(state) or _deterministic_search_requests(state)
@@ -469,7 +513,7 @@ def repo_navigator_node(
                 : cfg.max_search_results
             ]
             decision: RepoNavigationDecision = invoke_parsed_decision(
-                model=coding_model(max_tokens=1_600),
+                model=_coding_node_model(cfg.repo_navigation_max_tokens),
                 schema=RepoNavigationDecision,
                 node_name="repo_navigator",
                 state=state,
@@ -537,7 +581,8 @@ def assign_context_workers(state: CodingAgentState) -> list[Send]:
             list(state.get("search_requests") or _deterministic_search_requests(state)),
         )
 
-    max_workers = max(1, default_settings.max_context_workers)
+    cfg = _settings_for_state(state)
+    max_workers = max(1, cfg.max_context_workers)
     subtasks = subtasks[:max_workers]
     nav_paths = [
         str(item.get("path", "")).strip()
@@ -562,6 +607,7 @@ def assign_context_workers(state: CodingAgentState) -> list[Send]:
                     "repo_root": state.get("repo_root", ""),
                     "user_request": state.get("user_request", ""),
                     "task_mode": state.get("task_mode", "standard"),
+                    "runtime_settings": state.get("runtime_settings", {}),
                     "active_subtask": subtask,
                     "search_requests": state.get("search_requests", []),
                     "requested_context": (
@@ -715,6 +761,7 @@ def context_worker_node(
 ) -> CodingAgentState:
     """Search and read one focused context slice. Workers never call an LLM or edit."""
 
+    cfg = _settings_for_state(state, cfg)
     repo_root = resolve_repo_root(state, cfg)
     subtask = dict(state.get("active_subtask") or {})
     worker_id = str(subtask.get("id") or "context")
@@ -827,6 +874,7 @@ def gather_context_node(
 ) -> CodingAgentState:
     """Fan-in worker results and build a bounded, high-signal patch prompt."""
 
+    cfg = _settings_for_state(state, cfg)
     generation = int(state.get("context_generation", 0))
     worker_results = [
         item
@@ -911,6 +959,7 @@ def patch_node(
 ) -> CodingAgentState:
     """Ask the LLM for exact edits and apply them when writes are enabled."""
     
+    cfg = _settings_for_state(state, cfg)
     repo_root = resolve_repo_root(state, cfg)
     errors = list(state.get("errors", []))
     allow_write = resolve_allow_write(state, cfg)
@@ -950,9 +999,9 @@ def patch_node(
     )
     patch_state = {**state, "patch_attempts": patch_attempts}
     patch_model = (
-        coding_model(max_tokens=cfg.simple_patch_max_tokens)
+        _coding_node_model(cfg.simple_patch_max_tokens)
         if use_fast_patch_model
-        else reasoning_model()
+        else _reasoning_node_model(cfg.patch_max_tokens)
     )
 
     try:
@@ -972,7 +1021,7 @@ def patch_node(
             )
             try:
                 decision = invoke_parsed_decision(
-                    model=reasoning_model(),
+                    model=_reasoning_node_model(cfg.patch_max_tokens),
                     schema=PatchDecision,
                     node_name="patch_escalated",
                     state=patch_state,
@@ -1238,6 +1287,7 @@ def validate_node(
     state: CodingAgentState,
     cfg: CodingAgentSettings = default_settings,
 ) -> CodingAgentState:
+    cfg = _settings_for_state(state, cfg)
     repo_root = resolve_repo_root(state, cfg)
     commands = state.get("validation_commands") or default_validation_commands(repo_root)
 
@@ -1301,6 +1351,7 @@ def assess_progress_node(
     cfg: CodingAgentSettings = default_settings,
 ) -> CodingAgentState:
     
+    cfg = _settings_for_state(state, cfg)
     iteration = int(state.get("iteration", 0)) + 1
     max_iterations = int(state.get("max_iterations", 3))
     errors = list(state.get("errors", []))
@@ -1332,7 +1383,7 @@ def assess_progress_node(
 
     try:
         decision: ProgressDecision = invoke_parsed_decision(
-            model=reasoning_model(),
+            model=_reasoning_node_model(cfg.progress_max_tokens),
             schema=ProgressDecision,
             node_name="assess_progress",
             state=state,
@@ -1510,6 +1561,9 @@ Request:
 
 Execution mode:
 {state.get('task_mode', 'standard')} ({worker_count} context worker(s))
+
+Execution profile:
+{state.get('runtime_settings', {})}
 
 Selected skill:
 {state.get('selected_skill', 'none')}

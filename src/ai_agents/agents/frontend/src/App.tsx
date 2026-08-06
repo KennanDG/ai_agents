@@ -34,6 +34,10 @@ import {
   type GitHubRepositorySummary,
 } from "./lib/repositoryApi";
 import { submitVoiceTurn } from "./lib/voiceAgentApi";
+import {
+  fetchAgentConfiguration,
+  type AgentConfiguration,
+} from "./lib/adminApi";
 import type { AgentMessage, AgentRunState, ChangeStatus, FileChange, RepositoryFile, RepositoryTreeEntry } from "./types";
 
 const apiBaseUrl = import.meta.env.VITE_AI_AGENTS_API_BASE ?? "http://0.0.0.0:8000";
@@ -298,6 +302,7 @@ const runReducer = (state: AgentRunState, event: CodingAgentServerEvent): AgentR
 const App = () => {
   const [activeView, setActiveView] = useState<ActivityView>("explorer");
   const [agentSettingsOpen, setAgentSettingsOpen] = useState(false);
+  const [agentConfiguration, setAgentConfiguration] = useState<AgentConfiguration | null>(null);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [activeFile, setActiveFile] = useState<RepositoryFile | null>(null);
   const [allowWrite, setAllowWrite] = useState(true);
@@ -652,6 +657,9 @@ const App = () => {
   useEffect(() => {
     void loadRepository(configuredRepoRoot);
     void refreshGitHubRepositories();
+    void fetchAgentConfiguration({ apiBaseUrl, apiKey })
+      .then(setAgentConfiguration)
+      .catch((error) => console.error("Failed to load agent execution settings.", error));
   }, [loadRepository, refreshGitHubRepositories]);
 
   useEffect(() => {
@@ -917,7 +925,7 @@ const App = () => {
 
 
   const runCodingAgent = (request: string, attachedFiles: CodingAgentAttachedFile[] = []) => {
-    socketRef.current?.run({
+    const runRequest = {
       thread_id: newThreadForNextRunRef.current ? null : run.threadId,
       request,
       repo_root: repoRoot,
@@ -926,7 +934,15 @@ const App = () => {
       memory_enabled: memoryEnabled,
       attached_files: attachedFiles,
       max_iterations: 3,
-    });
+      subagent_count: agentConfiguration?.coding_subagent_count,
+      route_max_tokens: agentConfiguration?.coding_route_max_tokens,
+      planner_max_tokens: agentConfiguration?.coding_planner_max_tokens,
+      repo_navigation_max_tokens: agentConfiguration?.coding_repo_navigation_max_tokens,
+      simple_patch_max_tokens: agentConfiguration?.coding_simple_patch_max_tokens,
+      patch_max_tokens: agentConfiguration?.coding_patch_max_tokens,
+      progress_max_tokens: agentConfiguration?.coding_progress_max_tokens,
+    };
+    socketRef.current?.run(runRequest);
   };
 
   
@@ -1075,6 +1091,7 @@ const App = () => {
         apiBaseUrl={apiBaseUrl}
         apiKey={apiKey}
         onClose={() => setAgentSettingsOpen(false)}
+        onSaved={setAgentConfiguration}
       />
     </main>
   );

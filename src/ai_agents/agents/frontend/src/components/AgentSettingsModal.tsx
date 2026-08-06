@@ -15,6 +15,7 @@ type AgentSettingsModalProps = {
   apiBaseUrl: string;
   apiKey: string;
   onClose: () => void;
+  onSaved?: (configuration: AgentConfiguration) => void;
 };
 
 type ProviderField =
@@ -77,6 +78,39 @@ const modelOptions = (catalog: ModelCatalogResponse | undefined, currentModel: s
   const models = catalog?.models ?? [];
   return currentModel && !models.includes(currentModel) ? [currentModel, ...models] : models;
 };
+
+const NumberInput = ({
+  label,
+  value,
+  min,
+  max,
+  help,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  help: string;
+  onChange: (value: number) => void;
+}) => (
+  <label className="text-[10px] font-medium text-muted">
+    {label}
+    <input
+      type="number"
+      value={value}
+      min={min}
+      max={max}
+      step={1}
+      onChange={(event) => {
+        const parsed = Number.parseInt(event.target.value, 10);
+        if (Number.isFinite(parsed)) onChange(Math.min(max, Math.max(min, parsed)));
+      }}
+      className="mt-1 w-full rounded-md border border-line bg-surface px-3 py-2 text-xs text-ink outline-none focus:border-accent/70"
+    />
+    <span className="mt-1 block text-[9px] font-normal leading-4 text-faint">{help}</span>
+  </label>
+);
 
 const ProviderSelect = ({
   label,
@@ -169,6 +203,7 @@ export const AgentSettingsModal = ({
   apiBaseUrl,
   apiKey,
   onClose,
+  onSaved,
 }: AgentSettingsModalProps) => {
   const [configuration, setConfiguration] = useState<AgentConfiguration | null>(null);
   const [secrets, setSecrets] = useState(emptySecrets);
@@ -337,10 +372,18 @@ export const AgentSettingsModal = ({
           voice_tts_model: configuration.voice_tts_model,
           voice_tts_voice: configuration.voice_tts_voice,
           voice_tts_enabled: configuration.voice_tts_enabled,
+          coding_subagent_count: configuration.coding_subagent_count,
+          coding_route_max_tokens: configuration.coding_route_max_tokens,
+          coding_planner_max_tokens: configuration.coding_planner_max_tokens,
+          coding_repo_navigation_max_tokens: configuration.coding_repo_navigation_max_tokens,
+          coding_simple_patch_max_tokens: configuration.coding_simple_patch_max_tokens,
+          coding_patch_max_tokens: configuration.coding_patch_max_tokens,
+          coding_progress_max_tokens: configuration.coding_progress_max_tokens,
           secrets: changedSecrets,
         },
       });
       setConfiguration(updated);
+      onSaved?.(updated);
       setSecrets(emptySecrets());
       setCatalogs({});
       await loadConfigurationCatalogs(updated);
@@ -453,6 +496,72 @@ export const AgentSettingsModal = ({
                     onRefresh={() =>
                       void refreshCatalog(configuration.caption_provider, "vision", "caption_model")
                     }
+                  />
+                </div>
+              </section>
+
+              <section className="rounded-lg border border-line bg-panel p-4">
+                <h3 className="text-xs font-semibold text-ink">Coding agent execution</h3>
+                <p className="mt-1 text-[10px] leading-4 text-muted">
+                  These limits apply to new runs. Context workers are read-only; increasing them
+                  helps only when the task can be split into independent repository concerns.
+                </p>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  <NumberInput
+                    label="Max sub-agent count"
+                    value={configuration.coding_subagent_count}
+                    min={1}
+                    max={6}
+                    help="Recommended: 3. Use 4 for broad frontend/backend tasks."
+                    onChange={(value) => update("coding_subagent_count", value)}
+                  />
+                  <NumberInput
+                    label="Router max tokens"
+                    value={configuration.coding_route_max_tokens}
+                    min={256}
+                    max={2000}
+                    help="Recommended: 700. Used only when LLM routing is enabled."
+                    onChange={(value) => update("coding_route_max_tokens", value)}
+                  />
+                  <NumberInput
+                    label="Planner max tokens"
+                    value={configuration.coding_planner_max_tokens}
+                    min={512}
+                    max={6000}
+                    help="Recommended: 2,400 for structured plans and subtasks."
+                    onChange={(value) => update("coding_planner_max_tokens", value)}
+                  />
+                  <NumberInput
+                    label="Repo navigator max tokens"
+                    value={configuration.coding_repo_navigation_max_tokens}
+                    min={512}
+                    max={4000}
+                    help="Recommended: 1,600. Used only when LLM navigation is enabled."
+                    onChange={(value) => update("coding_repo_navigation_max_tokens", value)}
+                  />
+                  <NumberInput
+                    label="Simple patch max tokens"
+                    value={configuration.coding_simple_patch_max_tokens}
+                    min={2000}
+                    max={16000}
+                    help="Recommended: 6,000 for one-file fast-path edits."
+                    onChange={(value) => update("coding_simple_patch_max_tokens", value)}
+                  />
+                  <NumberInput
+                    label="Standard patch max tokens"
+                    value={configuration.coding_patch_max_tokens}
+                    min={4000}
+                    max={32000}
+                    help="Recommended: 12,000 for multi-file structured patches."
+                    onChange={(value) => update("coding_patch_max_tokens", value)}
+                  />
+                  <NumberInput
+                    label="Progress max tokens"
+                    value={configuration.coding_progress_max_tokens}
+                    min={512}
+                    max={4000}
+                    help="Recommended: 1,200; this node should make a compact decision."
+                    onChange={(value) => update("coding_progress_max_tokens", value)}
                   />
                 </div>
               </section>
