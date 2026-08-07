@@ -93,24 +93,57 @@ const NumberInput = ({
   max: number;
   help: string;
   onChange: (value: number) => void;
-}) => (
-  <label className="text-[10px] font-medium text-muted">
-    {label}
-    <input
-      type="number"
-      value={value}
-      min={min}
-      max={max}
-      step={1}
-      onChange={(event) => {
-        const parsed = Number.parseInt(event.target.value, 10);
-        if (Number.isFinite(parsed)) onChange(Math.min(max, Math.max(min, parsed)));
-      }}
-      className="mt-1 w-full rounded-md border border-line bg-surface px-3 py-2 text-xs text-ink outline-none focus:border-accent/70"
-    />
-    <span className="mt-1 block text-[9px] font-normal leading-4 text-faint">{help}</span>
-  </label>
-);
+}) => {
+  const [displayValue, setDisplayValue] = useState(String(value));
+
+  useEffect(() => {
+    setDisplayValue(String(value));
+  }, [value]);
+
+  const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setDisplayValue(event.target.value);
+  };
+
+  const handleBlur = () => {
+    const parsed = Number.parseInt(displayValue, 10);
+    if (Number.isFinite(parsed)) {
+      onChange(parsed);
+    } else {
+      setDisplayValue(String(value));
+    }
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      event.currentTarget.blur();
+    }
+  };
+
+  const parsed = Number.parseInt(displayValue, 10);
+  const isOutOfRange = Number.isFinite(parsed) && (parsed < min || parsed > max);
+
+  return (
+    <label className="text-[10px] font-medium text-muted">
+      {label}
+      <input
+        type="text"
+        inputMode="numeric"
+        autoComplete="off"
+        value={displayValue}
+        onChange={handleChange}
+        onBlur={handleBlur}
+        onKeyDown={handleKeyDown}
+        className="mt-1 w-full rounded-md border border-line bg-surface px-3 py-2 text-xs text-ink outline-none focus:border-accent/70"
+      />
+      <span className="mt-1 block text-[9px] font-normal leading-4 text-faint">{help}</span>
+      {isOutOfRange && (
+        <span className="mt-1 block text-[9px] font-normal leading-4 text-rose-400">
+          Must be between {min} and {max}.
+        </span>
+      )}
+    </label>
+  );
+};
 
 const ProviderSelect = ({
   label,

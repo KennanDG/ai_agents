@@ -7,8 +7,6 @@ import os
 
 import shutil
 import subprocess
-import re
-import threading
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
@@ -36,12 +34,11 @@ from ai_agents.api.schemas import (
 )
 
 from ai_agents.config.settings import settings
+from ai_agents.config.constants import REPOSITORY_RE, IMPORT_LOCK, AUTO_STASH_PREFIX
 
 
 
-_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-_IMPORT_LOCK = threading.RLock()
-_AUTO_STASH_PREFIX = "ai-agents:auto-stash:"
+
 
 
 class _AutoStashRestoreError(RuntimeError):
@@ -153,7 +150,7 @@ class GitHubService:
     @staticmethod
     def _validate_repository_name(full_name: str) -> tuple[str, str]:
         normalized = full_name.strip()
-        if not _REPOSITORY_RE.fullmatch(normalized):
+        if not REPOSITORY_RE.fullmatch(normalized):
             raise HTTPException(
                 status_code=400,
                 detail="Repository must use the owner/name format.",
@@ -391,7 +388,7 @@ class GitHubService:
 
     @staticmethod
     def _auto_stash_message(branch: str) -> str:
-        return f"{_AUTO_STASH_PREFIX}{branch}"
+        return f"{AUTO_STASH_PREFIX}{branch}"
 
     def _find_branch_snapshot(self, repo_root: Path, branch: str) -> str | None:
         message = self._auto_stash_message(branch)
@@ -690,7 +687,7 @@ class GitHubService:
         restored_target_changes = False
         previous_ref: str | None = None
 
-        with _IMPORT_LOCK:
+        with IMPORT_LOCK:
             reused = target.exists()
 
             if reused:
@@ -872,7 +869,7 @@ class GitHubService:
         if branch == self._default_branch(full_name):
             raise HTTPException(status_code=409, detail="The agent branch cannot be the default branch.")
 
-        with _IMPORT_LOCK:
+        with IMPORT_LOCK:
             local_exists = self._run_git(
                 ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
                 cwd=repo_root,
@@ -924,7 +921,7 @@ class GitHubService:
             )
 
         before = self._run_git(["rev-parse", "HEAD"], cwd=repo_root).stdout.strip()
-        with _IMPORT_LOCK:
+        with IMPORT_LOCK:
             self._run_git(
                 ["fetch", "--prune", "origin", f"refs/heads/{branch}:refs/remotes/origin/{branch}"],
                 cwd=repo_root,
@@ -959,7 +956,7 @@ class GitHubService:
                 ),
             )
 
-        with _IMPORT_LOCK:
+        with IMPORT_LOCK:
             self._run_git(["add", "--", *paths], cwd=repo_root)
             staged, _, _ = self._changed_files(repo_root)
             unrelated_after_stage = sorted(set(staged) - set(paths))
@@ -1011,7 +1008,7 @@ class GitHubService:
                 detail="Commit all intended changes before pushing the branch.",
             )
 
-        with _IMPORT_LOCK:
+        with IMPORT_LOCK:
             fetch = self._run_git(
                 ["fetch", "origin", f"refs/heads/{branch}:refs/remotes/origin/{branch}"],
                 cwd=repo_root,

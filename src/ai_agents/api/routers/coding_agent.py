@@ -5,7 +5,6 @@ import asyncio
 import base64
 import binascii
 import mimetypes
-import re
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,63 +42,19 @@ from ai_agents.agents.coding.sandbox import (
 )
 from ai_agents.agents.coding.utils.validation import validation_failed_results
 from ai_agents.config.settings import settings as config_settings
-
-
-
-IGNORED_REPOSITORY_FILES = {
-    ".DS_Store",
-    "Thumbs.db",
-}
-
-IGNORED_REPOSITORY_DIRS = {
-    ".git",
-    ".hg",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".tox",
-    ".venv",
-    "__pycache__",
-    "build",
-    "dist",
-    "node_modules",
-    "venv",
-}
-
-MAX_REPOSITORY_FILE_BYTES = 1_000_000
-MAX_ATTACHED_FILES = default_coding_settings.max_attached_files
-MAX_ATTACHMENT_CHARS = default_coding_settings.max_attachment_storage_chars
-MAX_TOTAL_ATTACHMENT_CHARS = default_coding_settings.max_total_attachment_storage_chars
-MAX_ATTACHED_IMAGE_BYTES = 5_000_000
-
-ALLOWED_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp"}
-
-IMAGE_DATA_URL_RE = re.compile(
-    r"^data:(?P<mime>image/(?:png|jpeg|jpg|webp));base64,(?P<data>[A-Za-z0-9+/=\r\n]+)$",
-    re.IGNORECASE,
+from ai_agents.config.constants import (
+    IGNORED_REPOSITORY_FILES, 
+    IGNORED_REPOSITORY_DIRS,
+    MAX_REPOSITORY_FILE_BYTES,
+    MAX_ATTACHED_FILES,
+    MAX_ATTACHMENT_CHARS,
+    MAX_TOTAL_ATTACHMENT_CHARS,
+    MAX_ATTACHED_IMAGE_BYTES,
+    ALLOWED_IMAGE_MIME_TYPES,
+    IMAGE_DATA_URL_RE,
+    LANGUAGE_BY_EXTENSION,
 )
 
-
-LANGUAGE_BY_EXTENSION = {
-    ".css": "css",
-    ".html": "html",
-    ".js": "javascript",
-    ".jsx": "javascript",
-    ".json": "json",
-    ".md": "markdown",
-    ".py": "python",
-    ".sql": "sql",
-    ".ts": "typescript",
-    ".tsx": "typescript",
-    # ".txt": "plaintext",
-    ".toml": "toml",
-    ".yml": "yaml",
-    ".yaml": "yaml",
-    ".cpp": "cpp",
-    ".hpp": "cpp",
-    ".rs": "rust",
-    ".java": "java",
-}
 
 
 

@@ -4,13 +4,14 @@ import re
 from typing import Any, Dict, List, Optional, Union, Literal
 from pydantic import BaseModel, Field, field_validator
 
-from ai_agents.config.constants import ChatProvider, AgentKind
+from ai_agents.config.constants import (
+    ChatProvider, 
+    AgentKind, 
+    NAME_RE,
+    MAX_SKILL_CHARS,
+    MAX_TOOL_CHARS
+)
 
-
-
-NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{1,63}$")
-_MAX_SKILL_CHARS = 50_000
-_MAX_TOOL_CHARS = 100_000
 
 
 class HealthResponse(BaseModel):
@@ -376,7 +377,7 @@ class AgentConfigurationUpdate(BaseModel):
 class SkillWriteRequest(BaseModel):
     agent: AgentKind
     name: str
-    content: str = Field(min_length=1, max_length=_MAX_SKILL_CHARS)
+    content: str = Field(min_length=1, max_length=MAX_SKILL_CHARS)
     overwrite: bool = False
 
     @field_validator("name")
@@ -395,7 +396,7 @@ class ToolQuarantineRequest(BaseModel):
     agent: AgentKind
     name: str
     purpose: str = Field(min_length=1, max_length=500)
-    source: str = Field(min_length=1, max_length=_MAX_TOOL_CHARS)
+    source: str = Field(min_length=1, max_length=MAX_TOOL_CHARS)
 
     @field_validator("name")
     @classmethod

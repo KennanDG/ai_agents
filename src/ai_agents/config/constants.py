@@ -1,8 +1,146 @@
 import uuid
+import re
+from pathlib import Path
+import threading
 from typing import Any, Literal, Mapping
 
-QDRANT_ID_NAMESPACE = uuid.UUID("4c0f9c2a-3db6-4f6d-9dd4-6c5c3c70a3f1")
+from ai_agents.agents.coding.coding_agent_settings import settings as default_coding_settings
 
+
+
+###############################################################################################
+############################################# API #############################################
+###############################################################################################
+
+
+################ SCHEMAS ################
+NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{1,63}$")
+MAX_SKILL_CHARS = 50_000
+MAX_TOOL_CHARS = 100_000
+
+
+
+################ VOICE_AGENT ################
+MAX_VOICE_ATTACHMENTS = 5
+MAX_VOICE_ATTACHMENT_CONTENT_CHARS = 20_000
+MAX_TOTAL_VOICE_ATTACHMENT_CONTENT_CHARS = 60_000
+MAX_VOICE_SKILL_CONTEXT_CHARS = 3_600
+VOICE_SKILLS_DIR = Path(__file__).resolve().parents[2] / "agents" / "voice" / "skills"
+
+
+
+################ GITHUB ################
+REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+IMPORT_LOCK = threading.RLock()
+AUTO_STASH_PREFIX = "ai-agents:auto-stash:"
+
+
+
+
+
+
+################ CODING_AGENT ################
+IGNORED_REPOSITORY_FILES = {
+    ".DS_Store",
+    "Thumbs.db",
+}
+
+IGNORED_REPOSITORY_DIRS = {
+    ".git",
+    ".hg",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+}
+MAX_REPOSITORY_FILE_BYTES = 1_000_000
+MAX_ATTACHED_FILES = default_coding_settings.max_attached_files
+MAX_ATTACHMENT_CHARS = default_coding_settings.max_attachment_storage_chars
+MAX_TOTAL_ATTACHMENT_CHARS = default_coding_settings.max_total_attachment_storage_chars
+MAX_ATTACHED_IMAGE_BYTES = 5_000_000
+ALLOWED_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp"}
+IMAGE_DATA_URL_RE = re.compile(
+    r"^data:(?P<mime>image/(?:png|jpeg|jpg|webp));base64,(?P<data>[A-Za-z0-9+/=\r\n]+)$",
+    re.IGNORECASE,
+)
+LANGUAGE_BY_EXTENSION = {
+    ".css": "css",
+    ".html": "html",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".json": "json",
+    ".md": "markdown",
+    ".py": "python",
+    ".sql": "sql",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    # ".txt": "plaintext",
+    ".toml": "toml",
+    ".yml": "yaml",
+    ".yaml": "yaml",
+    ".cpp": "cpp",
+    ".hpp": "cpp",
+    ".rs": "rust",
+    ".java": "java",
+}
+
+
+
+
+
+################ ADMIN ################
+AI_AGENTS_ROOT = Path(__file__).resolve().parents[2]
+
+
+CUSTOM_PREFIX = "custom_"
+
+CODING_RUNTIME_FIELDS = (
+    "coding_subagent_count",
+    "coding_route_max_tokens",
+    "coding_planner_max_tokens",
+    "coding_repo_navigation_max_tokens",
+    "coding_simple_patch_max_tokens",
+    "coding_patch_max_tokens",
+    "coding_progress_max_tokens",
+)
+CODING_RUNTIME_BOUNDS = {
+    "coding_subagent_count": (1, 6),
+    "coding_route_max_tokens": (256, 2_000),
+    "coding_planner_max_tokens": (512, 6_000),
+    "coding_repo_navigation_max_tokens": (512, 4_000),
+    "coding_simple_patch_max_tokens": (2_000, 16_000),
+    "coding_patch_max_tokens": (4_000, 32_000),
+    "coding_progress_max_tokens": (512, 4_000),
+}
+MODEL_CONFIGURATION_FIELDS = (
+    "coding_provider",
+    "coding_model",
+    "reasoning_provider",
+    "reasoning_model",
+    "caption_provider",
+    "caption_model",
+    "voice_chat_provider",
+    "voice_chat_model",
+    "voice_stt_provider",
+    "voice_stt_model",
+    "voice_tts_provider",
+    "voice_tts_model",
+    "voice_tts_voice",
+    "voice_tts_enabled",
+)
+
+
+
+
+###############################################################################################
+############################################# CONFIG ##########################################
+###############################################################################################
 ChatProvider = Literal["groq", "deepseek", "openrouter", "openai", "anthropic", "google"]
 ModelCapability = Literal["chat", "vision", "stt", "tts"]
 AgentKind = Literal["coding", "voice"]
@@ -132,5 +270,5 @@ FALLBACK_MODELS: dict[tuple[ChatProvider, ModelCapability], list[str]] = {
 
 
 
-
+QDRANT_ID_NAMESPACE = uuid.UUID("4c0f9c2a-3db6-4f6d-9dd4-6c5c3c70a3f1")
 

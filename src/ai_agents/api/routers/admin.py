@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field, field_validator
 
 from ai_agents.agents.coding.registry import SkillRegistry
 from ai_agents.config.model_catalog import ModelCapability, discover_models
@@ -23,58 +22,29 @@ from ai_agents.api.schemas import (
     SkillSummary,
     ToolSummary
 )
+from ai_agents.config.constants import (
+    AI_AGENTS_ROOT,
+    CUSTOM_PREFIX,
+    CODING_RUNTIME_FIELDS,
+    CODING_RUNTIME_BOUNDS, 
+    MODEL_CONFIGURATION_FIELDS,
+)
+
+
+
+SKILL_DIRS: dict[AgentKind, Path] = {
+    "coding": AI_AGENTS_ROOT / "agents" / "coding" / "skills",
+    "voice": AI_AGENTS_ROOT / "agents" / "voice" / "skills",
+}
+TOOL_DIRS: dict[AgentKind, Path] = {
+    "coding": AI_AGENTS_ROOT / "agents" / "coding" / "tools",
+    "voice": AI_AGENTS_ROOT / "agents" / "voice" / "tools",
+}
+
+
+
 
 router = APIRouter(prefix="/admin", tags=["admin"])
-
-
-
-_AI_AGENTS_ROOT = Path(__file__).resolve().parents[2]
-_SKILL_DIRS: dict[AgentKind, Path] = {
-    "coding": _AI_AGENTS_ROOT / "agents" / "coding" / "skills",
-    "voice": _AI_AGENTS_ROOT / "agents" / "voice" / "skills",
-}
-_TOOL_DIRS: dict[AgentKind, Path] = {
-    "coding": _AI_AGENTS_ROOT / "agents" / "coding" / "tools",
-    "voice": _AI_AGENTS_ROOT / "agents" / "voice" / "tools",
-}
-
-
-_CUSTOM_PREFIX = "custom_"
-
-_CODING_RUNTIME_FIELDS = (
-    "coding_subagent_count",
-    "coding_route_max_tokens",
-    "coding_planner_max_tokens",
-    "coding_repo_navigation_max_tokens",
-    "coding_simple_patch_max_tokens",
-    "coding_patch_max_tokens",
-    "coding_progress_max_tokens",
-)
-_CODING_RUNTIME_BOUNDS = {
-    "coding_subagent_count": (1, 6),
-    "coding_route_max_tokens": (256, 2_000),
-    "coding_planner_max_tokens": (512, 6_000),
-    "coding_repo_navigation_max_tokens": (512, 4_000),
-    "coding_simple_patch_max_tokens": (2_000, 16_000),
-    "coding_patch_max_tokens": (4_000, 32_000),
-    "coding_progress_max_tokens": (512, 4_000),
-}
-_MODEL_CONFIGURATION_FIELDS = (
-    "coding_provider",
-    "coding_model",
-    "reasoning_provider",
-    "reasoning_model",
-    "caption_provider",
-    "caption_model",
-    "voice_chat_provider",
-    "voice_chat_model",
-    "voice_stt_provider",
-    "voice_stt_model",
-    "voice_tts_provider",
-    "voice_tts_model",
-    "voice_tts_voice",
-    "voice_tts_enabled",
-)
 
 
 def _coding_runtime_path() -> Path:
@@ -83,7 +53,7 @@ def _coding_runtime_path() -> Path:
 
 
 def _coding_runtime_snapshot() -> dict[str, int]:
-    return {field: int(getattr(config_settings, field)) for field in _CODING_RUNTIME_FIELDS}
+    return {field: int(getattr(config_settings, field)) for field in CODING_RUNTIME_FIELDS}
 
 
 def _load_coding_runtime_configuration() -> None:
@@ -96,9 +66,9 @@ def _load_coding_runtime_configuration() -> None:
         return
     if not isinstance(raw, dict):
         return
-    for field in _CODING_RUNTIME_FIELDS:
+    for field in CODING_RUNTIME_FIELDS:
         value = raw.get(field)
-        minimum, maximum = _CODING_RUNTIME_BOUNDS[field]
+        minimum, maximum = CODING_RUNTIME_BOUNDS[field]
         if isinstance(value, int) and minimum <= value <= maximum:
             setattr(config_settings, field, value)
 
@@ -269,12 +239,12 @@ def list_available_models(
 @router.put("/agent-configuration")
 def update_agent_configuration(request: AgentConfigurationUpdate) -> dict[str, Any]:
     values = request.model_dump(exclude={"secrets"})
-    model_values = {field: values[field] for field in _MODEL_CONFIGURATION_FIELDS}
+    model_values = {field: values[field] for field in MODEL_CONFIGURATION_FIELDS}
     coding_values = {
         field: int(values[field])
         if values.get(field) is not None
         else int(getattr(config_settings, field))
-        for field in _CODING_RUNTIME_FIELDS
+        for field in CODING_RUNTIME_FIELDS
     }
     try:
         snapshot = runtime_agent_configuration.update(
@@ -301,19 +271,19 @@ def update_agent_configuration(request: AgentConfigurationUpdate) -> dict[str, A
 def list_skills(
     agent: AgentKind = Query(...),
 ) -> list[SkillSummary]:
-    registry = SkillRegistry(_safe_agent_dir(_SKILL_DIRS, agent)).load()
+    registry = SkillRegistry(_safe_agent_dir(SKILL_DIRS, agent)).load()
     return [_skill_summary(agent, skill) for skill in registry.list()]
 
 
 @router.post("/skills", response_model=SkillSummary)
 def save_skill(request: SkillWriteRequest) -> SkillSummary:
-    if not request.name.startswith(_CUSTOM_PREFIX):
+    if not request.name.startswith(CUSTOM_PREFIX):
         raise HTTPException(
             status_code=400,
-            detail=f"User-created skills must start with '{_CUSTOM_PREFIX}'.",
+            detail=f"User-created skills must start with '{CUSTOM_PREFIX}'.",
         )
 
-    skill_dir = _safe_agent_dir(_SKILL_DIRS, request.agent)
+    skill_dir = _safe_agent_dir(SKILL_DIRS, request.agent)
     path = (skill_dir / f"{request.name}.md").resolve()
     if path.parent != skill_dir:
         raise HTTPException(status_code=400, detail="Unsafe skill path.")
@@ -328,10 +298,10 @@ def save_skill(request: SkillWriteRequest) -> SkillSummary:
 @router.delete("/skills/{agent}/{name}")
 def delete_skill(agent: AgentKind, name: str) -> dict[str, bool]:
     normalized = name.strip().lower().replace("-", "_")
-    if not NAME_RE.fullmatch(normalized) or not normalized.startswith(_CUSTOM_PREFIX):
+    if not NAME_RE.fullmatch(normalized) or not normalized.startswith(CUSTOM_PREFIX):
         raise HTTPException(status_code=403, detail="Only custom_ skills may be deleted.")
 
-    skill_dir = _safe_agent_dir(_SKILL_DIRS, agent)
+    skill_dir = _safe_agent_dir(SKILL_DIRS, agent)
     path = (skill_dir / f"{normalized}.md").resolve()
     if path.parent != skill_dir:
         raise HTTPException(status_code=400, detail="Unsafe skill path.")
@@ -343,7 +313,7 @@ def delete_skill(agent: AgentKind, name: str) -> dict[str, bool]:
 
 @router.get("/tools", response_model=list[ToolSummary])
 def list_tools(agent: AgentKind = Query(...)) -> list[ToolSummary]:
-    tool_root = _safe_agent_dir(_TOOL_DIRS, agent)
+    tool_root = _safe_agent_dir(TOOL_DIRS, agent)
     pending_root = (tool_root / "custom_pending").resolve()
     pending_root.mkdir(parents=True, exist_ok=True)
 
@@ -368,7 +338,7 @@ def list_tools(agent: AgentKind = Query(...)) -> list[ToolSummary]:
 
 @router.post("/tools/quarantine", response_model=ToolSummary)
 def quarantine_tool(request: ToolQuarantineRequest) -> ToolSummary:
-    tool_root = _safe_agent_dir(_TOOL_DIRS, request.agent)
+    tool_root = _safe_agent_dir(TOOL_DIRS, request.agent)
     pending_root = (tool_root / "custom_pending").resolve()
     pending_root.mkdir(parents=True, exist_ok=True)
     path = (pending_root / f"{request.name}.py").resolve()
