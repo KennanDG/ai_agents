@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import ast
+import json
 import os
 from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field, field_validator
 
 from ai_agents.agents.coding.registry import SkillRegistry
 from ai_agents.config.model_catalog import ModelCapability, discover_models
 from ai_agents.config.runtime_configuration import runtime_agent_configuration
 from ai_agents.config.constants import ChatProvider, AgentKind
+from ai_agents.config.settings import settings as config_settings
 
 from ai_agents.api.schemas import (
     NAME_RE,
@@ -21,25 +22,67 @@ from ai_agents.api.schemas import (
     SkillSummary,
     ToolSummary
 )
+from ai_agents.config.constants import (
+    AI_AGENTS_ROOT,
+    CUSTOM_PREFIX,
+    CODING_RUNTIME_FIELDS,
+    CODING_RUNTIME_BOUNDS, 
+    MODEL_CONFIGURATION_FIELDS,
+)
+
+
+
+SKILL_DIRS: dict[AgentKind, Path] = {
+    "coding": AI_AGENTS_ROOT / "agents" / "coding" / "skills",
+    "voice": AI_AGENTS_ROOT / "agents" / "voice" / "skills",
+}
+TOOL_DIRS: dict[AgentKind, Path] = {
+    "coding": AI_AGENTS_ROOT / "agents" / "coding" / "tools",
+    "voice": AI_AGENTS_ROOT / "agents" / "voice" / "tools",
+}
+
+
+
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
-
-_AI_AGENTS_ROOT = Path(__file__).resolve().parents[2]
-_SKILL_DIRS: dict[AgentKind, Path] = {
-    "coding": _AI_AGENTS_ROOT / "agents" / "coding" / "skills",
-    "voice": _AI_AGENTS_ROOT / "agents" / "voice" / "skills",
-}
-_TOOL_DIRS: dict[AgentKind, Path] = {
-    "coding": _AI_AGENTS_ROOT / "agents" / "coding" / "tools",
-    "voice": _AI_AGENTS_ROOT / "agents" / "voice" / "tools",
-}
+def _coding_runtime_path() -> Path:
+    base = Path(config_settings.runtime_agent_config_path).expanduser().resolve()
+    return base.with_name(f"{base.stem}-coding-runtime{base.suffix}")
 
 
-_CUSTOM_PREFIX = "custom_"
+def _coding_runtime_snapshot() -> dict[str, int]:
+    return {field: int(getattr(config_settings, field)) for field in CODING_RUNTIME_FIELDS}
 
 
+def _load_coding_runtime_configuration() -> None:
+    path = _coding_runtime_path()
+    if not path.exists():
+        return
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(raw, dict):
+        return
+    for field in CODING_RUNTIME_FIELDS:
+        value = raw.get(field)
+        minimum, maximum = CODING_RUNTIME_BOUNDS[field]
+        if isinstance(value, int) and minimum <= value <= maximum:
+            setattr(config_settings, field, value)
+
+
+def _save_coding_runtime_configuration(values: dict[str, int]) -> None:
+    for field, value in values.items():
+        setattr(config_settings, field, value)
+    _atomic_write(
+        _coding_runtime_path(),
+        json.dumps(_coding_runtime_snapshot(), indent=2, sort_keys=True) + "\n",
+    )
+
+
+_load_coding_runtime_configuration()
 
 
 def _safe_agent_dir(mapping: dict[AgentKind, Path], agent: AgentKind) -> Path:
@@ -178,7 +221,10 @@ def _validate_quarantined_tool_source(name: str, source: str) -> str:
 
 @router.get("/agent-configuration")
 def get_agent_configuration() -> dict[str, Any]:
-    return runtime_agent_configuration.public_snapshot()
+    return {
+        **runtime_agent_configuration.public_snapshot(),
+        **_coding_runtime_snapshot(),
+    }
 
 
 @router.get("/models")
@@ -193,8 +239,19 @@ def list_available_models(
 @router.put("/agent-configuration")
 def update_agent_configuration(request: AgentConfigurationUpdate) -> dict[str, Any]:
     values = request.model_dump(exclude={"secrets"})
+    model_values = {field: values[field] for field in MODEL_CONFIGURATION_FIELDS}
+    coding_values = {
+        field: int(values[field])
+        if values.get(field) is not None
+        else int(getattr(config_settings, field))
+        for field in CODING_RUNTIME_FIELDS
+    }
     try:
-        snapshot = runtime_agent_configuration.update(values, secrets=request.secrets)
+        snapshot = runtime_agent_configuration.update(
+            model_values,
+            secrets=request.secrets,
+        )
+        _save_coding_runtime_configuration(coding_values)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -207,26 +264,26 @@ def update_agent_configuration(request: AgentConfigurationUpdate) -> dict[str, A
     except (ImportError, AttributeError):
         pass
 
-    return snapshot
+    return {**snapshot, **_coding_runtime_snapshot()}
 
 
 @router.get("/skills", response_model=list[SkillSummary])
 def list_skills(
     agent: AgentKind = Query(...),
 ) -> list[SkillSummary]:
-    registry = SkillRegistry(_safe_agent_dir(_SKILL_DIRS, agent)).load()
+    registry = SkillRegistry(_safe_agent_dir(SKILL_DIRS, agent)).load()
     return [_skill_summary(agent, skill) for skill in registry.list()]
 
 
 @router.post("/skills", response_model=SkillSummary)
 def save_skill(request: SkillWriteRequest) -> SkillSummary:
-    if not request.name.startswith(_CUSTOM_PREFIX):
+    if not request.name.startswith(CUSTOM_PREFIX):
         raise HTTPException(
             status_code=400,
-            detail=f"User-created skills must start with '{_CUSTOM_PREFIX}'.",
+            detail=f"User-created skills must start with '{CUSTOM_PREFIX}'.",
         )
 
-    skill_dir = _safe_agent_dir(_SKILL_DIRS, request.agent)
+    skill_dir = _safe_agent_dir(SKILL_DIRS, request.agent)
     path = (skill_dir / f"{request.name}.md").resolve()
     if path.parent != skill_dir:
         raise HTTPException(status_code=400, detail="Unsafe skill path.")
@@ -241,10 +298,10 @@ def save_skill(request: SkillWriteRequest) -> SkillSummary:
 @router.delete("/skills/{agent}/{name}")
 def delete_skill(agent: AgentKind, name: str) -> dict[str, bool]:
     normalized = name.strip().lower().replace("-", "_")
-    if not NAME_RE.fullmatch(normalized) or not normalized.startswith(_CUSTOM_PREFIX):
+    if not NAME_RE.fullmatch(normalized) or not normalized.startswith(CUSTOM_PREFIX):
         raise HTTPException(status_code=403, detail="Only custom_ skills may be deleted.")
 
-    skill_dir = _safe_agent_dir(_SKILL_DIRS, agent)
+    skill_dir = _safe_agent_dir(SKILL_DIRS, agent)
     path = (skill_dir / f"{normalized}.md").resolve()
     if path.parent != skill_dir:
         raise HTTPException(status_code=400, detail="Unsafe skill path.")
@@ -256,7 +313,7 @@ def delete_skill(agent: AgentKind, name: str) -> dict[str, bool]:
 
 @router.get("/tools", response_model=list[ToolSummary])
 def list_tools(agent: AgentKind = Query(...)) -> list[ToolSummary]:
-    tool_root = _safe_agent_dir(_TOOL_DIRS, agent)
+    tool_root = _safe_agent_dir(TOOL_DIRS, agent)
     pending_root = (tool_root / "custom_pending").resolve()
     pending_root.mkdir(parents=True, exist_ok=True)
 
@@ -281,7 +338,7 @@ def list_tools(agent: AgentKind = Query(...)) -> list[ToolSummary]:
 
 @router.post("/tools/quarantine", response_model=ToolSummary)
 def quarantine_tool(request: ToolQuarantineRequest) -> ToolSummary:
-    tool_root = _safe_agent_dir(_TOOL_DIRS, request.agent)
+    tool_root = _safe_agent_dir(TOOL_DIRS, request.agent)
     pending_root = (tool_root / "custom_pending").resolve()
     pending_root.mkdir(parents=True, exist_ok=True)
     path = (pending_root / f"{request.name}.py").resolve()

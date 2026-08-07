@@ -34,6 +34,10 @@ import {
   type GitHubRepositorySummary,
 } from "./lib/repositoryApi";
 import { submitVoiceTurn } from "./lib/voiceAgentApi";
+import {
+  fetchAgentConfiguration,
+  type AgentConfiguration,
+} from "./lib/adminApi";
 import type { AgentMessage, AgentRunState, ChangeStatus, FileChange, RepositoryFile, RepositoryTreeEntry } from "./types";
 
 const apiBaseUrl = import.meta.env.VITE_AI_AGENTS_API_BASE ?? "http://0.0.0.0:8000";
@@ -60,6 +64,14 @@ const createRunState = (status: AgentRunState["status"] = "connecting"): AgentRu
 });
 
 const initialRunState = createRunState();
+
+type RunAction = CodingAgentServerEvent | { type: "session.reset" };
+
+type GitHubCommitReceipt = {
+  branch: string;
+  commitSha: string;
+  committedFiles: string[];
+};
 
 const nowLabel = () => {
   return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date());
@@ -180,8 +192,11 @@ const mergeResult = (state: AgentRunState, result: CodingAgentRunResult): AgentR
 }
 
 
-const runReducer = (state: AgentRunState, event: CodingAgentServerEvent): AgentRunState => {
+const runReducer = (state: AgentRunState, event: RunAction): AgentRunState => {
   switch (event.type) {
+    case "session.reset":
+      return createRunState("ready");
+
     case "session.ready":
       return {
         ...state,
@@ -298,6 +313,7 @@ const runReducer = (state: AgentRunState, event: CodingAgentServerEvent): AgentR
 const App = () => {
   const [activeView, setActiveView] = useState<ActivityView>("explorer");
   const [agentSettingsOpen, setAgentSettingsOpen] = useState(false);
+  const [agentConfiguration, setAgentConfiguration] = useState<AgentConfiguration | null>(null);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [activeFile, setActiveFile] = useState<RepositoryFile | null>(null);
   const [allowWrite, setAllowWrite] = useState(true);
@@ -327,6 +343,8 @@ const App = () => {
   const [githubActionMessage, setGitHubActionMessage] = useState<string | null>(null);
   const [githubActionError, setGitHubActionError] = useState<string | null>(null);
   const [githubPullRequestUrl, setGitHubPullRequestUrl] = useState<string | null>(null);
+  const [lastGitHubCommit, setLastGitHubCommit] = useState<GitHubCommitReceipt | null>(null);
+  const [agentSessionKey, setAgentSessionKey] = useState(0);
   const [run, dispatchRun] = useReducer(runReducer, initialRunState);
 
   const [voiceSessionId, setVoiceSessionId] = useState<string | null>(null);
@@ -338,6 +356,23 @@ const App = () => {
   const socketRef = useRef<ReturnType<typeof createCodingAgentSocket> | null>(null);
   const newThreadForNextRunRef = useRef(false);
   const activeRunMessageIdRef = useRef<string | null>(null);
+
+  const resetAgentWorkspace = useCallback(() => {
+    dispatchRun({ type: "session.reset" });
+    setMessages([]);
+    setVoiceHistory([]);
+    setVoiceSessionId(null);
+    setLastGitHubCommit(null);
+    activeRunMessageIdRef.current = null;
+    newThreadForNextRunRef.current = true;
+
+    if (voiceReplyUrlRef.current) {
+      URL.revokeObjectURL(voiceReplyUrlRef.current);
+      voiceReplyUrlRef.current = null;
+    }
+    setVoiceReplyUrl(null);
+    setAgentSessionKey((current) => current + 1);
+  }, []);
 
   
   const activeChange = useMemo(
@@ -448,9 +483,9 @@ const App = () => {
       });
       setSelectedGitHubRepository(imported.full_name);
       setCurrentBranch(imported.ref);
-      newThreadForNextRunRef.current = true;
       await loadRepository(imported.repo_root);
       await loadGitHubRepositoryStatus(imported.full_name);
+      resetAgentWorkspace();
 
       const feedback = [`Using ${imported.full_name} on ${imported.ref}.`];
       if (imported.saved_previous_changes && imported.previous_ref) {
@@ -465,16 +500,16 @@ const App = () => {
     } finally {
       setGitHubActionLoading(null);
     }
-  }, [githubRepositories, loadGitHubRepositoryStatus, loadRepository]);
+  }, [githubRepositories, loadGitHubRepositoryStatus, loadRepository, resetAgentWorkspace]);
 
   const useLocalRepository = useCallback(async () => {
     setSelectedGitHubRepository(null);
     setCurrentBranch(null);
     setGitHubRepositoryStatus(null);
     clearGitHubActionFeedback();
-    newThreadForNextRunRef.current = true;
     await loadRepository(configuredRepoRoot);
-  }, [loadRepository]);
+    resetAgentWorkspace();
+  }, [loadRepository, resetAgentWorkspace]);
 
   const switchBranch = useCallback(async (branchName: string) => {
     if (!selectedGitHubRepository || branchName === currentBranch) return;
@@ -490,9 +525,9 @@ const App = () => {
         refresh: true,
       });
       setCurrentBranch(imported.ref);
-      newThreadForNextRunRef.current = true;
       await loadRepository(imported.repo_root);
       await loadGitHubRepositoryStatus(imported.full_name);
+      resetAgentWorkspace();
 
       const feedback = [`Switched to ${imported.ref}.`];
       if (imported.saved_previous_changes && imported.previous_ref) {
@@ -507,7 +542,7 @@ const App = () => {
     } finally {
       setGitHubActionLoading(null);
     }
-  }, [currentBranch, selectedGitHubRepository, loadGitHubRepositoryStatus, loadRepository]);
+  }, [currentBranch, selectedGitHubRepository, loadGitHubRepositoryStatus, loadRepository, resetAgentWorkspace]);
 
   const testSelectedGitHubConnection = useCallback(async () => {
     setGitHubActionLoading("test");
@@ -545,16 +580,16 @@ const App = () => {
       setBranches((current) => current.some((item) => item.name === result.branch)
         ? current
         : [{ name: result.branch, sha: result.sha }, ...current]);
-      newThreadForNextRunRef.current = true;
       setGitHubActionMessage(`Created and switched to ${result.branch}.`);
       await loadGitHubRepositoryStatus(selectedGitHubRepository);
       await loadRepository(repoRoot);
+      resetAgentWorkspace();
     } catch (error) {
       setGitHubActionError(error instanceof Error ? error.message : "Failed to create branch.");
     } finally {
       setGitHubActionLoading(null);
     }
-  }, [currentBranch, loadGitHubRepositoryStatus, loadRepository, repoRoot, selectedGitHubRepository]);
+  }, [currentBranch, loadGitHubRepositoryStatus, loadRepository, repoRoot, resetAgentWorkspace, selectedGitHubRepository]);
 
   const pullCurrentGitHubBranch = useCallback(async () => {
     if (!selectedGitHubRepository) return;
@@ -573,10 +608,10 @@ const App = () => {
   }, [loadGitHubRepositoryStatus, loadRepository, repoRoot, selectedGitHubRepository]);
 
   const commitAppliedGitHubChanges = useCallback(async (message: string) => {
-    if (!selectedGitHubRepository) return;
+    if (!selectedGitHubRepository) return false;
     if (committablePaths.length === 0) {
       setGitHubActionError("No approved and applied agent files are currently available to commit.");
-      return;
+      return false;
     }
     setGitHubActionLoading("commit");
     clearGitHubActionFeedback();
@@ -588,11 +623,18 @@ const App = () => {
         message,
         paths: committablePaths,
       });
+      setLastGitHubCommit({
+        branch: result.branch,
+        commitSha: result.commit_sha,
+        committedFiles: result.committed_files,
+      });
       setGitHubActionMessage(`Committed ${result.committed_files.length} file(s) as ${result.commit_sha.slice(0, 7)}.`);
       await loadGitHubRepositoryStatus(selectedGitHubRepository);
       await loadRepository(repoRoot);
+      return true;
     } catch (error) {
       setGitHubActionError(error instanceof Error ? error.message : "Failed to commit changes.");
+      return false;
     } finally {
       setGitHubActionLoading(null);
     }
@@ -624,7 +666,7 @@ const App = () => {
     base: string;
     draft: boolean;
   }) => {
-    if (!selectedGitHubRepository) return;
+    if (!selectedGitHubRepository) return false;
     setGitHubActionLoading("pr");
     clearGitHubActionFeedback();
     try {
@@ -642,8 +684,10 @@ const App = () => {
       setGitHubActionMessage(result.created
         ? `Created ${result.draft ? "draft " : ""}PR #${result.number}.`
         : `PR #${result.number} is already open.`);
+      return true;
     } catch (error) {
       setGitHubActionError(error instanceof Error ? error.message : "Failed to create pull request.");
+      return false;
     } finally {
       setGitHubActionLoading(null);
     }
@@ -652,6 +696,9 @@ const App = () => {
   useEffect(() => {
     void loadRepository(configuredRepoRoot);
     void refreshGitHubRepositories();
+    void fetchAgentConfiguration({ apiBaseUrl, apiKey })
+      .then(setAgentConfiguration)
+      .catch((error) => console.error("Failed to load agent execution settings.", error));
   }, [loadRepository, refreshGitHubRepositories]);
 
   useEffect(() => {
@@ -917,7 +964,7 @@ const App = () => {
 
 
   const runCodingAgent = (request: string, attachedFiles: CodingAgentAttachedFile[] = []) => {
-    socketRef.current?.run({
+    const runRequest = {
       thread_id: newThreadForNextRunRef.current ? null : run.threadId,
       request,
       repo_root: repoRoot,
@@ -926,7 +973,15 @@ const App = () => {
       memory_enabled: memoryEnabled,
       attached_files: attachedFiles,
       max_iterations: 3,
-    });
+      subagent_count: agentConfiguration?.coding_subagent_count,
+      route_max_tokens: agentConfiguration?.coding_route_max_tokens,
+      planner_max_tokens: agentConfiguration?.coding_planner_max_tokens,
+      repo_navigation_max_tokens: agentConfiguration?.coding_repo_navigation_max_tokens,
+      simple_patch_max_tokens: agentConfiguration?.coding_simple_patch_max_tokens,
+      patch_max_tokens: agentConfiguration?.coding_patch_max_tokens,
+      progress_max_tokens: agentConfiguration?.coding_progress_max_tokens,
+    };
+    socketRef.current?.run(runRequest);
   };
 
   
@@ -1012,6 +1067,7 @@ const App = () => {
             </div>
 
             <TaskPanel
+              key={agentSessionKey}
               messages={messages}
               run={run}
               onSubmit={submitPrompt}
@@ -1059,6 +1115,7 @@ const App = () => {
           githubActionError={githubActionError}
           githubPullRequestUrl={githubPullRequestUrl}
           committableFileCount={committablePaths.length}
+          lastCommit={lastGitHubCommit}
           onTestGitHubConnection={testSelectedGitHubConnection}
           onCreateGitHubBranch={createAgentBranch}
           onPullGitHubBranch={pullCurrentGitHubBranch}
@@ -1075,6 +1132,7 @@ const App = () => {
         apiBaseUrl={apiBaseUrl}
         apiKey={apiKey}
         onClose={() => setAgentSettingsOpen(false)}
+        onSaved={setAgentConfiguration}
       />
     </main>
   );

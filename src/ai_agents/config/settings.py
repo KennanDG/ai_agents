@@ -121,6 +121,16 @@ class Settings(BaseSettings):
         return None
 
 
+    def resolved_google_api_key(self) -> str | None:
+        if self.google_api_key:
+            return self.google_api_key
+
+        if self.google_secret_arn:
+            self.google_api_key = get_secret_json(self.google_secret_arn).get("GOOGLE_API_KEY")
+            return self.google_api_key
+
+        return None
+
     model_config = SettingsConfigDict(
         env_file=os.getenv("ENV_FILE", ".env"),
         extra="ignore"
@@ -190,19 +200,19 @@ class Settings(BaseSettings):
 
 
     # Chat model routing. Model IDs can be overridden by the runtime admin API.
-    coding_provider: Literal["groq", "deepseek", "openrouter", "openai", "anthropic"] = Field(
+    coding_provider: Literal["groq", "deepseek", "openrouter", "openai", "anthropic", "google"] = Field(
         default="groq",
         alias="CODING_PROVIDER",
     )
-    reasoning_provider: Literal["groq", "deepseek", "openrouter", "openai", "anthropic"] = Field(
+    reasoning_provider: Literal["groq", "deepseek", "openrouter", "openai", "anthropic", "google"] = Field(
         default="deepseek",
         alias="REASONING_PROVIDER",
     )
-    caption_provider: Literal["groq", "openrouter", "openai", "anthropic"] = Field(
+    caption_provider: Literal["groq", "openrouter", "openai", "anthropic", "google"] = Field(
         default="groq",
         alias="CAPTION_PROVIDER",
     )
-    voice_chat_provider: Literal["groq", "deepseek", "openrouter", "openai", "anthropic"] = Field(
+    voice_chat_provider: Literal["groq", "deepseek", "openrouter", "openai", "anthropic", "google"] = Field(
         default="groq",
         alias="VOICE_CHAT_PROVIDER",
     )
@@ -242,13 +252,42 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str | None = Field(default=None, alias="ANTHROPIC_API_KEY")
     anthropic_api_url: str = Field(default="https://api.anthropic.com", alias="ANTHROPIC_URL")
-    anthropic_secret_arn: str | None = Field(default=None, alias="ANTHROPIC_SECRET_ARN")
+    anthropic_secret_arn: str | None = Field(default=None, alias="ANTHROPIC_SECRET_ARN")    
+    google_api_key: str | None = Field(default=None, alias="GOOGLE_API_KEY")
+    google_api_url: str = Field(default="https://generativelanguage.googleapis.com/v1beta", alias="GOOGLE_URL")
+    google_secret_arn: str | None = Field(default=None, alias="GOOGLE_SECRET_ARN")
 
     # Non-secret runtime model selections are persisted here. Provider secrets remain
     # in environment/Secrets Manager or in the current backend process only.
     runtime_agent_config_path: str = Field(
         default=".ai-agents/runtime-agent-config.json",
         alias="AI_AGENTS_RUNTIME_CONFIG_PATH",
+    )
+
+    # Coding-agent execution profile. These defaults can be changed through the
+    # admin UI and are applied to new runs. Hard request bounds remain server-side.
+    coding_subagent_count: int = Field(
+        default=3, ge=1, le=6, alias="CODING_AGENT_MAX_CONTEXT_WORKERS"
+    )
+    coding_route_max_tokens: int = Field(
+        default=700, ge=256, le=2_000, alias="CODING_AGENT_ROUTE_MAX_TOKENS"
+    )
+    coding_planner_max_tokens: int = Field(
+        default=2_400, ge=512, le=6_000, alias="CODING_AGENT_PLANNER_MAX_TOKENS"
+    )
+    coding_repo_navigation_max_tokens: int = Field(
+        default=1_600, ge=512, le=4_000,
+        alias="CODING_AGENT_REPO_NAVIGATION_MAX_TOKENS",
+    )
+    coding_simple_patch_max_tokens: int = Field(
+        default=6_000, ge=2_000, le=16_000,
+        alias="CODING_AGENT_SIMPLE_PATCH_MAX_TOKENS",
+    )
+    coding_patch_max_tokens: int = Field(
+        default=12_000, ge=4_000, le=32_000, alias="CODING_AGENT_PATCH_MAX_TOKENS"
+    )
+    coding_progress_max_tokens: int = Field(
+        default=1_200, ge=512, le=4_000, alias="CODING_AGENT_PROGRESS_MAX_TOKENS"
     )
     
 

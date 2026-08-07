@@ -40,8 +40,52 @@ class CodingAgentSettings:
     """Runtime guardrails for the coding agent."""
 
     repo_root: Path = Path.cwd()
-    max_search_results: int = 50
-    max_file_chars: int = 25_000
+    max_search_results: int = _env_int("CODING_AGENT_MAX_SEARCH_RESULTS", 50)
+
+    # Context engineering. Large files are retained at intake, then reduced to
+    # relevant line windows before they are placed in an LLM prompt.
+    max_file_chars: int = _env_int("CODING_AGENT_MAX_FILE_CHARS", 1_000_000)
+    max_full_file_chars: int = _env_int("CODING_AGENT_MAX_FULL_FILE_CHARS", 60_000)
+    context_chunk_chars: int = _env_int("CODING_AGENT_CONTEXT_CHUNK_CHARS", 12_000)
+    context_chunk_overlap_chars: int = _env_int(
+        "CODING_AGENT_CONTEXT_CHUNK_OVERLAP_CHARS", 1_500
+    )
+    max_context_prompt_chars: int = _env_int(
+        "CODING_AGENT_MAX_CONTEXT_PROMPT_CHARS", 120_000
+    )
+    max_context_workers: int = _env_int("CODING_AGENT_MAX_CONTEXT_WORKERS", 4)
+    max_worker_files: int = _env_int("CODING_AGENT_MAX_WORKER_FILES", 6)
+    max_attached_files: int = _env_int("CODING_AGENT_MAX_ATTACHED_FILES", 20)
+    max_attachment_storage_chars: int = _env_int(
+        "CODING_AGENT_MAX_ATTACHMENT_STORAGE_CHARS", 1_000_000
+    )
+    max_total_attachment_storage_chars: int = _env_int(
+        "CODING_AGENT_MAX_TOTAL_ATTACHMENT_STORAGE_CHARS", 3_000_000
+    )
+
+    # Latency controls. Deterministic routing/navigation remove unnecessary LLM
+    # calls; the reasoning model is reserved for the final patch and repair loops.
+    fast_path_enabled: bool = _env_bool("CODING_AGENT_FAST_PATH_ENABLED", True)
+    llm_skill_routing_enabled: bool = _env_bool(
+        "CODING_AGENT_LLM_SKILL_ROUTING_ENABLED", False
+    )
+    llm_navigation_enabled: bool = _env_bool(
+        "CODING_AGENT_LLM_NAVIGATION_ENABLED", False
+    )
+    model_timeout_seconds: int = _env_int("CODING_AGENT_MODEL_TIMEOUT_SECONDS", 120)
+    # Output-token budgets. These are run-time tunable, but the API enforces
+    # conservative lower/upper bounds so one user cannot create an unbounded run.
+    route_max_tokens: int = _env_int("CODING_AGENT_ROUTE_MAX_TOKENS", 900)
+    planner_max_tokens: int = _env_int("CODING_AGENT_PLANNER_MAX_TOKENS", 3_000)
+    repo_navigation_max_tokens: int = _env_int(
+        "CODING_AGENT_REPO_NAVIGATION_MAX_TOKENS", 1_600
+    )
+    simple_patch_max_tokens: int = _env_int(
+        "CODING_AGENT_SIMPLE_PATCH_MAX_TOKENS", 8_000
+    )
+    patch_max_tokens: int = _env_int("CODING_AGENT_PATCH_MAX_TOKENS", 20_000)
+    progress_max_tokens: int = _env_int("CODING_AGENT_PROGRESS_MAX_TOKENS", 1_200)
+
     dry_run: bool = True
     allow_write: bool = False
     allow_shell: bool = True

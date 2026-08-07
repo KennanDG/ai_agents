@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -10,15 +9,18 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from ai_agents.agents.coding.registry import SkillRegistry
 from ai_agents.agents.voice.service import VoiceAgentService
 from ai_agents.api.schemas import VoiceAgentTurnResponse
+from ai_agents.config.constants import (
+    MAX_VOICE_ATTACHMENTS,
+    MAX_VOICE_ATTACHMENT_CONTENT_CHARS,
+    MAX_TOTAL_VOICE_ATTACHMENT_CONTENT_CHARS,
+    MAX_VOICE_SKILL_CONTEXT_CHARS,
+    VOICE_SKILLS_DIR
+)
 
 
 router = APIRouter(prefix="/voice-agent", tags=["voice-agent"])
 
-MAX_VOICE_ATTACHMENTS = 5
-MAX_VOICE_ATTACHMENT_CONTENT_CHARS = 20_000
-MAX_TOTAL_VOICE_ATTACHMENT_CONTENT_CHARS = 60_000
-MAX_VOICE_SKILL_CONTEXT_CHARS = 3_600
-VOICE_SKILLS_DIR = Path(__file__).resolve().parents[2] / "agents" / "voice" / "skills"
+
 
 
 def _voice_skill_system_message() -> dict[str, str] | None:

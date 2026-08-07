@@ -5,7 +5,6 @@ import asyncio
 import base64
 import binascii
 import mimetypes
-import re
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,63 +42,19 @@ from ai_agents.agents.coding.sandbox import (
 )
 from ai_agents.agents.coding.utils.validation import validation_failed_results
 from ai_agents.config.settings import settings as config_settings
-
-
-
-IGNORED_REPOSITORY_FILES = {
-    ".DS_Store",
-    "Thumbs.db",
-}
-
-IGNORED_REPOSITORY_DIRS = {
-    ".git",
-    ".hg",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".tox",
-    ".venv",
-    "__pycache__",
-    "build",
-    "dist",
-    "node_modules",
-    "venv",
-}
-
-MAX_REPOSITORY_FILE_BYTES = 1_000_000
-MAX_ATTACHED_FILES = 10
-MAX_ATTACHMENT_CHARS = 50_000
-MAX_TOTAL_ATTACHMENT_CHARS = 150_000
-MAX_ATTACHED_IMAGE_BYTES = 5_000_000
-
-ALLOWED_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp"}
-
-IMAGE_DATA_URL_RE = re.compile(
-    r"^data:(?P<mime>image/(?:png|jpeg|jpg|webp));base64,(?P<data>[A-Za-z0-9+/=\r\n]+)$",
-    re.IGNORECASE,
+from ai_agents.config.constants import (
+    IGNORED_REPOSITORY_FILES, 
+    IGNORED_REPOSITORY_DIRS,
+    MAX_REPOSITORY_FILE_BYTES,
+    MAX_ATTACHED_FILES,
+    MAX_ATTACHMENT_CHARS,
+    MAX_TOTAL_ATTACHMENT_CHARS,
+    MAX_ATTACHED_IMAGE_BYTES,
+    ALLOWED_IMAGE_MIME_TYPES,
+    IMAGE_DATA_URL_RE,
+    LANGUAGE_BY_EXTENSION,
 )
 
-
-LANGUAGE_BY_EXTENSION = {
-    ".css": "css",
-    ".html": "html",
-    ".js": "javascript",
-    ".jsx": "javascript",
-    ".json": "json",
-    ".md": "markdown",
-    ".py": "python",
-    ".sql": "sql",
-    ".ts": "typescript",
-    ".tsx": "typescript",
-    # ".txt": "plaintext",
-    ".toml": "toml",
-    ".yml": "yaml",
-    ".yaml": "yaml",
-    ".cpp": "cpp",
-    ".hpp": "cpp",
-    ".rs": "rust",
-    ".java": "java",
-}
 
 
 
@@ -604,19 +559,25 @@ def _normalize_attached_files(
             errors.append(f"Skipped attachment {name}: empty content.")
             continue
 
-        remaining = MAX_TOTAL_ATTACHMENT_CHARS - total_chars
+        # Preserve complete text at intake. Prompt-time context selection happens
+        # later in parallel workers, so silently truncating here only guarantees that
+        # the patcher can never recover the omitted section.
+        if len(content) > MAX_ATTACHMENT_CHARS:
+            errors.append(
+                f"Skipped attachment {name}: {len(content)} characters exceeds the "
+                f"{MAX_ATTACHMENT_CHARS}-character intake ceiling. Attach it as a "
+                "repository file/path or raise CODING_AGENT_MAX_ATTACHMENT_STORAGE_CHARS."
+            )
+            continue
 
-        if remaining <= 0:
-            errors.append("Skipped remaining attachments: total attachment context limit reached.")
-            break
-
-        content, truncated_by_file_limit = _truncate_text(
-            content,
-            min(MAX_ATTACHMENT_CHARS, remaining),
-        )
+        if total_chars + len(content) > MAX_TOTAL_ATTACHMENT_CHARS:
+            errors.append(
+                f"Skipped attachment {name}: total attachment storage would exceed "
+                f"{MAX_TOTAL_ATTACHMENT_CHARS} characters."
+            )
+            continue
 
         total_chars += len(content)
-
         normalized.append(
             {
                 "name": name,
@@ -625,11 +586,7 @@ def _normalize_attached_files(
                 "mime_type": mime_type,
                 "size": attached.size,
                 "content": content,
-                "truncated": (
-                    bool(attached.truncated)
-                    or truncated_by_file_limit
-                    or total_chars >= MAX_TOTAL_ATTACHMENT_CHARS
-                ),
+                "truncated": bool(attached.truncated),
             }
         )
 
@@ -660,6 +617,13 @@ def _public_result(state: dict[str, Any], thread_id: str) -> CodingAgentRunResul
         status=str(state.get("status", "unknown")),
         report=state.get("report"),
         selected_skill=state.get("selected_skill"),
+        task_mode=state.get("task_mode"),
+        subtasks=list(state.get("subtasks") or []),
+        context_worker_count=sum(
+            1
+            for item in state.get("context_worker_results", [])
+            if int(item.get("generation", -1)) == int(state.get("context_generation", 0))
+        ),
         route_confidence=state.get("route_confidence"),
         route_reason=state.get("route_reason"),
         plan=list(state.get("plan") or []),
@@ -706,7 +670,32 @@ def _stream_coding_agent_worker(
     thread_id = request.thread_id or _new_thread_id()
 
     try:
-        cfg = default_coding_settings
+        cfg = replace(
+            default_coding_settings,
+            max_context_workers=(
+                request.subagent_count or config_settings.coding_subagent_count
+            ),
+            route_max_tokens=(
+                request.route_max_tokens or config_settings.coding_route_max_tokens
+            ),
+            planner_max_tokens=(
+                request.planner_max_tokens or config_settings.coding_planner_max_tokens
+            ),
+            repo_navigation_max_tokens=(
+                request.repo_navigation_max_tokens
+                or config_settings.coding_repo_navigation_max_tokens
+            ),
+            simple_patch_max_tokens=(
+                request.simple_patch_max_tokens
+                or config_settings.coding_simple_patch_max_tokens
+            ),
+            patch_max_tokens=(
+                request.patch_max_tokens or config_settings.coding_patch_max_tokens
+            ),
+            progress_max_tokens=(
+                request.progress_max_tokens or config_settings.coding_progress_max_tokens
+            ),
+        )
 
         if request.memory_enabled is not None:
             cfg = replace(cfg, memory_enabled=request.memory_enabled) # set up memory
@@ -751,6 +740,15 @@ def _stream_coding_agent_worker(
                     "repo_root": repo_root,
                     "workspace_root": workspace_root,
                     "allow_write": request.allow_write,
+                    "subagent_count": cfg.max_context_workers,
+                    "token_budgets": {
+                        "route": cfg.route_max_tokens,
+                        "planner": cfg.planner_max_tokens,
+                        "repo_navigation": cfg.repo_navigation_max_tokens,
+                        "simple_patch": cfg.simple_patch_max_tokens,
+                        "patch": cfg.patch_max_tokens,
+                        "progress": cfg.progress_max_tokens,
+                    },
                 },
             ),
         )
@@ -772,6 +770,15 @@ def _stream_coding_agent_worker(
             "sandbox_root": str(sandbox.sandbox_root),
             "sandbox_enabled": True,
             "allow_write": request.allow_write,
+            "runtime_settings": {
+                "max_context_workers": cfg.max_context_workers,
+                "route_max_tokens": cfg.route_max_tokens,
+                "planner_max_tokens": cfg.planner_max_tokens,
+                "repo_navigation_max_tokens": cfg.repo_navigation_max_tokens,
+                "simple_patch_max_tokens": cfg.simple_patch_max_tokens,
+                "patch_max_tokens": cfg.patch_max_tokens,
+                "progress_max_tokens": cfg.progress_max_tokens,
+            },
             "attached_files": attached_files,
             "attached_files_used": [],
             "attachment_errors": attachment_errors,
@@ -782,6 +789,11 @@ def _stream_coding_agent_worker(
             "continue_loop": False,
             "remaining_tasks": [],
             "loop_notes": [],
+            "task_mode": "standard",
+            "subtasks": [],
+            "context_generation": 0,
+            "context_worker_results": [],
+            "requested_context": [],
         }
 
         final_state = dict(initial_state)

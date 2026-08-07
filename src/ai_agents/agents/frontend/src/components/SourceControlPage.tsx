@@ -41,17 +41,22 @@ type SourceControlPageProps = {
   githubActionError: string | null;
   githubPullRequestUrl: string | null;
   committableFileCount: number;
+  lastCommit: {
+    branch: string;
+    commitSha: string;
+    committedFiles: string[];
+  } | null;
   onTestGitHubConnection: () => void;
   onCreateGitHubBranch: (branch: string) => void;
   onPullGitHubBranch: () => void;
-  onCommitGitHubChanges: (message: string) => void;
+  onCommitGitHubChanges: (message: string) => Promise<boolean>;
   onPushGitHubBranch: () => void;
   onCreateGitHubPullRequest: (request: {
     title: string;
     body: string;
     base: string;
     draft: boolean;
-  }) => void;
+  }) => Promise<boolean>;
 };
 
 const FieldLabel = ({ children }: { children: ReactNode }) => (
@@ -111,6 +116,7 @@ export const SourceControlPage = ({
   githubActionError,
   githubPullRequestUrl,
   committableFileCount,
+  lastCommit,
   onTestGitHubConnection,
   onCreateGitHubBranch,
   onPullGitHubBranch,
@@ -124,10 +130,15 @@ export const SourceControlPage = ({
   const [prBody, setPrBody] = useState("");
   const [prBase, setPrBase] = useState(defaultBranch ?? "main");
   const [draft, setDraft] = useState(true);
+  const [lastCommitVisible, setLastCommitVisible] = useState(true);
 
   useEffect(() => {
     if (defaultBranch) setPrBase(defaultBranch);
   }, [defaultBranch]);
+
+  useEffect(() => {
+    setLastCommitVisible(true);
+  }, [lastCommit?.commitSha]);
 
   const selectedSummary = useMemo(
     () => githubRepositories.find((item) => item.full_name === selectedGitHubRepository) ?? null,
@@ -146,6 +157,29 @@ export const SourceControlPage = ({
       githubRepositoryStatus &&
       !githubRepositoryStatus.dirty,
   );
+
+  const handleCommit = async () => {
+    const committed = await onCommitGitHubChanges(commitMessage.trim());
+    if (committed) {
+      setCommitMessage("");
+    }
+  };
+
+  const handleCreatePullRequest = async () => {
+    const created = await onCreateGitHubPullRequest({
+      title: prTitle.trim(),
+      body: prBody,
+      base: prBase,
+      draft,
+    });
+
+    if (created) {
+      setPrTitle("");
+      setPrBody("");
+      setPrBase(defaultBranch ?? "main");
+      setDraft(true);
+    }
+  };
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-canvas">
@@ -332,7 +366,10 @@ export const SourceControlPage = ({
                     <button
                       type="button"
                       className="secondary-button"
-                      onClick={onPushGitHubBranch}
+                      onClick={() => {
+                        setLastCommitVisible(false);
+                        onPushGitHubBranch();
+                      }}
                       disabled={busy || !canPush}
                     >
                       {githubActionLoading === "push" ? (
@@ -351,6 +388,27 @@ export const SourceControlPage = ({
                   <StatusList title="Untracked" paths={githubRepositoryStatus?.untracked_files ?? []} />
                 </div>
 
+                {lastCommit && lastCommitVisible ? (
+                  <div className="mt-3 rounded-lg border border-emerald-500/20 bg-emerald-500/6 p-3">
+                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 size={13} className="text-emerald-300" />
+                        <span className="text-xs font-semibold text-emerald-200">Last committed files</span>
+                      </div>
+                      <span className="font-mono text-[9px] text-emerald-300/80">
+                        {lastCommit.branch} · {lastCommit.commitSha.slice(0, 7)}
+                      </span>
+                    </div>
+                    <div className="max-h-40 space-y-1 overflow-auto">
+                      {lastCommit.committedFiles.map((path) => (
+                        <div key={path} className="truncate font-mono text-[10px] text-emerald-200/80" title={path}>
+                          {path}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
                 <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto]">
                   <div>
                     <FieldLabel>Commit message</FieldLabel>
@@ -365,7 +423,7 @@ export const SourceControlPage = ({
                     type="button"
                     className="primary-button mt-auto h-8"
                     disabled={!canCommit || busy}
-                    onClick={() => onCommitGitHubChanges(commitMessage.trim())}
+                    onClick={() => void handleCommit()}
                   >
                     {githubActionLoading === "commit" ? (
                       <LoaderCircle size={12} className="animate-spin" />
@@ -436,14 +494,7 @@ export const SourceControlPage = ({
                   type="button"
                   className="primary-button h-8 w-full justify-center"
                   disabled={!canOpenPr || busy}
-                  onClick={() =>
-                    onCreateGitHubPullRequest({
-                      title: prTitle.trim(),
-                      body: prBody,
-                      base: prBase,
-                      draft,
-                    })
-                  }
+                  onClick={() => void handleCreatePullRequest()}
                 >
                   {githubActionLoading === "pr" ? (
                     <LoaderCircle size={12} className="animate-spin" />

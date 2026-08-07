@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from typing import Any
-
-from langgraph.graph import END, START, StateGraph
-from langgraph.types import RetryPolicy
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.graph import END, START, StateGraph
 from langgraph.store.base import BaseStore
+from langgraph.types import RetryPolicy
 
 from ai_agents.agents.coding.memory import CodingAgentRuntimeContext
 from ai_agents.agents.coding.nodes import (
     assess_progress_node,
+    assign_context_workers,
+    context_worker_node,
     gather_context_node,
     gmail_access_node,
     patch_node,
@@ -22,18 +22,14 @@ from ai_agents.agents.coding.nodes import (
     validate_node,
     web_search_node,
 )
-
-
 from ai_agents.agents.coding.routing import (
     route_after_assess,
-    route_after_plan,
     route_after_context,
     route_after_patch,
+    route_after_plan,
     route_after_validate,
 )
-
 from ai_agents.agents.coding.state import CodingAgentState
-
 
 
 def build_coding_agent_graph(
@@ -42,29 +38,36 @@ def build_coding_agent_graph(
     store: BaseStore | None = None,
 ):
     builder = StateGraph(CodingAgentState, context_schema=CodingAgentRuntimeContext)
+
+    # Avoid multiplying provider retries, parser retries, and graph retries. Only
+    # external memory/connectors receive a second graph-level attempt.
+    no_retry = RetryPolicy(max_attempts=1)
     transient_retry = RetryPolicy(
-        max_attempts=3,
-        initial_interval=1.0,
+        max_attempts=2,
+        initial_interval=0.5,
         backoff_factor=2.0,
-        max_interval=8.0,
+        max_interval=2.0,
     )
 
-    builder.add_node("route", route_node, retry_policy=transient_retry)
+    builder.add_node("route", route_node, retry_policy=no_retry)
     builder.add_node("recall_memory", recall_memory_node, retry_policy=transient_retry)
-    builder.add_node("plan", plan_node, retry_policy=transient_retry)
-    builder.add_node("repo_navigator", repo_navigator_node, retry_policy=transient_retry)
-    builder.add_node("gather_context", gather_context_node, retry_policy=transient_retry)
-    builder.add_node("patch", patch_node, retry_policy=transient_retry)
-    builder.add_node("validate", validate_node, retry_policy=transient_retry)
-    builder.add_node("assess_progress", assess_progress_node, retry_policy=transient_retry)
-    builder.add_node("report", report_node, retry_policy=transient_retry)
+    builder.add_node("plan", plan_node, retry_policy=no_retry)
+    builder.add_node("repo_navigator", repo_navigator_node, retry_policy=no_retry)
+    builder.add_node("context_worker", context_worker_node, retry_policy=no_retry)
+    builder.add_node("gather_context", gather_context_node, retry_policy=no_retry)
+    builder.add_node("patch", patch_node, retry_policy=no_retry)
+    builder.add_node("validate", validate_node, retry_policy=no_retry)
+    builder.add_node("assess_progress", assess_progress_node, retry_policy=no_retry)
+    builder.add_node("report", report_node, retry_policy=no_retry)
     builder.add_node("remember_run", remember_run_node, retry_policy=transient_retry)
     builder.add_node("web_search", web_search_node, retry_policy=transient_retry)
     builder.add_node("gmail_access", gmail_access_node, retry_policy=transient_retry)
 
+    # Routing and memory recall are independent and run in the same super-step.
     builder.add_edge(START, "route")
-    builder.add_edge("route", "recall_memory")
-    builder.add_edge("recall_memory", "plan")
+    builder.add_edge(START, "recall_memory")
+    builder.add_edge(["route", "recall_memory"], "plan")
+
     builder.add_conditional_edges(
         "plan",
         route_after_plan,
@@ -76,14 +79,20 @@ def build_coding_agent_graph(
     )
     builder.add_edge("web_search", "repo_navigator")
     builder.add_edge("gmail_access", "repo_navigator")
-    builder.add_edge("repo_navigator", "gather_context")
+
+    # Dynamic fan-out: every context worker receives an isolated subtask and all
+    # outputs are reduced into context_worker_results before gather_context runs.
+    builder.add_conditional_edges(
+        "repo_navigator",
+        assign_context_workers,
+        ["context_worker"],
+    )
+    builder.add_edge("context_worker", "gather_context")
+
     builder.add_conditional_edges(
         "gather_context",
         route_after_context,
-        {
-            "patch": "patch",
-            "report": "report",
-        },
+        {"patch": "patch", "report": "report"},
     )
     builder.add_conditional_edges(
         "patch",
@@ -99,15 +108,13 @@ def build_coding_agent_graph(
         route_after_validate,
         {
             "assess_progress": "assess_progress",
+            "report": "report",
         },
     )
     builder.add_conditional_edges(
         "assess_progress",
         route_after_assess,
-        {
-            "repo_navigator": "repo_navigator",
-            "report": "report",
-        },
+        {"repo_navigator": "repo_navigator", "report": "report"},
     )
     builder.add_edge("report", "remember_run")
     builder.add_edge("remember_run", END)

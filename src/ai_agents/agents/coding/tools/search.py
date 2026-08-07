@@ -10,7 +10,7 @@ from typing import Any, Iterable, Literal, Mapping, Sequence
 from ai_agents.agents.coding.tools.filesystem import DEFAULT_IGNORES, read_file
 from ai_agents.agents.coding.utils.search import is_ignored_context_path
 from ai_agents.agents.coding.utils.constants import TEXT_SUFFIXES, PYTHON_SYMBOL_KINDS
-from ai_agents.agents.coding.schemas import RepoSearchRequest, PythonSymbol, SearchMode
+from ai_agents.agents.coding.coding_agent_schemas import RepoSearchRequest, PythonSymbol, SearchMode
 
 
 

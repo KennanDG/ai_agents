@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-from typing import Any, Literal, TypedDict
-from ai_agents.api.schemas import CodingAgentAttachedFile
+import operator
+from typing import Annotated, Any, Literal, TypedDict
 
 
 CodingAgentStatus = Literal[
     "planned",
     "routed",
+    "route_failed",
     "repo_navigated",
     "repo_navigation_failed",
+    "context_workers_completed",
     "web_search_skipped",
     "web_search_completed",
     "web_search_failed",
@@ -35,11 +37,21 @@ class CodingAgentState(TypedDict, total=False):
     repo_root: str          # target root for searching/patching
     workspace_root: str     # project root for validation
     allow_write: bool
+    runtime_settings: dict[str, int]
 
     attached_files: list[dict[str, Any]]
     attached_files_used: list[str]
     attachment_errors: list[str]
-    
+
+    # Execution strategy. Simple tasks use a deterministic fast path; parallel
+    # tasks fan out read-only context workers with isolated inputs.
+    task_mode: Literal["simple", "standard", "parallel"]
+    subtasks: list[dict[str, Any]]
+    active_subtask: dict[str, Any]
+    context_generation: int
+    context_worker_results: Annotated[list[dict[str, Any]], operator.add]
+    requested_context: list[dict[str, Any]]
+
     selected_skill: str
     skill_instructions: str
     route_confidence: float
@@ -48,7 +60,8 @@ class CodingAgentState(TypedDict, total=False):
 
     plan: list[str]
     search_requests: list[dict[str, Any]]
-    search_queries: list[str]  # legacy fallback while migrating to structured search
+    search_queries: list[str]  # legacy fallback while migrating to structured search    
+    web_search_query: str
     search_results: list[dict[str, Any]]
 
     long_term_memories: list[str]
@@ -92,7 +105,3 @@ class CodingAgentState(TypedDict, total=False):
     loop_notes: list[str]
     loop_context_focus: str
     progress_reason: str
-
-
-
-    
