@@ -73,6 +73,15 @@ class CodingAgentSettings:
         "CODING_AGENT_LLM_NAVIGATION_ENABLED", False
     )
     model_timeout_seconds: int = _env_int("CODING_AGENT_MODEL_TIMEOUT_SECONDS", 120)
+
+    
+    prompt_caching_enabled: bool = _env_bool("CODING_AGENT_PROMPT_CACHING_ENABLED", True)
+    prompt_cache_version: str = os.getenv("CODING_AGENT_PROMPT_CACHE_VERSION", "v1")
+    anthropic_prompt_cache_ttl: str = os.getenv(
+        "CODING_AGENT_ANTHROPIC_PROMPT_CACHE_TTL",
+        "5m",
+    )
+
     # Output-token budgets. These are run-time tunable, but the API enforces
     # conservative lower/upper bounds so one user cannot create an unbounded run.
     route_max_tokens: int = _env_int("CODING_AGENT_ROUTE_MAX_TOKENS", 900)

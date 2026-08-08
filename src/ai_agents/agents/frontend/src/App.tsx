@@ -327,6 +327,7 @@ const App = () => {
   // const [outputOpen, setOutputOpen] = useState(false);
 
   const [repoRoot, setRepoRoot] = useState(configuredRepoRoot);
+  const [localRepoRoot, setLocalRepoRoot] = useState(configuredRepoRoot);
   const [repoEntries, setRepoEntries] = useState<RepositoryTreeEntry[]>([]);
   const [repoLoading, setRepoLoading] = useState(false);
   const [repoError, setRepoError] = useState<string | null>(null);
@@ -394,11 +395,10 @@ const App = () => {
     ]);
     return [...new Set(run.appliedFiles)].filter((path) => changedPaths.has(path));
   }, [githubRepositoryStatus, run.appliedFiles]);
-  const effectiveWorkspaceRoot = selectedGitHubRepository
-    ? repoRoot
-    : configuredWorkspaceRoot === configuredRepoRoot
-      ? repoRoot
-      : configuredWorkspaceRoot;
+  const effectiveWorkspaceRoot =
+    repoRoot === configuredRepoRoot && configuredWorkspaceRoot !== configuredRepoRoot
+      ? configuredWorkspaceRoot
+      : repoRoot;
 
   const loadRepository = useCallback(async (targetRoot: string) => {
     setRepoLoading(true);
@@ -412,8 +412,10 @@ const App = () => {
       const firstFile = tree.entries.find((entry) => entry.kind === "file");
       setActivePath(firstFile?.path ?? null);
       setActiveFile(null);
+      return tree.repo_root;
     } catch (error) {
       setRepoError(error instanceof Error ? error.message : "Failed to load repository.");
+      return null;
     } finally {
       setRepoLoading(false);
     }
@@ -502,14 +504,52 @@ const App = () => {
     }
   }, [githubRepositories, loadGitHubRepositoryStatus, loadRepository, resetAgentWorkspace]);
 
-  const useLocalRepository = useCallback(async () => {
-    setSelectedGitHubRepository(null);
-    setCurrentBranch(null);
-    setGitHubRepositoryStatus(null);
+  const selectLocalRepository = useCallback(async (targetRoot: string) => {
+    const normalizedRoot = targetRoot.trim();
+    if (!normalizedRoot) {
+      setGitHubActionError("Enter a local directory path.");
+      return false;
+    }
+
+    setGitHubActionLoading("local-repository");
     clearGitHubActionFeedback();
-    await loadRepository(configuredRepoRoot);
-    resetAgentWorkspace();
+
+    try {
+      const resolvedRoot = await loadRepository(normalizedRoot);
+      if (!resolvedRoot) {
+        setGitHubActionError("The selected directory could not be opened by the backend.");
+        return false;
+      }
+
+      setLocalRepoRoot(resolvedRoot);
+      setSelectedGitHubRepository(null);
+      setCurrentBranch(null);
+      setGitHubRepositoryStatus(null);
+      resetAgentWorkspace();
+      setGitHubActionMessage(`Using local repository ${resolvedRoot}.`);
+      return true;
+    } finally {
+      setGitHubActionLoading(null);
+    }
   }, [loadRepository, resetAgentWorkspace]);
+
+  const useLocalRepository = useCallback(async () => {
+    await selectLocalRepository(localRepoRoot);
+  }, [localRepoRoot, selectLocalRepository]);
+
+  const browseLocalRepository = useCallback(async () => {
+    const selectDirectory = window.desktop?.selectDirectory;
+    if (!selectDirectory) return null;
+
+    const selectedPath = await selectDirectory({
+      title: "Select repository root",
+      defaultPath: localRepoRoot,
+    });
+    if (!selectedPath) return null;
+
+    const selected = await selectLocalRepository(selectedPath);
+    return selected ? selectedPath : null;
+  }, [localRepoRoot, selectLocalRepository]);
 
   const switchBranch = useCallback(async (branchName: string) => {
     if (!selectedGitHubRepository || branchName === currentBranch) return;
@@ -694,7 +734,9 @@ const App = () => {
   }, [currentBranch, selectedGitHubRepository]);
 
   useEffect(() => {
-    void loadRepository(configuredRepoRoot);
+    void loadRepository(configuredRepoRoot).then((resolvedRoot) => {
+      if (resolvedRoot) setLocalRepoRoot(resolvedRoot);
+    });
     void refreshGitHubRepositories();
     void fetchAgentConfiguration({ apiBaseUrl, apiKey })
       .then(setAgentConfiguration)
@@ -1093,14 +1135,17 @@ const App = () => {
         </>
       ) : activeView === "source-control" ? (
         <SourceControlPage
-          repoName={repoName}
           repoRoot={repoRoot}
+          localRepoRoot={localRepoRoot}
+          localDirectoryPickerAvailable={Boolean(window.desktop?.selectDirectory)}
           githubRepositories={githubRepositories}
           selectedGitHubRepository={selectedGitHubRepository}
           githubLoading={githubLoading}
           githubError={githubError}
           onSelectGitHubRepository={selectGitHubRepository}
           onUseLocalRepository={useLocalRepository}
+          onSelectLocalRepository={selectLocalRepository}
+          onBrowseLocalRepository={browseLocalRepository}
           onRefreshGitHubRepositories={refreshGitHubRepositories}
           branches={branches}
           currentBranch={currentBranch}

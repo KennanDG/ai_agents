@@ -1,10 +1,47 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  shell,
+  type OpenDialogOptions,
+} from "electron";
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const applicationRoot = path.join(currentDirectory, "..");
 const developmentServerUrl = process.env.VITE_DEV_SERVER_URL;
+
+type DesktopDirectoryPickerOptions = {
+  title?: string;
+  defaultPath?: string;
+};
+
+function registerDesktopDirectoryPicker() {
+  ipcMain.handle(
+    "desktop:select-directory",
+    async (event, options?: DesktopDirectoryPickerOptions) => {
+      const owner = BrowserWindow.fromWebContents(event.sender);
+
+      const dialogOptions: OpenDialogOptions = {
+        title: options?.title ?? "Select repository root",
+        defaultPath: options?.defaultPath,
+        properties: ["openDirectory", "createDirectory"],
+      };
+
+      const result = owner
+        ? await dialog.showOpenDialog(owner, dialogOptions)
+        : await dialog.showOpenDialog(dialogOptions);
+
+      if (result.canceled) {
+        return null;
+      }
+
+      return result.filePaths[0] ?? null;
+    },
+  );
+}
 
 function createWindow() {
   const window = new BrowserWindow({
@@ -35,13 +72,19 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  registerDesktopDirectoryPicker();
+
   createWindow();
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+    }
   });
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  if (process.platform !== "darwin") {
+    app.quit();
+  }
 });
