@@ -32,7 +32,35 @@ def _env_csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(item.strip() for item in value.split(",") if item.strip())
 
 
-_MEMORY_DB_URI = os.getenv("CODING_AGENT_MEMORY_DB_URI") or os.getenv("DATABASE_URL")
+# _MEMORY_DB_URI = os.getenv("CODING_AGENT_MEMORY_DB_URI") or os.getenv("DATABASE_URL")
+
+_MEMORY_DIR = Path(
+    os.getenv(
+        "CODING_AGENT_MEMORY_DIR",
+        ".ai-agents/memory",
+    )
+).expanduser()
+
+_MEMORY_CHECKPOINT_DB = Path(
+    os.getenv(
+        "CODING_AGENT_MEMORY_CHECKPOINT_DB",
+        str(_MEMORY_DIR / "checkpoints.sqlite3"),
+    )
+).expanduser()
+
+_MEMORY_STORE_DB = Path(
+    os.getenv(
+        "CODING_AGENT_MEMORY_STORE_DB",
+        str(_MEMORY_DIR / "store.sqlite3"),
+    )
+).expanduser()
+
+_MEMORY_EMBEDDING_CACHE = Path(
+    os.getenv(
+        "CODING_AGENT_MEMORY_EMBEDDING_CACHE_DIR",
+        str(_MEMORY_DIR / "fastembed-cache"),
+    )
+).expanduser()
 
 
 @dataclass(frozen=True)
@@ -102,21 +130,58 @@ class CodingAgentSettings:
 
     # Persistent LangGraph memory.
     # Checkpoints are thread-scoped; store items are long-term/cross-thread.
-    memory_db_uri: str | None = _MEMORY_DB_URI
-    memory_enabled: bool = _env_bool("CODING_AGENT_MEMORY_ENABLED", bool(_MEMORY_DB_URI))
-    memory_setup: bool = _env_bool("CODING_AGENT_MEMORY_SETUP", False)
-    memory_user_id: str = os.getenv("CODING_AGENT_MEMORY_USER_ID", "default")
-    memory_namespace: str = os.getenv("CODING_AGENT_MEMORY_NAMESPACE", "default")
-    memory_search_limit: int = _env_int("CODING_AGENT_MEMORY_SEARCH_LIMIT", 5)
+    memory_checkpoint_db_path: Path = _MEMORY_CHECKPOINT_DB
+    memory_store_db_path: Path = _MEMORY_STORE_DB
+
+    # Local desktop builds should have persistence enabled by default.
+    memory_enabled: bool = _env_bool(
+        "CODING_AGENT_MEMORY_ENABLED",
+        True,
+    )
+
+    # SQLite setup is cheap/idempotent, so initialize automatically.
+    memory_setup: bool = _env_bool(
+        "CODING_AGENT_MEMORY_SETUP",
+        True,
+    )
+
+    # Single-user local installation defaults.
+    memory_user_id: str = os.getenv(
+        "CODING_AGENT_MEMORY_USER_ID",
+        "local",
+    )
+
+    memory_namespace: str = os.getenv(
+        "CODING_AGENT_MEMORY_NAMESPACE",
+        "default",
+    )
+
+    memory_search_limit: int = _env_int(
+        "CODING_AGENT_MEMORY_SEARCH_LIMIT",
+        5,
+    )
+
+    # Semantic memory is fully local.
     memory_semantic_enabled: bool = _env_bool(
         "CODING_AGENT_MEMORY_SEMANTIC",
-        bool(os.getenv("JINA_API_KEY")),
+        True,
     )
+
+    # Do NOT reuse the application's generic EMBEDDING_MODEL setting.
+    # Coding-agent memory now has its own local embedding configuration.
     memory_embedding_model: str = os.getenv(
-        "EMBEDDING_MODEL",
-        "google_genai:gemini-embedding-2",
+        "CODING_AGENT_MEMORY_EMBEDDING_MODEL",
+        "BAAI/bge-small-en-v1.5",
     )
-    memory_embedding_dims: int = _env_int("CODING_AGENT_MEMORY_EMBEDDING_DIMS", 768)
+
+    # bge-small-en-v1.5 outputs 384-dimensional vectors.
+    memory_embedding_dims: int = _env_int(
+        "CODING_AGENT_MEMORY_EMBEDDING_DIMS",
+        384,
+    )
+
+    memory_embedding_cache_dir: Path = _MEMORY_EMBEDDING_CACHE
+
     memory_index_fields: tuple[str, ...] = _env_csv(
         "CODING_AGENT_MEMORY_INDEX_FIELDS",
         ("text", "request", "summary"),
@@ -124,3 +189,30 @@ class CodingAgentSettings:
 
 
 settings = CodingAgentSettings()
+
+
+
+
+
+
+
+
+# memory_db_uri: str | None = _MEMORY_DB_URI
+#     memory_enabled: bool = _env_bool("CODING_AGENT_MEMORY_ENABLED", bool(_MEMORY_DB_URI))
+#     memory_setup: bool = _env_bool("CODING_AGENT_MEMORY_SETUP", False)
+#     memory_user_id: str = os.getenv("CODING_AGENT_MEMORY_USER_ID", "default")
+#     memory_namespace: str = os.getenv("CODING_AGENT_MEMORY_NAMESPACE", "default")
+#     memory_search_limit: int = _env_int("CODING_AGENT_MEMORY_SEARCH_LIMIT", 5)
+#     memory_semantic_enabled: bool = _env_bool(
+#         "CODING_AGENT_MEMORY_SEMANTIC",
+#         bool(os.getenv("JINA_API_KEY")),
+#     )
+#     memory_embedding_model: str = os.getenv(
+#         "EMBEDDING_MODEL",
+#         "BAAI/bge-small-en-v1.5",
+#     )
+#     memory_embedding_dims: int = _env_int("CODING_AGENT_MEMORY_EMBEDDING_DIMS", 768)
+#     memory_index_fields: tuple[str, ...] = _env_csv(
+#         "CODING_AGENT_MEMORY_INDEX_FIELDS",
+#         ("text", "request", "summary"),
+#     )

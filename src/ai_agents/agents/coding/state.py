@@ -34,8 +34,11 @@ CodingAgentStatus = Literal[
 
 class CodingAgentState(TypedDict, total=False):
     user_request: str
-    repo_root: str          # target root for searching/patching
-    workspace_root: str     # project root for validation
+    repo_root: str              # target root for searching/patching
+    original_repo_root: str     # Stable source repository. Use this for persistence namespaces.
+    workspace_root: str         # project root for validation
+    sandbox_root: str
+    sandbox_enabled: bool
     allow_write: bool
     runtime_settings: dict[str, int]
 

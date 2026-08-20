@@ -41,10 +41,17 @@ class CodingAgentRunRequest(BaseModel):
     workspace_root: str | None = None
     allow_write: bool = False
     thread_id: str | None = None
-    memory_user_id: str | None = None
-    memory_namespace: str | None = None
+    memory_user_id: str | None = Field(
+        default=None,
+        max_length=128,
+    )
+
+    memory_namespace: str | None = Field(
+        default=None,
+        max_length=128,
+    )
     memory_enabled: bool | None = None
-    setup_memory: bool = False
+    setup_memory: bool | None = None
     max_iterations: int | None = Field(default=3, ge=1, le=8)
 
     # Optional per-run overrides. Defaults come from the saved admin profile.
