@@ -75,10 +75,4 @@ export interface AgentMessage {
   run?: AgentRunState;
 }
 
-declare global {
-  interface Window {
-    desktop?: {
-      platform: string;
-    };
-  }
-}
+

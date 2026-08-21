@@ -1,5 +1,5 @@
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, TerminalSquare } from "lucide-react";
-import { useState } from "react";
+import { type MouseEvent as ReactMouseEvent, useState } from "react";
 import type { AgentRunState } from "../types";
 
 interface OutputPanelProps {
@@ -8,11 +8,37 @@ interface OutputPanelProps {
 
 export const OutputPanel = ({ run }: OutputPanelProps) => {
   const [collapsed, setCollapsed] = useState(false);
+  const [height, setHeight] = useState(176);
   const [activeTab, setActiveTab] = useState<"terminal" | "validation" | "problems">("terminal");
   const problemCount = run.errors.length;
 
+  const startResize = (event: ReactMouseEvent) => {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = height;
+    const onMove = (move: MouseEvent) => {
+      const next = startHeight - (move.clientY - startY);
+      setHeight(Math.min(Math.max(next, 80), 600));
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
   return (
-    <section className={`flex shrink-0 flex-col border-t border-line bg-[#080a0e] ${collapsed ? 'h-9' : 'h-44'}`}>
+    <section style={{ height: collapsed ? 36 : height }} className="flex shrink-0 flex-col border-t border-line bg-[#080a0e]">
+      {!collapsed && (
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize output panel"
+          className="h-1 w-full shrink-0 cursor-row-resize hover:bg-accent/60"
+          onMouseDown={startResize}
+        />
+      )}
       <div className="flex h-9 items-center gap-5 border-b border-line px-3">
         <button type="button" className={`output-tab ${activeTab === "terminal" ? "output-tab-active" : ""}`} onClick={() => setActiveTab("terminal")}>Terminal</button>
         <button type="button" className={`output-tab ${activeTab === "validation" ? "output-tab-active" : ""}`} onClick={() => setActiveTab("validation")}>Validation</button>

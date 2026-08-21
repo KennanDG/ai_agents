@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { ActivityBar, type ActivityAction, type ActivityView } from "./components/ActivityBar";
 import { AgentSettingsModal } from "./components/AgentSettingsModal";
 import { SkillsPage } from "./components/SkillsPage";
@@ -76,6 +76,28 @@ type GitHubCommitReceipt = {
 const nowLabel = () => {
   return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date());
 }
+
+const clampSize = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+
+const startPanelResize = (
+  event: ReactMouseEvent,
+  startSize: number,
+  setSize: (size: number) => void,
+  min: number,
+  max: number,
+) => {
+  event.preventDefault();
+  const startX = event.clientX;
+  const onMove = (move: MouseEvent) => {
+    setSize(clampSize(startSize + (move.clientX - startX), min, max));
+  };
+  const onUp = () => {
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+  };
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+};
 
 const base64AudioToObjectUrl = (base64: string, mimeType: string) => {
   const binary = window.atob(base64);
@@ -317,6 +339,9 @@ const App = () => {
   const [activePath, setActivePath] = useState<string | null>(null);
   const [activeFile, setActiveFile] = useState<RepositoryFile | null>(null);
   const [allowWrite, setAllowWrite] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(288);
+  const [taskPanelWidth, setTaskPanelWidth] = useState(360);
+  const [diffPanelHidden, setDiffPanelHidden] = useState(false);
 
   const [fileLoading, setFileLoading] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
@@ -327,6 +352,7 @@ const App = () => {
   // const [outputOpen, setOutputOpen] = useState(false);
 
   const [repoRoot, setRepoRoot] = useState(configuredRepoRoot);
+  const [localRepoRoot, setLocalRepoRoot] = useState(configuredRepoRoot);
   const [repoEntries, setRepoEntries] = useState<RepositoryTreeEntry[]>([]);
   const [repoLoading, setRepoLoading] = useState(false);
   const [repoError, setRepoError] = useState<string | null>(null);
@@ -394,11 +420,10 @@ const App = () => {
     ]);
     return [...new Set(run.appliedFiles)].filter((path) => changedPaths.has(path));
   }, [githubRepositoryStatus, run.appliedFiles]);
-  const effectiveWorkspaceRoot = selectedGitHubRepository
-    ? repoRoot
-    : configuredWorkspaceRoot === configuredRepoRoot
-      ? repoRoot
-      : configuredWorkspaceRoot;
+  const effectiveWorkspaceRoot =
+    repoRoot === configuredRepoRoot && configuredWorkspaceRoot !== configuredRepoRoot
+      ? configuredWorkspaceRoot
+      : repoRoot;
 
   const loadRepository = useCallback(async (targetRoot: string) => {
     setRepoLoading(true);
@@ -412,8 +437,10 @@ const App = () => {
       const firstFile = tree.entries.find((entry) => entry.kind === "file");
       setActivePath(firstFile?.path ?? null);
       setActiveFile(null);
+      return tree.repo_root;
     } catch (error) {
       setRepoError(error instanceof Error ? error.message : "Failed to load repository.");
+      return null;
     } finally {
       setRepoLoading(false);
     }
@@ -502,14 +529,52 @@ const App = () => {
     }
   }, [githubRepositories, loadGitHubRepositoryStatus, loadRepository, resetAgentWorkspace]);
 
-  const useLocalRepository = useCallback(async () => {
-    setSelectedGitHubRepository(null);
-    setCurrentBranch(null);
-    setGitHubRepositoryStatus(null);
+  const selectLocalRepository = useCallback(async (targetRoot: string) => {
+    const normalizedRoot = targetRoot.trim();
+    if (!normalizedRoot) {
+      setGitHubActionError("Enter a local directory path.");
+      return false;
+    }
+
+    setGitHubActionLoading("local-repository");
     clearGitHubActionFeedback();
-    await loadRepository(configuredRepoRoot);
-    resetAgentWorkspace();
+
+    try {
+      const resolvedRoot = await loadRepository(normalizedRoot);
+      if (!resolvedRoot) {
+        setGitHubActionError("The selected directory could not be opened by the backend.");
+        return false;
+      }
+
+      setLocalRepoRoot(resolvedRoot);
+      setSelectedGitHubRepository(null);
+      setCurrentBranch(null);
+      setGitHubRepositoryStatus(null);
+      resetAgentWorkspace();
+      setGitHubActionMessage(`Using local repository ${resolvedRoot}.`);
+      return true;
+    } finally {
+      setGitHubActionLoading(null);
+    }
   }, [loadRepository, resetAgentWorkspace]);
+
+  const useLocalRepository = useCallback(async () => {
+    await selectLocalRepository(localRepoRoot);
+  }, [localRepoRoot, selectLocalRepository]);
+
+  const browseLocalRepository = useCallback(async () => {
+    const selectDirectory = window.desktop?.selectDirectory;
+    if (!selectDirectory) return null;
+
+    const selectedPath = await selectDirectory({
+      title: "Select repository root",
+      defaultPath: localRepoRoot,
+    });
+    if (!selectedPath) return null;
+
+    const selected = await selectLocalRepository(selectedPath);
+    return selected ? selectedPath : null;
+  }, [localRepoRoot, selectLocalRepository]);
 
   const switchBranch = useCallback(async (branchName: string) => {
     if (!selectedGitHubRepository || branchName === currentBranch) return;
@@ -694,7 +759,9 @@ const App = () => {
   }, [currentBranch, selectedGitHubRepository]);
 
   useEffect(() => {
-    void loadRepository(configuredRepoRoot);
+    void loadRepository(configuredRepoRoot).then((resolvedRoot) => {
+      if (resolvedRoot) setLocalRepoRoot(resolvedRoot);
+    });
     void refreshGitHubRepositories();
     void fetchAgentConfiguration({ apiBaseUrl, apiKey })
       .then(setAgentConfiguration)
@@ -1041,9 +1108,21 @@ const App = () => {
             error={repoError}
             onSelect={setActivePath}
             onRefresh={refreshRepository}
+            width={sidebarWidth}
           />
 
-          <div className="flex min-h-0 w-90 shrink-0 flex-col border-r border-line bg-panel-soft">
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize sidebar"
+            className="w-1 shrink-0 cursor-col-resize hover:bg-accent/60"
+            onMouseDown={(event) => startPanelResize(event, sidebarWidth, setSidebarWidth, 200, 480)}
+          />
+
+          <div
+            style={diffPanelHidden ? undefined : { width: taskPanelWidth }}
+            className={`flex min-h-0 flex-col border-r border-line bg-panel-soft ${diffPanelHidden ? "min-w-0 flex-1" : "shrink-0"}`}
+          >
             <div className="flex shrink-0 items-center gap-3 border-b border-line px-3 py-2">
               <label className="flex cursor-pointer items-center gap-1.5 text-xs text-ink-soft">
                 <input
@@ -1064,6 +1143,15 @@ const App = () => {
                 />
                 Memory Enabled
               </label>
+
+              <button
+                type="button"
+                className="ml-auto rounded-md border border-line px-2 py-1 text-[10px] text-muted hover:border-accent/60 hover:text-ink"
+                title={diffPanelHidden ? "Show the diff panel" : "Hide the diff panel and expand the task panel"}
+                onClick={() => setDiffPanelHidden((current) => !current)}
+              >
+                {diffPanelHidden ? "Show diff panel" : "Expand task panel"}
+              </button>
             </div>
 
             <TaskPanel
@@ -1081,26 +1169,41 @@ const App = () => {
             />
           </div>
 
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <DiffPanel
-              file={activeFile}
-              change={activeChange}
-              isLoading={fileLoading}
-              error={fileError}
-            />
-            <OutputPanel run={run} />
-          </div>
+          {!diffPanelHidden && (
+            <>
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize task panel"
+                className="w-1 shrink-0 cursor-col-resize hover:bg-accent/60"
+                onMouseDown={(event) => startPanelResize(event, taskPanelWidth, setTaskPanelWidth, 260, 720)}
+              />
+
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                <DiffPanel
+                  file={activeFile}
+                  change={activeChange}
+                  isLoading={fileLoading}
+                  error={fileError}
+                />
+                <OutputPanel run={run} />
+              </div>
+            </>
+          )}
         </>
       ) : activeView === "source-control" ? (
         <SourceControlPage
-          repoName={repoName}
           repoRoot={repoRoot}
+          localRepoRoot={localRepoRoot}
+          localDirectoryPickerAvailable={Boolean(window.desktop?.selectDirectory)}
           githubRepositories={githubRepositories}
           selectedGitHubRepository={selectedGitHubRepository}
           githubLoading={githubLoading}
           githubError={githubError}
           onSelectGitHubRepository={selectGitHubRepository}
           onUseLocalRepository={useLocalRepository}
+          onSelectLocalRepository={selectLocalRepository}
+          onBrowseLocalRepository={browseLocalRepository}
           onRefreshGitHubRepositories={refreshGitHubRepositories}
           branches={branches}
           currentBranch={currentBranch}

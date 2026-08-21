@@ -112,19 +112,21 @@ def _settings_for_state(
     return replace(cfg, **overrides) if overrides else cfg
 
 
-def _coding_node_model(max_tokens: int):
+def _coding_node_model(max_tokens: int, *, cache_namespace: str):
     return build_chat_model(
         provider=app_settings.coding_provider,
         model_name=app_settings.coding_model,
         max_tokens=max_tokens,
+        prompt_cache_namespace=cache_namespace,
     )
 
 
-def _reasoning_node_model(max_tokens: int):
+def _reasoning_node_model(max_tokens: int, *, cache_namespace: str):
     return build_chat_model(
         provider=app_settings.reasoning_provider,
         model_name=app_settings.reasoning_model,
         max_tokens=max_tokens,
+        prompt_cache_namespace=cache_namespace,
     )
 
 
@@ -305,7 +307,7 @@ def route_node(
 
     try:
         decision: SkillRouteDecision = invoke_parsed_decision(
-            model=_coding_node_model(cfg.route_max_tokens),
+            model=_coding_node_model(cfg.route_max_tokens, cache_namespace="route"),
             schema=SkillRouteDecision,
             node_name="route",
             state=state,
@@ -412,7 +414,7 @@ def plan_node(
 
     try:
         decision: PlanDecision = invoke_parsed_decision(
-            model=_coding_node_model(cfg.planner_max_tokens),
+            model=_coding_node_model(cfg.planner_max_tokens, cache_namespace="plan"),
             schema=PlanDecision,
             node_name="plan",
             state=state,
@@ -515,7 +517,10 @@ def repo_navigator_node(
                 : cfg.max_search_results
             ]
             decision: RepoNavigationDecision = invoke_parsed_decision(
-                model=_coding_node_model(cfg.repo_navigation_max_tokens),
+                model=_coding_node_model(
+                    cfg.repo_navigation_max_tokens,
+                    cache_namespace="repo-navigation",
+                ),
                 schema=RepoNavigationDecision,
                 node_name="repo_navigator",
                 state=state,
@@ -1001,9 +1006,9 @@ def patch_node(
     )
     patch_state = {**state, "patch_attempts": patch_attempts}
     patch_model = (
-        _coding_node_model(cfg.simple_patch_max_tokens)
+        _coding_node_model(cfg.simple_patch_max_tokens, cache_namespace="patch")
         if use_fast_patch_model
-        else _reasoning_node_model(cfg.patch_max_tokens)
+        else _reasoning_node_model(cfg.patch_max_tokens, cache_namespace="patch")
     )
 
     try:
@@ -1023,7 +1028,10 @@ def patch_node(
             )
             try:
                 decision = invoke_parsed_decision(
-                    model=_reasoning_node_model(cfg.patch_max_tokens),
+                    model=_reasoning_node_model(
+                        cfg.patch_max_tokens,
+                        cache_namespace="patch",
+                    ),
                     schema=PatchDecision,
                     node_name="patch_escalated",
                     state=patch_state,
@@ -1385,7 +1393,7 @@ def assess_progress_node(
 
     try:
         decision: ProgressDecision = invoke_parsed_decision(
-            model=_reasoning_node_model(cfg.progress_max_tokens),
+            model=_reasoning_node_model(cfg.progress_max_tokens, cache_namespace="progress"),
             schema=ProgressDecision,
             node_name="assess_progress",
             state=state,

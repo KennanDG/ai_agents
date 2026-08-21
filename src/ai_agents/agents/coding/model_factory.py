@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import re
 from typing import Any
 
 from langchain_anthropic import ChatAnthropic
@@ -25,12 +27,28 @@ def _require_api_key(provider: ChatProvider) -> str:
     return api_key
 
 
+def _prompt_cache_key(
+    *,
+    provider: ChatProvider,
+    model_name: str,
+    namespace: str,
+) -> str:
+    normalized_namespace = (
+        re.sub(r"[^a-zA-Z0-9._-]+", "-", namespace).strip("-") or "default"
+    )
+    digest = hashlib.sha256(
+        f"{provider}:{model_name}:{coding_settings.prompt_cache_version}".encode("utf-8")
+    ).hexdigest()[:12]
+    return f"coding-agent:{normalized_namespace}:{digest}"[:64]
+
+
 def build_chat_model(
     *,
     provider: ChatProvider,
     model_name: str,
     temperature: float | None = None,
     max_tokens: int | None = None,
+    prompt_cache_namespace: str | None = None,
 ) -> BaseChatModel:
     api_key = _require_api_key(provider)
     optional: dict[str, Any] = {
@@ -44,10 +62,26 @@ def build_chat_model(
     if max_tokens is not None:
         optional["max_tokens"] = max_tokens
 
+    cache_key = None
+    
+    if coding_settings.prompt_caching_enabled and prompt_cache_namespace:
+        cache_key = _prompt_cache_key(
+            provider=provider,
+            model_name=model_name,
+            namespace=prompt_cache_namespace,
+        )
+
     if provider == "groq":
+        # Groq prompt caching is automatic for supported models. Keeping the
+        # system prompt first and stable is the only integration requirement.
         return ChatGroq(model=model_name, api_key=api_key, **optional)
 
     if provider == "anthropic":
+        if cache_key:
+            cache_control: dict[str, str] = {"type": "ephemeral"}
+            if coding_settings.anthropic_prompt_cache_ttl == "1h":
+                cache_control["ttl"] = "1h"
+            optional["cache_control"] = cache_control
         return ChatAnthropic(model=model_name, api_key=api_key, **optional)
 
     if provider == "google":
@@ -64,6 +98,9 @@ def build_chat_model(
             **optional,
         )
 
+    if provider == "openai" and cache_key:
+        optional["model_kwargs"] = {"prompt_cache_key": cache_key}
+
     return ChatOpenAI(
         model=model_name,
         api_key=api_key,
@@ -72,23 +109,33 @@ def build_chat_model(
     )
 
 
-def coding_model(*, max_tokens: int | None = None) -> BaseChatModel:
+def coding_model(
+    *,
+    max_tokens: int | None = None,
+    prompt_cache_namespace: str | None = None,
+) -> BaseChatModel:
     """Fast model used for bounded planning and optional routing/navigation."""
 
     return build_chat_model(
         provider=settings.coding_provider,
         model_name=settings.coding_model,
         max_tokens=max_tokens,
+        prompt_cache_namespace=prompt_cache_namespace,
     )
 
 
-def reasoning_model(*, max_tokens: int | None = None) -> BaseChatModel:
+def reasoning_model(
+    *,
+    max_tokens: int | None = None,
+    prompt_cache_namespace: str | None = None,
+) -> BaseChatModel:
     """Higher-quality model reserved for patch generation and repair loops."""
 
     return build_chat_model(
         provider=settings.reasoning_provider,
         model_name=settings.reasoning_model,
         max_tokens=max_tokens,
+        prompt_cache_namespace=prompt_cache_namespace,
     )
 
 

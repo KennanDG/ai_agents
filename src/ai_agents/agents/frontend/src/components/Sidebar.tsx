@@ -23,6 +23,7 @@ interface SidebarProps {
   onSelect: (path: string) => void;
   onRefresh: () => void;
   onClearChanges?: () => void;
+  width?: number;
 }
 
 const statusColor = {
@@ -50,6 +51,7 @@ export const Sidebar = ({
   onSelect,
   onRefresh,
   onClearChanges,
+  width,
 }: SidebarProps) => {
   const fileEntries = entries.filter((entry) => entry.kind === "file");
   const [openDirs, setOpenDirs] = useState<Set<string>>(new Set());
@@ -117,7 +119,7 @@ export const Sidebar = ({
     });
 
   return (
-    <aside className="flex w-72 shrink-0 flex-col border-r border-line bg-panel-soft">
+    <aside style={{ width: width ?? 288 }} className="flex shrink-0 flex-col border-r border-line bg-panel-soft">
       <div className="flex h-12 items-center justify-between border-b border-line px-3">
         <span className="text-[13px] font-semibold uppercase tracking-[0.16em] text-muted">
           Explorer

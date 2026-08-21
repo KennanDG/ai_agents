@@ -7,6 +7,7 @@ import {
   GitBranch,
   GitCommitHorizontal,
   GitPullRequest,
+  FolderOpen,
   LoaderCircle,
   Plus,
   RefreshCcw,
@@ -19,14 +20,17 @@ import type {
 } from "../lib/repositoryApi";
 
 type SourceControlPageProps = {
-  repoName: string;
   repoRoot: string;
+  localRepoRoot: string;
+  localDirectoryPickerAvailable: boolean;
   githubRepositories: GitHubRepositorySummary[];
   selectedGitHubRepository: string | null;
   githubLoading: boolean;
   githubError: string | null;
   onSelectGitHubRepository: (fullName: string) => void;
   onUseLocalRepository: () => void;
+  onSelectLocalRepository: (repoRoot: string) => Promise<boolean>;
+  onBrowseLocalRepository: () => Promise<string | null>;
   onRefreshGitHubRepositories: () => void;
   branches: GitHubBranchSummary[];
   currentBranch: string | null;
@@ -94,14 +98,17 @@ const StatusList = ({
 );
 
 export const SourceControlPage = ({
-  repoName,
   repoRoot,
+  localRepoRoot,
+  localDirectoryPickerAvailable,
   githubRepositories,
   selectedGitHubRepository,
   githubLoading,
   githubError,
   onSelectGitHubRepository,
   onUseLocalRepository,
+  onSelectLocalRepository,
+  onBrowseLocalRepository,
   onRefreshGitHubRepositories,
   branches,
   currentBranch,
@@ -124,6 +131,7 @@ export const SourceControlPage = ({
   onPushGitHubBranch,
   onCreateGitHubPullRequest,
 }: SourceControlPageProps) => {
+  const [localPath, setLocalPath] = useState(localRepoRoot);
   const [newBranch, setNewBranch] = useState("agent/");
   const [commitMessage, setCommitMessage] = useState("");
   const [prTitle, setPrTitle] = useState("");
@@ -140,6 +148,15 @@ export const SourceControlPage = ({
     setLastCommitVisible(true);
   }, [lastCommit?.commitSha]);
 
+
+  useEffect(() => {
+    setLocalPath(localRepoRoot);
+  }, [localRepoRoot]);
+
+  const localRepoName = useMemo(
+    () => localRepoRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? "repository",
+    [localRepoRoot],
+  );
   const selectedSummary = useMemo(
     () => githubRepositories.find((item) => item.full_name === selectedGitHubRepository) ?? null,
     [githubRepositories, selectedGitHubRepository],
@@ -157,6 +174,15 @@ export const SourceControlPage = ({
       githubRepositoryStatus &&
       !githubRepositoryStatus.dirty,
   );
+
+  const handleSelectLocalRepository = async () => {
+    await onSelectLocalRepository(localPath);
+  };
+
+  const handleBrowseLocalRepository = async () => {
+    const selectedPath = await onBrowseLocalRepository();
+    if (selectedPath) setLocalPath(selectedPath);
+  };
 
   const handleCommit = async () => {
     const committed = await onCommitGitHubChanges(commitMessage.trim());
@@ -238,7 +264,7 @@ export const SourceControlPage = ({
                 }}
                 className="w-full rounded-md border border-line bg-surface px-3 py-2 text-xs text-ink outline-none hover:border-line-strong focus:border-accent/70"
               >
-                <option value="local">Local · {repoName}</option>
+                <option value="local">Local · {localRepoName}</option>
                 {githubRepositories.map((repository) => (
                   <option key={repository.id} value={`github:${repository.full_name}`}>
                     GitHub · {repository.full_name}{repository.private ? " (private)" : ""}
@@ -249,6 +275,50 @@ export const SourceControlPage = ({
               <p className="mt-2 truncate font-mono text-[10px] text-faint" title={repoRoot}>
                 {repoRoot}
               </p>
+
+              <div className="mt-4 rounded-lg border border-line bg-surface p-3">
+                <FieldLabel>Local repository root</FieldLabel>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <input
+                    value={localPath}
+                    onChange={(event) => setLocalPath(event.target.value)}
+                    className="min-w-0 flex-1 rounded-md border border-line bg-panel px-3 py-2 font-mono text-[11px] text-ink outline-none focus:border-accent/70"
+                    placeholder="/path/to/repository"
+                  />
+                  <button
+                    type="button"
+                    className="secondary-button h-8"
+                    disabled={busy || !localDirectoryPickerAvailable}
+                    onClick={() => void handleBrowseLocalRepository()}
+                    title={
+                      localDirectoryPickerAvailable
+                        ? "Open the desktop directory picker"
+                        : "Directory browsing requires the desktop bridge"
+                    }
+                  >
+                    <FolderOpen size={12} />
+                    Browse
+                  </button>
+                  <button
+                    type="button"
+                    className="primary-button h-8"
+                    disabled={busy || !localPath.trim()}
+                    onClick={() => void handleSelectLocalRepository()}
+                  >
+                    {githubActionLoading === "local-repository" ? (
+                      <LoaderCircle size={12} className="animate-spin" />
+                    ) : (
+                      <FolderOpen size={12} />
+                    )}
+                    Use folder
+                  </button>
+                </div>
+                <p className="mt-2 text-[10px] leading-4 text-faint">
+                  The path must be visible to the backend process. Browser-only builds can
+                  enter a backend-local path; desktop builds can expose a native picker through
+                  window.desktop.selectDirectory.
+                </p>
+              </div>
 
               {githubError ? (
                 <div className="mt-3 flex items-start gap-2 rounded-md border border-rose-500/20 bg-rose-500/8 p-2.5 text-[10px] leading-4 text-rose-300">
