@@ -9,6 +9,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
+from langchain_core.messages import HumanMessage, SystemMessage
+
+from ai_agents.agents.coding.model_factory import caption_model
 from ai_agents.agents.voice.graph import build_voice_agent_graph
 from ai_agents.agents.voice.provider_clients import build_audio_client
 from ai_agents.config.settings import settings
@@ -18,6 +21,60 @@ logger = logging.getLogger(__name__)
 # Groq Orpheus currently accepts at most 200 characters per speech request.
 GROQ_ORPHEUS_MAX_INPUT_CHARS = 200
 DEFAULT_TTS_MAX_CHUNKS = 20
+MAX_VOICE_IMAGE_CAPTION_CHARS = 10_000
+
+
+def _message_content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content.strip()
+
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+        return "\n".join(part.strip() for part in parts if part.strip()).strip()
+
+    return str(content).strip()
+
+
+def _caption_uploaded_image(*, name: str, mime_type: str, data_url: str) -> str:
+    model = caption_model()
+    response = model.invoke(
+        [
+            SystemMessage(
+                content=(
+                    "You convert a user-attached image into concise text context for a voice "
+                    "intake agent that is preparing work for a coding agent. Focus on visible UI, "
+                    "screenshots, diagrams, error messages, labels, tables, layout, code snippets, "
+                    "technology names, and implementation-relevant details. Do not guess hidden data."
+                )
+            ),
+            HumanMessage(
+                content=[
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Describe this image for downstream requirement synthesis. "
+                            f"File name: {name}. MIME type: {mime_type}."
+                        ),
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": data_url},
+                    },
+                ]
+            ),
+        ]
+    )
+
+    caption = _message_content_to_text(response.content)
+    if not caption:
+        raise RuntimeError("vision model returned an empty image caption.")
+
+    return caption[:MAX_VOICE_IMAGE_CAPTION_CHARS]
 
 
 class VoiceAgentService:
@@ -191,6 +248,46 @@ class VoiceAgentService:
 
         return output.getvalue()
 
+    def prepare_voice_attachments(
+        self,
+        attached_files: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        """Caption uploaded images, then strip raw image data before LangGraph state."""
+        prepared: list[dict[str, Any]] = []
+        errors: list[str] = []
+
+        for attached in attached_files:
+            item = dict(attached)
+            data_url = item.pop("data_url", None)
+            image_data_error = item.pop("image_data_error", None)
+
+            if isinstance(image_data_error, str) and image_data_error.strip():
+                errors.append(image_data_error.strip())
+
+            if isinstance(data_url, str) and data_url:
+                name = str(item.get("name") or "image")
+                mime_type = str(item.get("mime_type") or "image/png")
+
+                try:
+                    caption = _caption_uploaded_image(
+                        name=name,
+                        mime_type=mime_type,
+                        data_url=data_url,
+                    )
+                    item["image_caption"] = caption
+                    item["content"] = (
+                        f"Vision-generated caption for {name}:\n{caption}"
+                    )
+                    item["has_image_data"] = True
+                except Exception as exc:
+                    errors.append(
+                        f"Could not caption image attachment {name}: {exc}"
+                    )
+
+            prepared.append(item)
+
+        return prepared, errors
+
     def synthesize_reply(
         self,
         text: str,
@@ -297,6 +394,10 @@ class VoiceAgentService:
             content_type=content_type,
         )
 
+        prepared_attached_files, attachment_errors = self.prepare_voice_attachments(
+            attached_files
+        )
+
         state = self.graph.invoke(
             {
                 "session_id": resolved_session_id,
@@ -307,8 +408,8 @@ class VoiceAgentService:
                 "workspace_root": workspace_root,
                 "active_path": active_path,
                 "allow_write": allow_write,
-                "attached_files": attached_files,
-                "errors": [],
+                "attached_files": prepared_attached_files,
+                "errors": attachment_errors,
             }
         )
 

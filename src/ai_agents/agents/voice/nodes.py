@@ -40,6 +40,23 @@ from .utils.helpers import (
 logger = logging.getLogger(__name__)
 
 
+def _is_retryable_intake_generation_error(exc: Exception) -> bool:
+    """Return True for malformed structured output and unwanted model tool calls."""
+    if _is_json_generation_error(exc):
+        return True
+
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "tool_use_failed",
+            "tool choice is none",
+            "model called a tool",
+            "failed_generation",
+        )
+    )
+
+
 
 
 
@@ -174,11 +191,12 @@ def intake_node(state: VoiceAgentState) -> VoiceAgentState:
                 "mime_type": item.get("mime_type"),
                 "size": item.get("size"),
                 "has_image_data": item.get("has_image_data"),
+                "caption_available": bool(item.get("image_caption")),
             }
             for item in state.get("attached_files", [])
         ],
         "recommended_skills": state.get("recommended_skills", []),
-        "tools_used": state.get("tools_used", []),
+        "context_sources_used": state.get("tools_used", []),
         "repository_context": repository_context,
     }
 
@@ -205,10 +223,12 @@ def intake_node(state: VoiceAgentState) -> VoiceAgentState:
         f"ask something genuinely different):\n{previous_questions_list}\n\n"
         f"Previously used clarification topics: {previous_topics_list}\n"
         "Choose a different, unanswered clarification topic or return status=ready.\n\n"
-        "Use the supplied skills and tool results. If ready, return a concise "
-        "coding_request string, "
-        "with implementation steps in plan and paths in target_files. Do not copy raw repository context. "
-        "If the clarification limit is reached, return status=ready with the best repository-grounded plan."
+        "All repository and attachment inspection has already been performed by the backend. "
+        "You have no callable tools or functions in this step. Treat context_sources_used as audit metadata, "
+        "and never attempt to call those names. Use only the supplied pre-gathered evidence. "
+        "If ready, return a concise coding_request string, with implementation steps in plan and paths "
+        "in target_files. Do not copy raw repository context. If the clarification limit is reached, "
+        "return status=ready with the best repository-grounded plan."
     )
 
     messages = [
@@ -219,9 +239,9 @@ def intake_node(state: VoiceAgentState) -> VoiceAgentState:
 
     try:
         try:
-            decision = _request_intake_decision(messages=messages, temperature=0.5)
+            decision = _request_intake_decision(messages=messages, temperature=0.0)
         except Exception as first_exc:
-            if not _is_json_generation_error(first_exc):
+            if not _is_retryable_intake_generation_error(first_exc):
                 raise
 
             logger.warning(
@@ -231,7 +251,8 @@ def intake_node(state: VoiceAgentState) -> VoiceAgentState:
 
             retry_content = (
                 "Return the smallest valid JSON object matching the system schema. "
-                "coding_request must be a short plain string, never an object. "
+                "You have no callable tools or functions. Do not emit a tool call, function call, "
+                "or tool-shaped response. coding_request must be a short plain string, never an object. "
                 "Do not repeat repository context, trees, excerpts, or raw JSON.\n\n"
                 f"Latest transcript: {transcript or '[none]'}\n"
                 f"Typed draft: {prompt_text or '[none]'}\n"
@@ -250,7 +271,7 @@ def intake_node(state: VoiceAgentState) -> VoiceAgentState:
             try:
                 decision = _request_intake_decision(
                     messages=retry_messages,
-                    temperature=0.5,
+                    temperature=0.0,
                 )
             except Exception as retry_exc:
                 raise RuntimeError(
@@ -309,7 +330,7 @@ def intake_node(state: VoiceAgentState) -> VoiceAgentState:
                     try:
                         repaired_decision = _request_intake_decision(
                             messages=repair_messages,
-                            temperature=0.5,
+                            temperature=0.0,
                         )
                     except Exception as repair_exc:
                         logger.warning(
