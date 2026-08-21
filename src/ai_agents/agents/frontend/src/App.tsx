@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { ActivityBar, type ActivityAction, type ActivityView } from "./components/ActivityBar";
 import { AgentSettingsModal } from "./components/AgentSettingsModal";
 import { SkillsPage } from "./components/SkillsPage";
@@ -76,6 +76,28 @@ type GitHubCommitReceipt = {
 const nowLabel = () => {
   return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date());
 }
+
+const clampSize = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+
+const startPanelResize = (
+  event: ReactMouseEvent,
+  startSize: number,
+  setSize: (size: number) => void,
+  min: number,
+  max: number,
+) => {
+  event.preventDefault();
+  const startX = event.clientX;
+  const onMove = (move: MouseEvent) => {
+    setSize(clampSize(startSize + (move.clientX - startX), min, max));
+  };
+  const onUp = () => {
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+  };
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+};
 
 const base64AudioToObjectUrl = (base64: string, mimeType: string) => {
   const binary = window.atob(base64);
@@ -317,6 +339,9 @@ const App = () => {
   const [activePath, setActivePath] = useState<string | null>(null);
   const [activeFile, setActiveFile] = useState<RepositoryFile | null>(null);
   const [allowWrite, setAllowWrite] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(288);
+  const [taskPanelWidth, setTaskPanelWidth] = useState(360);
+  const [diffPanelHidden, setDiffPanelHidden] = useState(false);
 
   const [fileLoading, setFileLoading] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
@@ -1083,9 +1108,21 @@ const App = () => {
             error={repoError}
             onSelect={setActivePath}
             onRefresh={refreshRepository}
+            width={sidebarWidth}
           />
 
-          <div className="flex min-h-0 w-90 shrink-0 flex-col border-r border-line bg-panel-soft">
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize sidebar"
+            className="w-1 shrink-0 cursor-col-resize hover:bg-accent/60"
+            onMouseDown={(event) => startPanelResize(event, sidebarWidth, setSidebarWidth, 200, 480)}
+          />
+
+          <div
+            style={diffPanelHidden ? undefined : { width: taskPanelWidth }}
+            className={`flex min-h-0 flex-col border-r border-line bg-panel-soft ${diffPanelHidden ? "min-w-0 flex-1" : "shrink-0"}`}
+          >
             <div className="flex shrink-0 items-center gap-3 border-b border-line px-3 py-2">
               <label className="flex cursor-pointer items-center gap-1.5 text-xs text-ink-soft">
                 <input
@@ -1106,6 +1143,15 @@ const App = () => {
                 />
                 Memory Enabled
               </label>
+
+              <button
+                type="button"
+                className="ml-auto rounded-md border border-line px-2 py-1 text-[10px] text-muted hover:border-accent/60 hover:text-ink"
+                title={diffPanelHidden ? "Show the diff panel" : "Hide the diff panel and expand the task panel"}
+                onClick={() => setDiffPanelHidden((current) => !current)}
+              >
+                {diffPanelHidden ? "Show diff panel" : "Expand task panel"}
+              </button>
             </div>
 
             <TaskPanel
@@ -1123,15 +1169,27 @@ const App = () => {
             />
           </div>
 
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <DiffPanel
-              file={activeFile}
-              change={activeChange}
-              isLoading={fileLoading}
-              error={fileError}
-            />
-            <OutputPanel run={run} />
-          </div>
+          {!diffPanelHidden && (
+            <>
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize task panel"
+                className="w-1 shrink-0 cursor-col-resize hover:bg-accent/60"
+                onMouseDown={(event) => startPanelResize(event, taskPanelWidth, setTaskPanelWidth, 260, 720)}
+              />
+
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                <DiffPanel
+                  file={activeFile}
+                  change={activeChange}
+                  isLoading={fileLoading}
+                  error={fileError}
+                />
+                <OutputPanel run={run} />
+              </div>
+            </>
+          )}
         </>
       ) : activeView === "source-control" ? (
         <SourceControlPage
