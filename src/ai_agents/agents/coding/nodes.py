@@ -36,8 +36,12 @@ from ai_agents.agents.coding.prompts import (
 )
 
 
-from ai_agents.agents.coding.registry import SkillRegistry, route_skill
+from ai_agents.agents.coding.skill_registry import MAX_SELECTED_SKILLS, SkillRegistry
 from ai_agents.agents.coding.model_factory import build_chat_model
+from ai_agents.agents.coding.tool_registry import (
+    ApprovedCustomToolRegistry,
+    MAX_CUSTOM_TOOL_CALLS,
+)
 from ai_agents.config.settings import settings as app_settings
 from ai_agents.agents.coding.routing import patch_attempts_remaining
 from ai_agents.agents.coding.runtime import allow_write as resolve_allow_write
@@ -277,6 +281,8 @@ def route_node(
         return {
             "task_mode": task_mode,
             "selected_skill": "",
+            "selected_skills": [],
+            "selected_skill_tools": [],
             "skill_instructions": "",
             "route_confidence": 0.0,
             "route_reason": str(exc),
@@ -285,25 +291,52 @@ def route_node(
             "status": "route_failed",
         }
 
-    deterministic_skill = route_skill(
+    deterministic_skills = registry.rank_for_request(
         state["user_request"],
-        registry.list_names(),
-        default_skill=default_skill,
+        max_skills=MAX_SELECTED_SKILLS,
     )
 
-    # Most coding requests have an unambiguous deterministic route. Avoid an LLM
-    # round trip unless explicitly enabled for installations with many custom skills.
-    if not cfg.llm_skill_routing_enabled or task_mode == "simple":
-        skill = registry.get(deterministic_skill)
+    def build_payload(
+        selected_names: list[str],
+        *,
+        confidence: float,
+        reason: str,
+        alternatives: list[dict[str, str]] | None = None,
+    ) -> CodingAgentState:
+
+        valid_names = [
+            name for name in dict.fromkeys(selected_names)
+            if registry.has(name)
+        ][:MAX_SELECTED_SKILLS]
+
+        if not valid_names:
+            valid_names = [default_skill]
         return {
             "task_mode": task_mode,
-            "selected_skill": skill.name,
-            "skill_instructions": skill.instructions,
-            "route_confidence": 0.95,
-            "route_reason": "Deterministic low-latency skill route.",
-            "route_alternatives": [],
+            # Preserve the old scalar field so existing API/UI code does not break.
+            "selected_skill": valid_names[0],
+            "selected_skills": valid_names,
+            "selected_skill_tools": registry.allowed_tools_for(valid_names),
+            "skill_instructions": registry.combined_instructions(valid_names),
+            "route_confidence": confidence,
+            "route_reason": reason,
+            "route_alternatives": alternatives or [],
             "status": "routed",
         }
+
+    # The deterministic router can now return complementary skills and rank custom
+    # skills by name/purpose overlap. Keep the LLM route opt-in for installations
+    # that want stronger semantic matching without making every run pay that latency.
+    if not cfg.llm_skill_routing_enabled or task_mode == "simple":
+        return build_payload(
+            deterministic_skills,
+            confidence=0.92 if len(deterministic_skills) == 1 else 0.86,
+            reason=(
+                "Deterministic low-latency multi-skill route."
+                if len(deterministic_skills) > 1
+                else "Deterministic low-latency skill route."
+            ),
+        )
 
     try:
         decision: SkillRouteDecision = invoke_parsed_decision(
@@ -319,37 +352,38 @@ def route_node(
             max_attempts=1,
         )
     except Exception as exc:
-        fallback = _route_with_fallback(
-            state=state,
-            registry=registry,
-            error=f"LLM skill routing failed; used fallback router: {exc}",
+        return build_payload(
+            deterministic_skills,
+            confidence=0.5,
+            reason=f"LLM skill routing failed; used deterministic route: {exc}",
         )
-        return {**fallback, "task_mode": task_mode}
 
-    selected_skill = decision.selected_skill.strip()
-    if not registry.has(selected_skill):
-        selected_skill = deterministic_skill
-        route_reason = f"Unknown LLM skill; used deterministic route. {decision.reason}"
+    selected_names = [
+        name.strip()
+        for name in decision.selected_skills
+        if name.strip() and registry.has(name.strip())
+    ]
+    selected_names = list(dict.fromkeys(selected_names))[:MAX_SELECTED_SKILLS]
+
+    if not selected_names:
+        selected_names = deterministic_skills
+        route_reason = f"LLM selected no known skills; used deterministic route. {decision.reason}"
         confidence = 0.0
     else:
         route_reason = decision.reason
         confidence = decision.confidence
 
-    skill = registry.get(selected_skill)
     alternatives = [
         {"skill_name": item.skill_name, "reason": item.reason}
         for item in decision.alternatives
-        if registry.has(item.skill_name) and item.skill_name != selected_skill
+        if registry.has(item.skill_name) and item.skill_name not in selected_names
     ][:3]
-    return {
-        "task_mode": task_mode,
-        "selected_skill": skill.name,
-        "skill_instructions": skill.instructions,
-        "route_confidence": confidence,
-        "route_reason": route_reason,
-        "route_alternatives": alternatives,
-        "status": "routed",
-    }
+    return build_payload(
+        selected_names,
+        confidence=confidence,
+        reason=route_reason,
+        alternatives=alternatives,
+    )
 
 
 
@@ -375,6 +409,17 @@ def plan_node(
     request = state["user_request"]
     task_mode = state.get("task_mode") or _classify_task_mode(state, cfg)
     deterministic_search = _deterministic_search_requests(state)
+    approved_custom_tool_registry = ApprovedCustomToolRegistry().load()
+    selected_tool_names = list(state.get("selected_skill_tools") or [])
+    has_selected_custom_tools = any(
+        approved_custom_tool_registry.has(name) for name in selected_tool_names
+    )
+
+    # The simple fast path skips the planner. Promote the run to standard when a
+    # selected skill exposes an approved custom tool so the planner gets a chance
+    # to decide whether and how to call it.
+    if task_mode == "simple" and has_selected_custom_tools:
+        task_mode = "standard"
 
     if task_mode == "simple":
         return {
@@ -387,17 +432,33 @@ def plan_node(
             "search_requests": deterministic_search,
             "search_queries": [],
             "subtasks": _fallback_subtasks(state, deterministic_search),
+            "custom_tool_calls": [],
             "validation_commands": state.get("validation_commands", []),
             "status": "planned",
         }
 
     planner_prompt = build_planner_user_prompt(request)
-    if state.get("selected_skill"):
+    selected_skills = list(state.get("selected_skills") or [])
+
+    if not selected_skills and state.get("selected_skill"):
+        selected_skills = [str(state.get("selected_skill"))]
+
+    if selected_skills:
         planner_prompt += (
-            "\n\nSelected skill:\n"
-            f"{state.get('selected_skill')}\n\n"
-            "Skill guidance for planning:\n"
+            "\n\nSelected skills in priority order:\n"
+            f"{bullets(selected_skills)}\n\n"
+            "Combined skill guidance for planning:\n"
             f"{skill_instructions_for_llm(state.get('skill_instructions', ''))}"
+        )
+
+    approved_custom_tool_catalog = approved_custom_tool_registry.prompt_catalog(selected_tool_names)
+    if approved_custom_tool_catalog:
+        planner_prompt += (
+            "\n\nApproved custom tools available for this run:\n"
+            f"{approved_custom_tool_catalog}\n\n"
+            "Use custom_tool_calls only when one of these tools materially improves "
+            "repository inspection. Tool arguments must be JSON-compatible and must "
+            "not include repo_root."
         )
 
     memories = state.get("long_term_memories", [])
@@ -437,6 +498,9 @@ def plan_node(
             "search_requests": search_requests,
             "search_queries": decision.search_queries,
             "subtasks": subtasks,
+            "custom_tool_calls": [
+                item.model_dump() for item in decision.custom_tool_calls[:MAX_CUSTOM_TOOL_CALLS]
+            ],
             "validation_commands": decision.validation_commands,
             "web_search_query": decision.web_search_query or "",
             "status": "planned",
@@ -452,6 +516,7 @@ def plan_node(
             "search_requests": deterministic_search,
             "search_queries": [],
             "subtasks": _fallback_subtasks(state, deterministic_search),
+            "custom_tool_calls": [],
             "web_search_query": "",
             "errors": [
                 *state.get("errors", []),
@@ -460,6 +525,85 @@ def plan_node(
             "status": "planned",
         }
 
+
+
+def custom_tools_node(
+    state: CodingAgentState,
+    cfg: CodingAgentSettings = default_settings,
+) -> CodingAgentState:
+    """Execute approved custom inspection tools requested by the planner.
+
+    Only tools explicitly exposed by the selected skills may run. Repository scope
+    is injected by the runtime and cannot be overridden by model-generated args.
+    """
+
+    calls = list(state.get("custom_tool_calls") or [])[:MAX_CUSTOM_TOOL_CALLS]
+    if not calls:
+        return {"custom_tool_results": [], "status": "custom_tools_skipped"}
+
+    cfg = _settings_for_state(state, cfg)
+    repo_root = resolve_repo_root(state, cfg)
+    allowed = set(state.get("selected_skill_tools") or [])
+    custom_tool_registry = ApprovedCustomToolRegistry().load()
+    results: list[dict[str, Any]] = []
+    errors = list(state.get("errors", []))
+
+    for raw_call in calls:
+        tool_name = str(raw_call.get("tool_name", "")).strip()
+        arguments = raw_call.get("arguments") or {}
+        reason = str(raw_call.get("reason", "")).strip()
+
+        if not tool_name:
+            continue
+        if tool_name not in allowed:
+            errors.append(
+                f"Skipped custom tool '{tool_name}': it is not allowed by the selected skills."
+            )
+            continue
+        if not custom_tool_registry.has(tool_name):
+            errors.append(
+                f"Skipped custom tool '{tool_name}': it is not approved/available at runtime."
+            )
+            continue
+        if not isinstance(arguments, dict):
+            errors.append(f"Skipped custom tool '{tool_name}': arguments must be an object.")
+            continue
+
+        try:
+            result = custom_tool_registry.invoke(
+                tool_name,
+                repo_root=repo_root,
+                arguments=arguments,
+            )
+            result["reason"] = reason
+            results.append(result)
+
+        except Exception as exc:
+            errors.append(f"Approved custom tool '{tool_name}' failed: {exc}")
+            results.append(
+                {
+                    "tool_name": tool_name,
+                    "arguments": arguments,
+                    "reason": reason,
+                    "output": str(exc),
+                    "truncated": False,
+                    "success": False,
+                }
+            )
+
+    if not results:
+        status = "custom_tools_failed" if calls else "custom_tools_skipped"
+        
+    elif any(bool(item.get("success")) for item in results):
+        status = "custom_tools_completed"
+    else:
+        status = "custom_tools_failed"
+
+    return {
+        "custom_tool_results": results,
+        "errors": errors,
+        "status": status,
+    }
 
 
 def repo_navigator_node(
@@ -527,7 +671,7 @@ def repo_navigator_node(
                 system_prompt=REPO_NAVIGATOR_SYSTEM_PROMPT,
                 user_prompt=build_repo_navigator_user_prompt(
                     request=state["user_request"],
-                    selected_skill=state.get("selected_skill"),
+                    selected_skill=", ".join(state.get("selected_skills") or [state.get("selected_skill", "")]),
                     skill_instructions=skill_instructions_for_llm(
                         state.get("skill_instructions", "")
                     ),
@@ -900,10 +1044,24 @@ def gather_context_node(
     candidate_blocks.append(
         "# Execution context\n"
         f"Task mode: {state.get('task_mode', 'standard')}\n"
-        f"Selected skill: {state.get('selected_skill', 'none')}\n"
+        f"Selected skills: {', '.join(state.get('selected_skills') or [state.get('selected_skill', 'none')])}\n"
         f"Plan:\n{bullets(state.get('plan', []))}\n"
         f"Selected repository paths:\n{bullets(selected_paths)}"
     )
+
+    for tool_result in state.get("custom_tool_results", []):
+        tool_name = str(tool_result.get("tool_name", "custom_tool"))
+        if tool_result.get("success"):
+            candidate_blocks.append(
+                f"# Approved custom tool result: {tool_name}\n"
+                f"Reason: {tool_result.get('reason', '')}\n"
+                f"{tool_result.get('output', '')}"
+            )
+        else:
+            errors.append(
+                f"Custom tool {tool_name} did not produce usable context: "
+                f"{tool_result.get('output', '')}"
+            )
 
     for result in worker_results:
         worker_errors = [str(item) for item in result.get("errors", [])]
@@ -997,7 +1155,7 @@ def patch_node(
     )
     patch_prompt = build_patcher_user_prompt(
         request=state["user_request"],
-        selected_skill=state.get("selected_skill"),
+        selected_skill=", ".join(state.get("selected_skills") or [state.get("selected_skill", "")]),
         skill_instructions=skill_instructions_for_llm(
             state.get("skill_instructions", "")
         ),
@@ -1575,11 +1733,17 @@ Execution mode:
 Execution profile:
 {state.get('runtime_settings', {})}
 
-Selected skill:
-{state.get('selected_skill', 'none')}
+Selected skills:
+{bullets(state.get('selected_skills') or [state.get('selected_skill', 'none')])}
 
 Plan:
 {bullets(state.get('plan', []))}
+
+Approved custom tools used:
+{bullets([
+    item.get('tool_name', '') + (' (ok)' if item.get('success') else ' (failed)')
+    for item in state.get('custom_tool_results', [])
+]) if state.get('custom_tool_results') else 'None'}
 
 Files inspected:
 {bullets(state.get('files_inspected', []))}
@@ -1605,9 +1769,10 @@ def web_search_node(state: CodingAgentState) -> CodingAgentState:
     skill is selected. Clears the dynamic query after search.
     """
     dynamic_query = (state.get("web_search_query") or "").strip()
+
     if dynamic_query:
         query = dynamic_query
-    elif state.get("selected_skill") == "web_search":
+    elif "web_search" in set(state.get("selected_skills") or [state.get("selected_skill", "")]):
         query = state.get("user_request", "")
     else:
         return {"status": "web_search_skipped"}
@@ -1641,7 +1806,7 @@ def gmail_access_node(state: CodingAgentState) -> CodingAgentState:
     Perform Gmail access if the selected skill is gmail_access.
     Currently a placeholder.
     """
-    if state.get("selected_skill") != "gmail_access":
+    if "gmail_access" not in set(state.get("selected_skills") or [state.get("selected_skill", "")]):
         return {"status": "gmail_access_skipped"}
     # Placeholder: log that gmail access was triggered
     # In future, invoke gmail API here.

@@ -372,6 +372,21 @@ const App = () => {
   const [lastGitHubCommit, setLastGitHubCommit] = useState<GitHubCommitReceipt | null>(null);
   const [agentSessionKey, setAgentSessionKey] = useState(0);
   const [run, dispatchRun] = useReducer(runReducer, initialRunState);
+  const [changes, setChanges] = useState<FileChange[]>([]);
+  const previousRunStatusRef = useRef(run.status);
+
+  useEffect(() => {
+    if (run.status === "running" && previousRunStatusRef.current !== "running") {
+      setChanges([]);
+    } else {
+      setChanges(run.fileChanges);
+    }
+    previousRunStatusRef.current = run.status;
+  }, [run.fileChanges, run.status]);
+
+  const clearChanges = useCallback(() => {
+    setChanges([]);
+  }, []);
 
   const [voiceSessionId, setVoiceSessionId] = useState<string | null>(null);
   const [voiceHistory, setVoiceHistory] = useState<AgentMessage[]>([]);
@@ -402,8 +417,8 @@ const App = () => {
 
   
   const activeChange = useMemo(
-    () => run.fileChanges.find((change) => change.path === activePath && (change.original || change.modified)) ?? null,
-    [activePath, run.fileChanges],
+    () => changes.find((change) => change.path === activePath && (change.original || change.modified)) ?? null,
+    [activePath, changes],
   );
 
   const repoName = useMemo(() => repoRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? "repository", [repoRoot]);
@@ -1048,6 +1063,7 @@ const App = () => {
       patch_max_tokens: agentConfiguration?.coding_patch_max_tokens,
       progress_max_tokens: agentConfiguration?.coding_progress_max_tokens,
     };
+    clearChanges();
     socketRef.current?.run(runRequest);
   };
 
@@ -1101,13 +1117,14 @@ const App = () => {
             repoName={repoName}
             repoRoot={repoRoot}
             entries={repoEntries}
-            changes={run.fileChanges}
+            changes={changes}
             activePath={activePath}
             isLoading={repoLoading}
             agentRunning={run.status === "running"}
             error={repoError}
             onSelect={setActivePath}
             onRefresh={refreshRepository}
+            onClearChanges={clearChanges}
             width={sidebarWidth}
           />
 

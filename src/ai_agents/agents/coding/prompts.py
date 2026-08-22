@@ -75,15 +75,19 @@ SKILL_ROUTER_SYSTEM_PROMPT = dedent(
     You are the skill routing node.
 
     # Your job:
-    - Select the single best skill for the user's coding task.
+    - Select one to three complementary skills for the user's coding task.
     - Choose only from the provided skill catalog.
-    - Prefer the most specific matching skill when the request clearly maps to one.
+    - Put the primary skill first and supplemental skills after it.
+    - Prefer the smallest skill set that fully covers the task.
+    - Prefer the most specific matching skills when the request clearly maps to them.
     - Use implement_change for ordinary feature work, refactors, and general code changes.
     - Use debug for errors, tracebacks, broken behavior, and diagnosis-heavy tasks.
     - Use tests for requests primarily about adding, fixing, or improving tests.
     - Use web_search only when the task explicitly needs current external information.
     - Use gmail_access only when the task explicitly needs Gmail access.
-    - Lower confidence when multiple skills are plausible or the request is vague.
+    - Do not add implement_change merely as filler when a more specific skill already covers the same behavior.
+    - Combine skills when the request truly has multiple concerns, such as debugging plus tests, or frontend work plus styling.
+    - Lower confidence when the request is vague or the selected skills conflict.
     - Never invent skill names.
     - Return structured output only.
     """
@@ -123,6 +127,13 @@ PLANNER_SYSTEM_PROMPT = dedent(
     - For parallel tasks, return at most four read-only subtasks. Each subtask must have
       a narrow objective and focused search requests; workers gather context but do not edit.
     - Keep coupled changes in the same subtask so the final patcher can reason atomically.
+
+    # Approved custom tools:
+    - The user prompt may list approved custom tools exposed by the selected skills.
+    - Use `custom_tool_calls` only for exact tool names in that list.
+    - Never invent tool names or pass `repo_root`; the runtime injects repository scope.
+    - Prefer zero custom tool calls when normal repository search/context is sufficient.
+    - Treat custom tools as read-only inspection helpers, not patch or shell mechanisms.
 
     # Web search:
     - Provide an optional `web_search_query` when the current repository context is clearly insufficient
@@ -286,7 +297,7 @@ def build_skill_router_user_prompt(
 ) -> str:
     return dedent(
         f"""
-        Select the best skill for this coding-agent request.
+        Select the most useful set of skills for this coding-agent request.
 
         # Request:
         {request}
@@ -295,12 +306,14 @@ def build_skill_router_user_prompt(
         {skill_catalog or "No skills were loaded."}
 
         # Output guidance:
-        - selected_skill must exactly match one available skill name.
-        - Base the decision on the skill purpose and the user's explicit intent.
-        - Do not route to web_search unless the request requires internet/current external data.
-        - Do not route to gmail_access unless the request requires Gmail.
-        - For mixed requests, choose the skill needed first in the graph.
-        - Include a concise reason and at most three alternatives.
+        - selected_skills must contain one to three exact available skill names.
+        - Put the primary skill first. Supplemental skills must contribute distinct guidance.
+        - Base the decision on each skill purpose and the user's explicit intent.
+        - Do not include web_search unless the request requires internet/current external data.
+        - Do not include gmail_access unless the request requires Gmail.
+        - For mixed requests, include complementary skills rather than forcing one broad skill.
+        - Prefer fewer skills when one skill already covers the task.
+        - Include a concise reason and at most three unselected alternatives.
         """
     ).strip()
 
@@ -324,6 +337,10 @@ def build_planner_user_prompt(request: str) -> str:
         - Put file types such as `.py`, `.md`, `.tsx`, or `.sql` in `file_extensions`.
         - Use `mode="all"` by default, `mode="symbol"` for Python symbol lookup, and `mode="any"` only for broad fallback or path-only discovery.
         - Do not use unsupported search syntax such as `in:path:`, `path:`, `file:`, or shell globs inside `terms`.
+        - If an "Approved custom tools available for this run" section is present, you may add up to four `custom_tool_calls`.
+        - `custom_tool_calls[].tool_name` must exactly match that catalog and `arguments` must contain only the named keyword arguments required by the tool.
+        - Never include repo_root in custom tool arguments; the runtime injects it.
+        - Leave `custom_tool_calls` empty when the repository search/context is already sufficient.
         - Provide a `web_search_query` only when the repository alone cannot satisfy the request (e.g., a new library, external API docs, or a framework version not yet visible in the repo).
         - Validation commands must be safe.
         - Do not invent specific files unless the request clearly names them.

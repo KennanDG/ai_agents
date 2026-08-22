@@ -7,8 +7,10 @@ from typing import Iterable
 
 
 DEFAULT_SKILL_NAME = "implement_change"
+MAX_SELECTED_SKILLS = 3
 _CUSTOM_SKILL_PREFIX = "custom_"
 _SECTION_RE = re.compile(r"^#{1,6}\s+(.+?)\s*$")
+_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
 
 
 @dataclass(frozen=True)
@@ -28,7 +30,7 @@ def _extract_purpose(markdown: str) -> str:
     return "No purpose declared."
 
 
-def _extract_allowed_tools(markdown: str) -> tuple[str, ...]:
+def extract_allowed_tools(markdown: str) -> tuple[str, ...]:
     """Read a Markdown ``Allowed tools`` list without executing the skill file."""
 
     lines = markdown.splitlines()
@@ -85,42 +87,72 @@ def _choose_existing_skill(
 
 
 
+def route_skills(
+    user_request: str,
+    available_skills: Iterable[str] | None = None,
+    *,
+    default_skill: str = DEFAULT_SKILL_NAME,
+    max_skills: int = MAX_SELECTED_SKILLS,
+) -> list[str]:
+    """Deterministic multi-skill fallback router.
+
+    The deterministic router intentionally stays conservative. It can combine
+    complementary built-ins for obvious mixed requests and honors an explicitly
+    named custom skill. The LLM router remains responsible for semantic matching
+    of arbitrary custom skills.
+    """
+
+    text = user_request.lower()
+    available = _normalize_available_skills(available_skills)
+    selected: list[str] = []
+
+    # If the user explicitly names a skill, prefer it first. Match both the registry
+    # name and a space-separated form so ``custom_api_review`` can be requested as
+    # "custom api review".
+    for skill_name in sorted(available):
+        if skill_name.lower() in text or skill_name.lower().replace("_", " ") in text:
+            selected.append(skill_name)
+
+    keyword_routes: tuple[tuple[tuple[str, ...], str], ...] = (
+        (("traceback", "stack trace", "error", "exception", "failing", "bug", "fix"), "debug"),
+        (("test", "pytest", "unit test", "regression", "coverage"), "tests"),
+        (("react", "tsx", "component", "frontend component"), "frontend_component"),
+        (("tailwind", "css", "styling", "responsive", "layout", "frontend styling"), "frontend_styling"),
+        (("repository", "repo structure", "inspect repo", "find files", "navigate repo"), "repo"),
+        (("search the web", "google", "bing", "online search", "look up online"), "web_search"),
+        (("gmail", "gmail access", "email", "send email", "email draft", "gmail api"), "gmail_access"),
+    )
+
+    for terms, skill_name in keyword_routes:
+        if skill_name in available and any(term in text for term in terms):
+            selected.append(skill_name)
+
+    selected = list(dict.fromkeys(selected))
+    if selected:
+        return selected[:max(1, max_skills)]
+
+    fallback = _choose_existing_skill(
+        default_skill,
+        available_skills=available,
+        default_skill=default_skill,
+    )
+    return [fallback or default_skill]
+
+
 def route_skill(
     user_request: str,
     available_skills: Iterable[str] | None = None,
     *,
     default_skill: str = DEFAULT_SKILL_NAME,
 ) -> str:
-    """Deterministic fallback router used when LLM routing is unavailable."""
+    """Backward-compatible single-skill fallback router."""
 
-    text = user_request.lower()
-    available = _normalize_available_skills(available_skills)
-
-    keyword_routes: tuple[tuple[tuple[str, ...], str], ...] = (
-        (("traceback", "stack trace", "error", "exception", "failing", "bug", "fix"), "debug"),
-        (("test", "pytest", "unit test", "regression", "coverage"), "tests"),
-        (("search the web", "google", "bing", "online search", "look up online"), "web_search"),
-        (("gmail", "gmail access", "email", "send email", "email draft", "gmail api"), "gmail_access"),
-    )
-
-    for terms, skill_name in keyword_routes:
-        if any(term in text for term in terms):
-            selected = _choose_existing_skill(
-                skill_name,
-                available_skills=available,
-                default_skill=default_skill,
-            )
-            if selected:
-                return selected
-
-    return (
-        _choose_existing_skill(
-            default_skill,
-            available_skills=available,
-            default_skill=default_skill,
-        )
-        or default_skill
-    )
+    return route_skills(
+        user_request,
+        available_skills,
+        default_skill=default_skill,
+        max_skills=1,
+    )[0]
 
 
 class SkillRegistry:
@@ -152,7 +184,7 @@ class SkillRegistry:
                 purpose=_extract_purpose(instructions),
                 instructions=instructions,
                 path=path,
-                allowed_tools=_extract_allowed_tools(instructions),
+                allowed_tools=extract_allowed_tools(instructions),
                 custom=path.stem.startswith(_CUSTOM_SKILL_PREFIX),
             )
 
@@ -164,15 +196,23 @@ class SkillRegistry:
 
         try:
             return self._skills[name]
-
         except KeyError as exc:
             available = ", ".join(self.list_names()) or "none"
             raise KeyError(f"Unknown skill '{name}'. Available skills: {available}") from exc
 
-    def has(self, name: str) -> bool:
+    def get_many(self, names: Iterable[str]) -> list[Skill]:
         if not self._skills:
             self.load()
 
+        output: list[Skill] = []
+        for name in dict.fromkeys(item.strip() for item in names if item.strip()):
+            if name in self._skills:
+                output.append(self._skills[name])
+        return output
+
+    def has(self, name: str) -> bool:
+        if not self._skills:
+            self.load()
         return name in self._skills
 
     def default_skill_name(self) -> str:
@@ -191,7 +231,96 @@ class SkillRegistry:
     def router_catalog(self) -> str:
         if not self._skills:
             self.load()
-        return "\n".join(f"- {skill.name}: {skill.purpose}" for skill in self.list())
+        return "\n".join(
+            f"- {skill.name}: {skill.purpose}"
+            + (f" [tools: {', '.join(skill.allowed_tools)}]" if skill.allowed_tools else "")
+            for skill in self.list()
+        )
+
+    def combined_instructions(
+        self,
+        names: Iterable[str],
+        *,
+        max_chars: int = 18_000,
+    ) -> str:
+        """Combine selected playbooks in priority order with a hard prompt budget."""
+
+        skills = self.get_many(names)
+        blocks: list[str] = []
+        used = 0
+        for index, skill in enumerate(skills):
+            role = "primary" if index == 0 else "supplemental"
+            block = f"## Skill {index + 1} ({role}): {skill.name}\n{skill.instructions.strip()}"
+            remaining = max_chars - used
+            if remaining <= 0:
+                break
+            if len(block) > remaining:
+                block = block[:remaining] + "\n...[skill instructions truncated]"
+            blocks.append(block)
+            used += len(block)
+        return "\n\n".join(blocks)
+
+    def allowed_tools_for(self, names: Iterable[str]) -> list[str]:
+        return list(
+            dict.fromkeys(
+                tool
+                for skill in self.get_many(names)
+                for tool in skill.allowed_tools
+            )
+        )
+
+
+    def rank_for_request(
+        self,
+        user_request: str,
+        *,
+        max_skills: int = MAX_SELECTED_SKILLS,
+    ) -> list[str]:
+        """Rank available skills using deterministic routes plus purpose/name overlap."""
+
+        if not self._skills:
+            self.load()
+
+        base = route_skills(
+            user_request,
+            self.list_names(),
+            default_skill=self.default_skill_name(),
+            max_skills=max_skills,
+        )
+        request_tokens = {token.lower() for token in _TOKEN_RE.findall(user_request)}
+        stopwords = {
+            "the", "and", "for", "with", "this", "that", "from", "into", "use",
+            "using", "want", "please", "help", "agent", "coding", "skill", "skills",
+        }
+        request_tokens -= stopwords
+
+        scored: list[tuple[float, str]] = []
+        for skill in self.list():
+            skill_tokens = {
+                token.lower()
+                for token in _TOKEN_RE.findall(
+                    f"{skill.name.replace('_', ' ')} {skill.purpose}"
+                )
+            } - stopwords
+            overlap = request_tokens & skill_tokens
+            score = float(len(overlap))
+            if skill.custom and overlap:
+                score += 0.25
+            if skill.name.lower() in user_request.lower():
+                score += 10.0
+            if score > 0:
+                scored.append((score, skill.name))
+
+        ranked = [name for _, name in sorted(scored, key=lambda item: (-item[0], item[1]))]
+        combined = list(dict.fromkeys([*base, *ranked]))
+
+        # Do not let the generic default crowd out more specific matches. Keep it
+        # only when it is the sole route or was explicitly named.
+        default = self.default_skill_name()
+        if len(combined) > 1 and default in combined and default.lower() not in user_request.lower():
+            combined = [name for name in combined if name != default]
+
+        return (combined or [default])[:max(1, max_skills)]
 
     def prompt_context(self, *, max_skills: int = 12, max_chars: int = 18_000) -> str:
         """Return bounded playbook text suitable for a voice/intake prompt."""

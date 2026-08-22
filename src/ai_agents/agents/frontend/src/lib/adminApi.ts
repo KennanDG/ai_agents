@@ -187,7 +187,13 @@ export type ToolSummary = {
   name: string;
   module: string;
   purpose: string;
-  status: "builtin" | "pending_review";
+  status: "pending_review" | "approved" | "builtin" ;
+};
+
+export type ToolReviewResponse = ToolSummary & {
+  source: string;
+  approval_ready: boolean;
+  validation_errors: string[];
 };
 
 export const fetchTools = async ({
@@ -199,6 +205,60 @@ export const fetchTools = async ({
   url.searchParams.set("agent", agent);
   const response = await fetch(url, { headers: authHeaders(apiKey) });
   return readJson<ToolSummary[]>(response);
+};
+
+export const fetchToolReview = async ({
+  apiBaseUrl,
+  apiKey,
+  agent,
+  name,
+}: ApiClientConfig & {
+  agent: AgentKind;
+  name: string;
+}): Promise<ToolReviewResponse> => {
+  const response = await fetch(
+    `${apiBaseUrl}/admin/tools/${encodeURIComponent(agent)}/${encodeURIComponent(name)}`,
+    { headers: authHeaders(apiKey) },
+  );
+  return readJson<ToolReviewResponse>(response);
+};
+
+export const approveTool = async ({
+  apiBaseUrl,
+  apiKey,
+  agent,
+  name,
+}: ApiClientConfig & {
+  agent: AgentKind;
+  name: string;
+}): Promise<ToolSummary> => {
+  const response = await fetch(
+    `${apiBaseUrl}/admin/tools/${encodeURIComponent(agent)}/${encodeURIComponent(name)}/approve`,
+    {
+      method: "POST",
+      headers: authHeaders(apiKey),
+    },
+  );
+  return readJson<ToolSummary>(response);
+};
+
+export const rejectTool = async ({
+  apiBaseUrl,
+  apiKey,
+  agent,
+  name,
+}: ApiClientConfig & {
+  agent: AgentKind;
+  name: string;
+}): Promise<{ rejected: boolean }> => {
+  const response = await fetch(
+    `${apiBaseUrl}/admin/tools/${encodeURIComponent(agent)}/${encodeURIComponent(name)}/reject`,
+    {
+      method: "DELETE",
+      headers: authHeaders(apiKey),
+    },
+  );
+  return readJson<{ rejected: boolean }>(response);
 };
 
 export const quarantineTool = async ({
@@ -223,4 +283,43 @@ export const quarantineTool = async ({
     body: JSON.stringify({ agent, name, purpose, source }),
   });
   return readJson<ToolSummary>(response);
+};
+
+export type SkillDraftResponse = {
+  agent: AgentKind;
+  name: string;
+  purpose: string;
+  allowed_tools: string[];
+  missing_tools: string[];
+  warnings: string[];
+  content: string;
+};
+
+export const draftSkill = async ({
+  apiBaseUrl,
+  apiKey,
+  agent,
+  prompt,
+  sourceMarkdown,
+  suggestedName,
+}: ApiClientConfig & {
+  agent: AgentKind;
+  prompt: string;
+  sourceMarkdown?: string;
+  suggestedName?: string;
+}): Promise<SkillDraftResponse> => {
+  const response = await fetch(`${apiBaseUrl}/admin/skills/draft`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...authHeaders(apiKey),
+    },
+    body: JSON.stringify({
+      agent,
+      prompt,
+      source_markdown: sourceMarkdown ?? null,
+      suggested_name: suggestedName ?? null,
+    }),
+  });
+  return readJson<SkillDraftResponse>(response);
 };

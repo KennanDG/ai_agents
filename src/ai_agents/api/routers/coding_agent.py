@@ -15,17 +15,17 @@ from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconn
 from fastapi.encoders import jsonable_encoder
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
-from langchain_openai import ChatOpenAI
 from pydantic import ValidationError
 
 from ai_agents.agents.coding.graph import build_coding_agent_graph
+from ai_agents.agents.coding.model_factory import caption_model
 from ai_agents.agents.coding.memory import (
     CodingAgentRuntimeContext,
     coding_agent_persistence,
 )
 from ai_agents.agents.coding.coding_agent_settings import settings as default_coding_settings
 from ai_agents.api.auth import authorize_websocket, generate_websocket_token
-from ai_agents.api.schemas import (
+from ai_agents.api.api_schemas import (
     CodingAgentClientMessage,
     CodingAgentRunRequest,
     CodingAgentRunResult,
@@ -312,20 +312,7 @@ def _describe_image_attachment(
     mime_type: str,
     data_url: str,
 ) -> str:
-    api_key = config_settings.resolved_groq_api_key()
-    vision_model_name = config_settings.caption_model
-
-    if not api_key or not vision_model_name:
-        raise RuntimeError(
-            f"image attachments require GROQ_API_URL and VISION_MODEL."
-        )
-
-    vision_model = ChatOpenAI(
-        model=vision_model_name,
-        api_key=api_key,
-        base_url=config_settings.groq_api_url,
-        max_retries=2,
-    )
+    vision_model = caption_model()
 
     response = vision_model.invoke(
         [

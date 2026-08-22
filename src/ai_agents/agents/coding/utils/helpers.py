@@ -15,7 +15,7 @@ from ai_agents.agents.coding.utils.text import bullets, dedupe
 
 
 
-from ai_agents.agents.coding.registry import SkillRegistry, route_skill
+from ai_agents.agents.coding.skill_registry import SkillRegistry, route_skill
 from ai_agents.agents.coding.coding_agent_schemas import (
     PlanDecision,
     RepoNavigationDecision,

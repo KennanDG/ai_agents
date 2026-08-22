@@ -14,12 +14,18 @@ class SkillRouteAlternative(BaseModel):
 
 
 class SkillRouteDecision(BaseModel):
-    selected_skill: str = Field(
-        description="Exact name of the available skill that best matches the request.",
+    selected_skills: list[str] = Field(
+        min_length=1,
+        max_length=3,
+        description=(
+            "One to three exact available skill names in priority order. The first "
+            "skill is primary; later skills are supplemental and should add distinct "
+            "guidance rather than duplicate the primary skill."
+        ),
     )
     confidence: float = Field(
         default=0.0,
-        description="Confidence that the selected skill is the best route.",
+        description="Confidence that the selected skill set is the best route.",
         ge=0.0,
         le=1.0,
     )
@@ -29,7 +35,7 @@ class SkillRouteDecision(BaseModel):
     )
     alternatives: list[SkillRouteAlternative] = Field(
         default_factory=list,
-        description="Other plausible skills, ranked from most to least plausible.",
+        description="Other plausible skills not selected, ranked from most to least plausible.",
     )
 
 
@@ -51,6 +57,18 @@ class SubtaskDecision(BaseModel):
         default_factory=list,
         description="Known repo-relative files that this worker should inspect.",
     )
+
+
+class CustomToolCallDecision(BaseModel):
+    tool_name: str = Field(description="Exact approved custom tool name to invoke.")
+    arguments: dict[str, object] = Field(
+        default_factory=dict,
+        description=(
+            "JSON-compatible keyword arguments for the tool. Never include repo_root; "
+            "the runtime injects that value."
+        ),
+    )
+    reason: str = Field(default="", description="Why this tool call will improve implementation context.")
 
 
 class PlanDecision(BaseModel):
@@ -77,6 +95,14 @@ class PlanDecision(BaseModel):
     web_search_query: str = Field(
         default="",
         description="Optional web search query when current context is insufficient and external information is needed.",
+    )
+    custom_tool_calls: list[CustomToolCallDecision] = Field(
+        default_factory=list,
+        max_length=4,
+        description=(
+            "Optional calls to approved custom read-only tools exposed by selected skills. "
+            "Leave empty unless a listed tool materially improves repository context."
+        ),
     )
     subtasks: list[SubtaskDecision] = Field(
         default_factory=list,
@@ -283,3 +309,6 @@ class ProgressDecision(BaseModel):
         default="",
         description="Useful notes to carry into the next patch loop.",
     )
+
+
+    

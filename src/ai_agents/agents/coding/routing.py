@@ -7,15 +7,38 @@ from ai_agents.agents.coding.coding_agent_settings import settings as default_se
 from ai_agents.agents.coding.state import CodingAgentState
 
 
+def _selected_skills(state: CodingAgentState) -> set[str]:
+    selected = {
+        str(name).strip()
+        for name in state.get("selected_skills", [])
+        if str(name).strip()
+    }
+
+    primary = str(state.get("selected_skill", "")).strip()
+    if primary:
+        selected.add(primary)
+
+    return selected
+
+
 def route_after_plan(state: CodingAgentState) -> str:
     if (state.get("web_search_query") or "").strip():
         return "web_search"
-    selected_skill = state.get("selected_skill")
-    if selected_skill == "web_search":
+
+    selected = _selected_skills(state)
+    if "web_search" in selected:
         return "web_search"
-    if selected_skill == "gmail_access":
+    
+    if "gmail_access" in selected:
         return "gmail_access"
+    
     return "repo_navigator"
+
+
+def route_after_web_search(state: CodingAgentState) -> Literal["gmail_access", "repo_navigator"]:
+    # Multiple selected skills may need both external capability nodes. Web search
+    # runs first, then Gmail if it is also part of the selected skill set.
+    return "gmail_access" if "gmail_access" in _selected_skills(state) else "repo_navigator"
 
 
 def route_after_context(state: CodingAgentState) -> Literal["patch", "report"]:

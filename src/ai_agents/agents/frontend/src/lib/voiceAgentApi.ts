@@ -52,6 +52,7 @@ const toVoiceAttachments = (attachedFiles: CodingAgentAttachedFile[]) => {
             mime_type: file.mime_type ?? null,
             size: file.size ?? null,
             content: content || null,
+            data_url: file.data_url ?? null,
             has_image_data: Boolean(file.data_url),
             content_truncated: Boolean(file.truncated) || content.length < rawContent.length,
         };

@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from ai_agents.api.schemas import HealthResponse
+from ai_agents.api.api_schemas import HealthResponse
 
 router = APIRouter(tags=["health"])
 

@@ -10,6 +10,7 @@ from ai_agents.agents.coding.nodes import (
     assess_progress_node,
     assign_context_workers,
     context_worker_node,
+    custom_tools_node,
     gather_context_node,
     gmail_access_node,
     patch_node,
@@ -28,6 +29,7 @@ from ai_agents.agents.coding.routing import (
     route_after_patch,
     route_after_plan,
     route_after_validate,
+    route_after_web_search,
 )
 from ai_agents.agents.coding.state import CodingAgentState
 
@@ -54,6 +56,7 @@ def build_coding_agent_graph(
     builder.add_node("plan", plan_node, retry_policy=no_retry)
     builder.add_node("repo_navigator", repo_navigator_node, retry_policy=no_retry)
     builder.add_node("context_worker", context_worker_node, retry_policy=no_retry)
+    builder.add_node("custom_tools", custom_tools_node, retry_policy=no_retry)
     builder.add_node("gather_context", gather_context_node, retry_policy=no_retry)
     builder.add_node("patch", patch_node, retry_policy=no_retry)
     builder.add_node("validate", validate_node, retry_policy=no_retry)
@@ -74,11 +77,19 @@ def build_coding_agent_graph(
         {
             "web_search": "web_search",
             "gmail_access": "gmail_access",
-            "repo_navigator": "repo_navigator",
+            "repo_navigator": "custom_tools",
         },
     )
-    builder.add_edge("web_search", "repo_navigator")
-    builder.add_edge("gmail_access", "repo_navigator")
+    builder.add_conditional_edges(
+        "web_search",
+        route_after_web_search,
+        {
+            "gmail_access": "gmail_access",
+            "repo_navigator": "custom_tools",
+        },
+    )
+    builder.add_edge("gmail_access", "custom_tools")
+    builder.add_edge("custom_tools", "repo_navigator")
 
     # Dynamic fan-out: every context worker receives an isolated subtask and all
     # outputs are reduced into context_worker_results before gather_context runs.

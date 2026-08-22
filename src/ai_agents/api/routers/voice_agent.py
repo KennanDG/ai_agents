@@ -6,19 +6,28 @@ from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
-from ai_agents.agents.coding.registry import SkillRegistry
+from ai_agents.agents.coding.skill_registry import SkillRegistry
 from ai_agents.agents.voice.service import VoiceAgentService
-from ai_agents.api.schemas import VoiceAgentTurnResponse
+from ai_agents.api.api_schemas import VoiceAgentTurnResponse
 from ai_agents.config.constants import (
     MAX_VOICE_ATTACHMENTS,
     MAX_VOICE_ATTACHMENT_CONTENT_CHARS,
     MAX_TOTAL_VOICE_ATTACHMENT_CONTENT_CHARS,
     MAX_VOICE_SKILL_CONTEXT_CHARS,
+    MAX_ATTACHED_IMAGE_BYTES,
     VOICE_SKILLS_DIR
 )
 
 
 router = APIRouter(prefix="/voice-agent", tags=["voice-agent"])
+
+# Base64 expands binary data by about 4/3; leave a small allowance for the data-URL prefix.
+MAX_VOICE_IMAGE_DATA_URL_CHARS = ((MAX_ATTACHED_IMAGE_BYTES + 2) // 3) * 4 + 256
+SUPPORTED_VOICE_IMAGE_DATA_URL_PREFIXES = (
+    "data:image/png;base64,",
+    "data:image/jpeg;base64,",
+    "data:image/webp;base64,",
+)
 
 
 
@@ -91,9 +100,9 @@ def _optional_text(value: Any, *, max_chars: int) -> str | None:
 def _parse_attached_files(attached_files_json: str | None) -> list[dict[str, Any]]:
     """Parse a bounded, voice-safe attachment summary.
 
-    The browser intentionally does not send image base64 data to this endpoint. The
-    original attachment objects remain in the UI and are forwarded directly to the
-    coding-agent WebSocket after voice intake is ready.
+    Text content remains bounded. Uploaded image data URLs are accepted only long
+    enough for the backend vision model to create a caption; VoiceAgentService strips
+    the raw image payload before invoking the LangGraph voice-intake state.
     """
     if not attached_files_json:
         return []
@@ -126,6 +135,23 @@ def _parse_attached_files(attached_files_json: str | None) -> list[dict[str, Any
         raw_size = item.get("size")
         size = raw_size if isinstance(raw_size, int) and raw_size >= 0 else None
 
+        raw_data_url = item.get("data_url") if isinstance(item.get("data_url"), str) else ""
+        data_url: str | None = None
+        image_data_error: str | None = None
+
+        if raw_data_url:
+            if len(raw_data_url) > MAX_VOICE_IMAGE_DATA_URL_CHARS:
+                image_data_error = (
+                    f"Skipped voice image payload for {name}: encoded image exceeds "
+                    f"{MAX_VOICE_IMAGE_DATA_URL_CHARS} characters."
+                )
+            elif not raw_data_url.startswith(SUPPORTED_VOICE_IMAGE_DATA_URL_PREFIXES):
+                image_data_error = (
+                    f"Skipped voice image payload for {name}: expected a PNG, JPEG, or WebP data URL."
+                )
+            else:
+                data_url = raw_data_url
+
         attachments.append(
             {
                 "name": name,
@@ -135,7 +161,9 @@ def _parse_attached_files(attached_files_json: str | None) -> list[dict[str, Any
                 "size": size,
                 "content": content or None,
                 "content_truncated": bool(raw_content and len(content) < len(raw_content)),
-                "has_image_data": bool(item.get("has_image_data")),
+                "has_image_data": bool(data_url) or bool(item.get("has_image_data")),
+                "data_url": data_url,
+                "image_data_error": image_data_error,
             }
         )
 

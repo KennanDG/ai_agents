@@ -7,7 +7,6 @@ import {
   FolderGit2,
   LoaderCircle,
   RotateCcw,
-  X,
 } from "lucide-react";
 import type { FileChange, RepositoryTreeEntry } from "../types";
 
@@ -165,7 +164,7 @@ export const Sidebar = ({
                   title="Clear agent changes"
                   onClick={onClearChanges}
                 >
-                  <X size={13} />
+                  <RotateCcw size={12} />
                 </button>
               )}
               {agentRunning && (
