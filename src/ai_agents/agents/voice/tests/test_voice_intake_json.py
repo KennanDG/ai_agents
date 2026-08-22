@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ai_agents.agents.voice.nodes import _compact_repo_context, _fallback_coding_request
-from ai_agents.agents.voice.schemas import VoiceIntakeDecision
+from ai_agents.agents.voice.voice_agent_schemas import VoiceIntakeDecision
 
 
 def test_coding_request_object_is_normalized_to_objective() -> None:

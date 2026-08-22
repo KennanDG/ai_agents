@@ -5,7 +5,7 @@ import logging
 from typing import Any
 
 from ai_agents.agents.voice.prompts import VOICE_INTAKE_SYSTEM_PROMPT
-from ai_agents.agents.voice.schemas import VoiceIntakeDecision
+from ai_agents.agents.voice.voice_agent_schemas import VoiceIntakeDecision
 from ai_agents.config.settings import settings
 from ai_agents.agents.voice.state import VoiceAgentState
 from ai_agents.agents.voice.utils.constants import (
