@@ -14,7 +14,7 @@ from typing import Any, Literal
 from fastapi import HTTPException, APIRouter, Query
 from pathlib import Path
 
-from ai_agents.api.schemas import (
+from ai_agents.api.api_schemas import (
     GitHubRepositoryImportRequest,
     GitHubRepositorySummary,
     GitHubRepositoryImportResponse,

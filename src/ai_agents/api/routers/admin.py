@@ -14,7 +14,7 @@ from ai_agents.config.runtime_configuration import runtime_agent_configuration
 from ai_agents.config.constants import ChatProvider, AgentKind
 from ai_agents.config.settings import settings as config_settings
 
-from ai_agents.api.schemas import (
+from ai_agents.api.api_schemas import (
     NAME_RE,
     AgentConfigurationUpdate,
     SkillWriteRequest,
@@ -292,6 +292,7 @@ def save_skill(request: SkillWriteRequest) -> SkillSummary:
 
     _atomic_write(path, _validate_skill_markdown(request.content))
     skill = SkillRegistry(skill_dir).load().get(request.name)
+
     return _skill_summary(request.agent, skill)
 
 

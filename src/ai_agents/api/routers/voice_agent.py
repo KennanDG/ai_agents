@@ -8,7 +8,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from ai_agents.agents.coding.registry import SkillRegistry
 from ai_agents.agents.voice.service import VoiceAgentService
-from ai_agents.api.schemas import VoiceAgentTurnResponse
+from ai_agents.api.api_schemas import VoiceAgentTurnResponse
 from ai_agents.config.constants import (
     MAX_VOICE_ATTACHMENTS,
     MAX_VOICE_ATTACHMENT_CONTENT_CHARS,

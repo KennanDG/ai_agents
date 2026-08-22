@@ -25,7 +25,7 @@ from ai_agents.agents.coding.memory import (
 )
 from ai_agents.agents.coding.coding_agent_settings import settings as default_coding_settings
 from ai_agents.api.auth import authorize_websocket, generate_websocket_token
-from ai_agents.api.schemas import (
+from ai_agents.api.api_schemas import (
     CodingAgentClientMessage,
     CodingAgentRunRequest,
     CodingAgentRunResult,

@@ -6,7 +6,7 @@ import json
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 
 from ai_agents.api.dependency import build_retrieval_settings, build_ingestion_settings
-from ai_agents.api.schemas import (
+from ai_agents.api.api_schemas import (
     IngestRequest,
     IngestResponse,
     RagQueryRequest,
