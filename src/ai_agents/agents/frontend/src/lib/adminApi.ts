@@ -187,7 +187,7 @@ export type ToolSummary = {
   name: string;
   module: string;
   purpose: string;
-  status: "builtin" | "approved" | "pending_review";
+  status: "pending_review" | "approved" | "builtin" ;
 };
 
 export type ToolReviewResponse = ToolSummary & {

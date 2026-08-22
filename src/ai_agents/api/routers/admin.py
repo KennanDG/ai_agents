@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, Query
 from ai_agents.agents.coding.skill_registry import SkillRegistry, extract_allowed_tools
 from ai_agents.agents.coding.tool_registry import (
     CODING_TOOLS_DIR,
-    ApprovedToolRegistry,
+    ApprovedCustomToolRegistry,
     CustomToolValidationError,
     validate_approved_custom_tool_source,
 )
@@ -718,7 +718,7 @@ def approve_tool(agent: AgentKind, name: str) -> ToolSummary:
     with tempfile.TemporaryDirectory(prefix="ai-agents-tool-approval-") as temporary_dir:
         candidate_path = Path(temporary_dir) / pending_path.name
         _atomic_write(candidate_path, source)
-        candidate_registry = ApprovedToolRegistry(Path(temporary_dir)).load()
+        candidate_registry = ApprovedCustomToolRegistry(Path(temporary_dir)).load()
 
         if not candidate_registry.has(pending_path.stem):
             raise HTTPException(
