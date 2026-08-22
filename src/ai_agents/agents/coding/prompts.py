@@ -75,15 +75,19 @@ SKILL_ROUTER_SYSTEM_PROMPT = dedent(
     You are the skill routing node.
 
     # Your job:
-    - Select the single best skill for the user's coding task.
+    - Select one to three complementary skills for the user's coding task.
     - Choose only from the provided skill catalog.
-    - Prefer the most specific matching skill when the request clearly maps to one.
+    - Put the primary skill first and supplemental skills after it.
+    - Prefer the smallest skill set that fully covers the task.
+    - Prefer the most specific matching skills when the request clearly maps to them.
     - Use implement_change for ordinary feature work, refactors, and general code changes.
     - Use debug for errors, tracebacks, broken behavior, and diagnosis-heavy tasks.
     - Use tests for requests primarily about adding, fixing, or improving tests.
     - Use web_search only when the task explicitly needs current external information.
     - Use gmail_access only when the task explicitly needs Gmail access.
-    - Lower confidence when multiple skills are plausible or the request is vague.
+    - Do not add implement_change merely as filler when a more specific skill already covers the same behavior.
+    - Combine skills when the request truly has multiple concerns, such as debugging plus tests, or frontend work plus styling.
+    - Lower confidence when the request is vague or the selected skills conflict.
     - Never invent skill names.
     - Return structured output only.
     """
@@ -286,7 +290,7 @@ def build_skill_router_user_prompt(
 ) -> str:
     return dedent(
         f"""
-        Select the best skill for this coding-agent request.
+        Select the most useful set of skills for this coding-agent request.
 
         # Request:
         {request}
@@ -295,12 +299,14 @@ def build_skill_router_user_prompt(
         {skill_catalog or "No skills were loaded."}
 
         # Output guidance:
-        - selected_skill must exactly match one available skill name.
-        - Base the decision on the skill purpose and the user's explicit intent.
-        - Do not route to web_search unless the request requires internet/current external data.
-        - Do not route to gmail_access unless the request requires Gmail.
-        - For mixed requests, choose the skill needed first in the graph.
-        - Include a concise reason and at most three alternatives.
+        - selected_skills must contain one to three exact available skill names.
+        - Put the primary skill first. Supplemental skills must contribute distinct guidance.
+        - Base the decision on each skill purpose and the user's explicit intent.
+        - Do not include web_search unless the request requires internet/current external data.
+        - Do not include gmail_access unless the request requires Gmail.
+        - For mixed requests, include complementary skills rather than forcing one broad skill.
+        - Prefer fewer skills when one skill already covers the task.
+        - Include a concise reason and at most three unselected alternatives.
         """
     ).strip()
 

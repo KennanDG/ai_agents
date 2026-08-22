@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import {
   deleteSkill,
+  draftSkill,
   fetchSkills,
   fetchTools,
   quarantineTool,
@@ -34,8 +35,6 @@ Use when:
 - Describe when the router should select this skill.
 
 Allowed tools:
-- read_file
-- robust_search
 
 Steps:
 1. Inspect the relevant context.
@@ -47,6 +46,20 @@ Rules:
 - Do not expose secrets.
 - Avoid unrelated changes.
 `;
+
+
+const validateCanonicalSkill = (value: string): string | null => {
+  const normalized = value.replace(/\r\n/g, "\n").trim();
+  if (!/^#\s+Skill:\s+.+/im.test(normalized)) return "Skill must start with '# Skill: <name>'.";
+  if (!/^Purpose:\s+\S+/im.test(normalized)) return "Skill must include a non-empty Purpose line.";
+
+  const required = ["Use when", "Allowed tools", "Steps", "Rules"];
+  for (const section of required) {
+    const matcher = new RegExp(`^(?:#{1,6}\\s+)?${section}:?\\s*$`, "im");
+    if (!matcher.test(normalized)) return `Skill is missing the '${section}' section.`;
+  }
+  return null;
+};
 
 const FieldLabel = ({ children }: { children: ReactNode }) => (
   <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">
@@ -65,6 +78,8 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [draftPrompt, setDraftPrompt] = useState("");
+  const [drafting, setDrafting] = useState(false);
   const [toolPurpose, setToolPurpose] = useState("");
   const [toolName, setToolName] = useState("");
   const [toolSource, setToolSource] = useState("");
@@ -134,9 +149,41 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
     const baseName = file.name.replace(/\.(md|py)$/i, "").replace(/[^a-zA-Z0-9_-]+/g, "_");
     if (kind === "skill") {
       const normalizedName = (baseName || "custom_skill").toLowerCase();
+      const suggestedName = normalizedName.startsWith("custom_") ? normalizedName : `custom_${normalizedName}`;
       setSelectedName(null);
-      setName(normalizedName.startsWith("custom_") ? normalizedName : `custom_${normalizedName}`);
-      setContent(text);
+      setDrafting(true);
+      setError(null);
+      setMessage(null);
+      try {
+        const draft = await draftSkill({
+          apiBaseUrl,
+          apiKey,
+          agent,
+          suggestedName,
+          sourceMarkdown: text,
+          prompt: (
+            "Translate this imported Markdown into the canonical skill format while " +
+            "preserving its intent, workflow, constraints, and safe executable tool dependencies."
+          ),
+        });
+        setName(draft.name);
+        setContent(draft.content);
+        setMessage(
+          draft.warnings.length
+            ? `Imported and normalized '${file.name}'. ${draft.warnings.join(" ")}`
+            : `Imported and normalized '${file.name}' into the canonical skill format.`,
+        );
+      } catch (reason) {
+        setName(suggestedName);
+        setContent(text);
+        setError(
+          reason instanceof Error
+            ? `Could not normalize the imported skill: ${reason.message}`
+            : "Could not normalize the imported skill.",
+        );
+      } finally {
+        setDrafting(false);
+      }
     } else {
       setToolName(baseName || "custom_tool");
       setToolSource(text);
@@ -148,6 +195,13 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
       setError("Built-in skills are read-only in the UI. Create a custom_ skill instead.");
       return;
     }
+    const formatError = validateCanonicalSkill(content);
+
+    if (formatError) {
+      setError(formatError);
+      return;
+    }
+    
     setSaving(true);
     setError(null);
     setMessage(null);
@@ -169,6 +223,36 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
       setError(reason instanceof Error ? reason.message : "Failed to save skill.");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const generateFromPrompt = async () => {
+    const prompt = draftPrompt.trim();
+    if (!prompt) return;
+
+    setDrafting(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const draft = await draftSkill({
+        apiBaseUrl,
+        apiKey,
+        agent,
+        prompt,
+        suggestedName: name.trim() || "custom_skill",
+      });
+      setSelectedName(null);
+      setName(draft.name);
+      setContent(draft.content);
+      setMessage(
+        draft.warnings.length
+          ? `Generated '${draft.name}'. ${draft.warnings.join(" ")}`
+          : `Generated '${draft.name}'. Review it, then save when ready.`,
+      );
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Failed to generate skill.");
+    } finally {
+      setDrafting(false);
     }
   };
 
@@ -259,8 +343,9 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
             type="button"
             className="secondary-button mb-3 w-full justify-center"
             onClick={() => skillFileRef.current?.click()}
+            disabled={drafting}
           >
-            <Upload size={12} />
+            {drafting ? <LoaderCircle size={12} className="animate-spin" /> : <Upload size={12} />}
             Import Markdown
           </button>
 
@@ -310,13 +395,41 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
                   type="button"
                   className="primary-button size-auto w-28"
                   onClick={persistSkill}
-                  disabled={saving || Boolean(selectedSkill && !selectedSkill.custom)}
+                  disabled={saving || drafting || Boolean(selectedSkill && !selectedSkill.custom)}
                   title={selectedSkill && !selectedSkill.custom ? "Built-in skills are read-only" : "Save skill"}
                 >
                   {saving ? <LoaderCircle size={12} className="animate-spin" /> : <Save size={12} />}
                   Save skill
                 </button>
               </div>
+            </div>
+
+            <div className="mt-4 rounded-md border border-line bg-panel-soft p-3">
+              <div className="flex items-center gap-2">
+                <Sparkles size={13} className="text-accent-light" />
+                <div>
+                  <h3 className="text-xs font-semibold text-ink">Generate skill with AI</h3>
+                  <p className="mt-0.5 text-[9px] leading-4 text-muted">
+                    The backend generates canonical Markdown using only executable tools registered for the selected agent.
+                  </p>
+                </div>
+              </div>
+              <textarea
+                value={draftPrompt}
+                onChange={(event) => setDraftPrompt(event.target.value)}
+                rows={4}
+                placeholder="Example: Create a skill for reviewing FastAPI endpoint changes, checking schemas, auth, error handling, and targeted tests."
+                className="mt-3 w-full resize-y rounded-md border border-line bg-surface px-3 py-2 text-xs leading-5 text-ink outline-none focus:border-accent/70"
+              />
+              <button
+                type="button"
+                className="secondary-button mt-2 justify-center"
+                disabled={drafting || !draftPrompt.trim()}
+                onClick={generateFromPrompt}
+              >
+                {drafting ? <LoaderCircle size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                Generate draft
+              </button>
             </div>
 
             <div className="mt-4">
@@ -331,6 +444,9 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
             </div>
             <div className="mt-3">
               <FieldLabel>Markdown instructions</FieldLabel>
+              <p className="mb-2 text-[9px] leading-4 text-muted">
+                Required format: # Skill, Purpose, Use when, Allowed tools, Steps, and Rules. Unknown or pending-review tools are rejected on save.
+              </p>
               <textarea
                 value={content}
                 onChange={(event) => setContent(event.target.value)}

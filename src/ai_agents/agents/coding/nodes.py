@@ -36,7 +36,7 @@ from ai_agents.agents.coding.prompts import (
 )
 
 
-from ai_agents.agents.coding.registry import SkillRegistry, route_skill
+from ai_agents.agents.coding.registry import MAX_SELECTED_SKILLS, SkillRegistry
 from ai_agents.agents.coding.model_factory import build_chat_model
 from ai_agents.config.settings import settings as app_settings
 from ai_agents.agents.coding.routing import patch_attempts_remaining
@@ -277,6 +277,8 @@ def route_node(
         return {
             "task_mode": task_mode,
             "selected_skill": "",
+            "selected_skills": [],
+            "selected_skill_tools": [],
             "skill_instructions": "",
             "route_confidence": 0.0,
             "route_reason": str(exc),
@@ -285,25 +287,52 @@ def route_node(
             "status": "route_failed",
         }
 
-    deterministic_skill = route_skill(
+    deterministic_skills = registry.rank_for_request(
         state["user_request"],
-        registry.list_names(),
-        default_skill=default_skill,
+        max_skills=MAX_SELECTED_SKILLS,
     )
 
-    # Most coding requests have an unambiguous deterministic route. Avoid an LLM
-    # round trip unless explicitly enabled for installations with many custom skills.
-    if not cfg.llm_skill_routing_enabled or task_mode == "simple":
-        skill = registry.get(deterministic_skill)
+    def build_payload(
+        selected_names: list[str],
+        *,
+        confidence: float,
+        reason: str,
+        alternatives: list[dict[str, str]] | None = None,
+    ) -> CodingAgentState:
+
+        valid_names = [
+            name for name in dict.fromkeys(selected_names)
+            if registry.has(name)
+        ][:MAX_SELECTED_SKILLS]
+
+        if not valid_names:
+            valid_names = [default_skill]
         return {
             "task_mode": task_mode,
-            "selected_skill": skill.name,
-            "skill_instructions": skill.instructions,
-            "route_confidence": 0.95,
-            "route_reason": "Deterministic low-latency skill route.",
-            "route_alternatives": [],
+            # Preserve the old scalar field so existing API/UI code does not break.
+            "selected_skill": valid_names[0],
+            "selected_skills": valid_names,
+            "selected_skill_tools": registry.allowed_tools_for(valid_names),
+            "skill_instructions": registry.combined_instructions(valid_names),
+            "route_confidence": confidence,
+            "route_reason": reason,
+            "route_alternatives": alternatives or [],
             "status": "routed",
         }
+
+    # The deterministic router can now return complementary skills and rank custom
+    # skills by name/purpose overlap. Keep the LLM route opt-in for installations
+    # that want stronger semantic matching without making every run pay that latency.
+    if not cfg.llm_skill_routing_enabled or task_mode == "simple":
+        return build_payload(
+            deterministic_skills,
+            confidence=0.92 if len(deterministic_skills) == 1 else 0.86,
+            reason=(
+                "Deterministic low-latency multi-skill route."
+                if len(deterministic_skills) > 1
+                else "Deterministic low-latency skill route."
+            ),
+        )
 
     try:
         decision: SkillRouteDecision = invoke_parsed_decision(
@@ -319,37 +348,38 @@ def route_node(
             max_attempts=1,
         )
     except Exception as exc:
-        fallback = _route_with_fallback(
-            state=state,
-            registry=registry,
-            error=f"LLM skill routing failed; used fallback router: {exc}",
+        return build_payload(
+            deterministic_skills,
+            confidence=0.5,
+            reason=f"LLM skill routing failed; used deterministic route: {exc}",
         )
-        return {**fallback, "task_mode": task_mode}
 
-    selected_skill = decision.selected_skill.strip()
-    if not registry.has(selected_skill):
-        selected_skill = deterministic_skill
-        route_reason = f"Unknown LLM skill; used deterministic route. {decision.reason}"
+    selected_names = [
+        name.strip()
+        for name in decision.selected_skills
+        if name.strip() and registry.has(name.strip())
+    ]
+    selected_names = list(dict.fromkeys(selected_names))[:MAX_SELECTED_SKILLS]
+
+    if not selected_names:
+        selected_names = deterministic_skills
+        route_reason = f"LLM selected no known skills; used deterministic route. {decision.reason}"
         confidence = 0.0
     else:
         route_reason = decision.reason
         confidence = decision.confidence
 
-    skill = registry.get(selected_skill)
     alternatives = [
         {"skill_name": item.skill_name, "reason": item.reason}
         for item in decision.alternatives
-        if registry.has(item.skill_name) and item.skill_name != selected_skill
+        if registry.has(item.skill_name) and item.skill_name not in selected_names
     ][:3]
-    return {
-        "task_mode": task_mode,
-        "selected_skill": skill.name,
-        "skill_instructions": skill.instructions,
-        "route_confidence": confidence,
-        "route_reason": route_reason,
-        "route_alternatives": alternatives,
-        "status": "routed",
-    }
+    return build_payload(
+        selected_names,
+        confidence=confidence,
+        reason=route_reason,
+        alternatives=alternatives,
+    )
 
 
 
@@ -392,11 +422,16 @@ def plan_node(
         }
 
     planner_prompt = build_planner_user_prompt(request)
-    if state.get("selected_skill"):
+    selected_skills = list(state.get("selected_skills") or [])
+
+    if not selected_skills and state.get("selected_skill"):
+        selected_skills = [str(state.get("selected_skill"))]
+
+    if selected_skills:
         planner_prompt += (
-            "\n\nSelected skill:\n"
-            f"{state.get('selected_skill')}\n\n"
-            "Skill guidance for planning:\n"
+            "\n\nSelected skills in priority order:\n"
+            f"{bullets(selected_skills)}\n\n"
+            "Combined skill guidance for planning:\n"
             f"{skill_instructions_for_llm(state.get('skill_instructions', ''))}"
         )
 
@@ -527,7 +562,7 @@ def repo_navigator_node(
                 system_prompt=REPO_NAVIGATOR_SYSTEM_PROMPT,
                 user_prompt=build_repo_navigator_user_prompt(
                     request=state["user_request"],
-                    selected_skill=state.get("selected_skill"),
+                    selected_skill=", ".join(state.get("selected_skills") or [state.get("selected_skill", "")]),
                     skill_instructions=skill_instructions_for_llm(
                         state.get("skill_instructions", "")
                     ),
@@ -900,7 +935,7 @@ def gather_context_node(
     candidate_blocks.append(
         "# Execution context\n"
         f"Task mode: {state.get('task_mode', 'standard')}\n"
-        f"Selected skill: {state.get('selected_skill', 'none')}\n"
+        f"Selected skills: {', '.join(state.get('selected_skills') or [state.get('selected_skill', 'none')])}\n"
         f"Plan:\n{bullets(state.get('plan', []))}\n"
         f"Selected repository paths:\n{bullets(selected_paths)}"
     )
@@ -997,7 +1032,7 @@ def patch_node(
     )
     patch_prompt = build_patcher_user_prompt(
         request=state["user_request"],
-        selected_skill=state.get("selected_skill"),
+        selected_skill=", ".join(state.get("selected_skills") or [state.get("selected_skill", "")]),
         skill_instructions=skill_instructions_for_llm(
             state.get("skill_instructions", "")
         ),
@@ -1575,8 +1610,8 @@ Execution mode:
 Execution profile:
 {state.get('runtime_settings', {})}
 
-Selected skill:
-{state.get('selected_skill', 'none')}
+Selected skills:
+{bullets(state.get('selected_skills') or [state.get('selected_skill', 'none')])}
 
 Plan:
 {bullets(state.get('plan', []))}
@@ -1605,9 +1640,10 @@ def web_search_node(state: CodingAgentState) -> CodingAgentState:
     skill is selected. Clears the dynamic query after search.
     """
     dynamic_query = (state.get("web_search_query") or "").strip()
+
     if dynamic_query:
         query = dynamic_query
-    elif state.get("selected_skill") == "web_search":
+    elif "web_search" in set(state.get("selected_skills") or [state.get("selected_skill", "")]):
         query = state.get("user_request", "")
     else:
         return {"status": "web_search_skipped"}
@@ -1641,7 +1677,7 @@ def gmail_access_node(state: CodingAgentState) -> CodingAgentState:
     Perform Gmail access if the selected skill is gmail_access.
     Currently a placeholder.
     """
-    if state.get("selected_skill") != "gmail_access":
+    if "gmail_access" not in set(state.get("selected_skills") or [state.get("selected_skill", "")]):
         return {"status": "gmail_access_skipped"}
     # Placeholder: log that gmail access was triggered
     # In future, invoke gmail API here.

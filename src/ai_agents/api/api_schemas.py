@@ -72,6 +72,7 @@ class CodingAgentRunResult(BaseModel):
 
     report: str | None = None
     selected_skill: str | None = None
+    selected_skills: list[str] = Field(default_factory=list)
     task_mode: Literal["simple", "standard", "parallel"] | None = None
     subtasks: List[Dict[str, Any]] = Field(default_factory=list)
     context_worker_count: int = 0
@@ -399,6 +400,50 @@ class SkillWriteRequest(BaseModel):
         return normalized
 
 
+class SkillDraftRequest(BaseModel):
+    agent: AgentKind
+    prompt: str = Field(min_length=3, max_length=8_000)
+    source_markdown: str | None = Field(default=None, max_length=MAX_SKILL_CHARS)
+    suggested_name: str | None = Field(default=None, max_length=128)
+
+    @field_validator("suggested_name")
+    @classmethod
+    def normalize_suggested_name(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        
+        normalized = value.strip().lower().replace("-", "_")
+        normalized = re.sub(r"[^a-z0-9_]+", "_", normalized).strip("_")
+
+        if not normalized:
+            return None
+        
+        if not normalized.startswith("custom_"):
+            normalized = f"custom_{normalized}"
+            
+        return normalized[:128]
+
+
+class SkillDraftDecision(BaseModel):
+    registry_name: str = Field(min_length=1, max_length=128)
+    display_name: str = Field(min_length=1, max_length=160)
+    purpose: str = Field(min_length=1, max_length=500)
+    use_when: list[str] = Field(default_factory=list, max_length=8)
+    allowed_tools: list[str] = Field(default_factory=list, max_length=20)
+    steps: list[str] = Field(default_factory=list, max_length=12)
+    rules: list[str] = Field(default_factory=list, max_length=12)
+
+
+class SkillDraftResponse(BaseModel):
+    agent: AgentKind
+    name: str
+    purpose: str
+    allowed_tools: list[str] = Field(default_factory=list)
+    missing_tools: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    content: str
+
+
 class ToolQuarantineRequest(BaseModel):
     agent: AgentKind
     name: str
@@ -487,15 +532,6 @@ class SourceRow(BaseModel):
 
 class SourcesListResponse(BaseModel):
     sources: List[SourceRow]
-
-
-
-
-
-
-
-
-
 
 
 

@@ -14,12 +14,18 @@ class SkillRouteAlternative(BaseModel):
 
 
 class SkillRouteDecision(BaseModel):
-    selected_skill: str = Field(
-        description="Exact name of the available skill that best matches the request.",
+    selected_skills: list[str] = Field(
+        min_length=1,
+        max_length=3,
+        description=(
+            "One to three exact available skill names in priority order. The first "
+            "skill is primary; later skills are supplemental and should add distinct "
+            "guidance rather than duplicate the primary skill."
+        ),
     )
     confidence: float = Field(
         default=0.0,
-        description="Confidence that the selected skill is the best route.",
+        description="Confidence that the selected skill set is the best route.",
         ge=0.0,
         le=1.0,
     )
@@ -29,7 +35,7 @@ class SkillRouteDecision(BaseModel):
     )
     alternatives: list[SkillRouteAlternative] = Field(
         default_factory=list,
-        description="Other plausible skills, ranked from most to least plausible.",
+        description="Other plausible skills not selected, ranked from most to least plausible.",
     )
 
 

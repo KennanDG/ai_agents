@@ -224,3 +224,42 @@ export const quarantineTool = async ({
   });
   return readJson<ToolSummary>(response);
 };
+
+export type SkillDraftResponse = {
+  agent: AgentKind;
+  name: string;
+  purpose: string;
+  allowed_tools: string[];
+  missing_tools: string[];
+  warnings: string[];
+  content: string;
+};
+
+export const draftSkill = async ({
+  apiBaseUrl,
+  apiKey,
+  agent,
+  prompt,
+  sourceMarkdown,
+  suggestedName,
+}: ApiClientConfig & {
+  agent: AgentKind;
+  prompt: string;
+  sourceMarkdown?: string;
+  suggestedName?: string;
+}): Promise<SkillDraftResponse> => {
+  const response = await fetch(`${apiBaseUrl}/admin/skills/draft`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...authHeaders(apiKey),
+    },
+    body: JSON.stringify({
+      agent,
+      prompt,
+      source_markdown: sourceMarkdown ?? null,
+      suggested_name: suggestedName ?? null,
+    }),
+  });
+  return readJson<SkillDraftResponse>(response);
+};

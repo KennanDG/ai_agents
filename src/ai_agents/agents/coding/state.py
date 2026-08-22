@@ -55,7 +55,10 @@ class CodingAgentState(TypedDict, total=False):
     context_worker_results: Annotated[list[dict[str, Any]], operator.add]
     requested_context: list[dict[str, Any]]
 
+    # ``selected_skill`` remains the primary skill for backward compatibility.
     selected_skill: str
+    selected_skills: list[str]
+    selected_skill_tools: list[str]
     skill_instructions: str
     route_confidence: float
     route_reason: str

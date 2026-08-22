@@ -28,6 +28,7 @@ from ai_agents.agents.coding.routing import (
     route_after_patch,
     route_after_plan,
     route_after_validate,
+    route_after_web_search,
 )
 from ai_agents.agents.coding.state import CodingAgentState
 
@@ -77,7 +78,14 @@ def build_coding_agent_graph(
             "repo_navigator": "repo_navigator",
         },
     )
-    builder.add_edge("web_search", "repo_navigator")
+    builder.add_conditional_edges(
+        "web_search",
+        route_after_web_search,
+        {
+            "gmail_access": "gmail_access",
+            "repo_navigator": "repo_navigator",
+        },
+    )
     builder.add_edge("gmail_access", "repo_navigator")
 
     # Dynamic fan-out: every context worker receives an isolated subtask and all
