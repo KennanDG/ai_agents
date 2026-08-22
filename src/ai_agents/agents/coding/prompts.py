@@ -128,6 +128,13 @@ PLANNER_SYSTEM_PROMPT = dedent(
       a narrow objective and focused search requests; workers gather context but do not edit.
     - Keep coupled changes in the same subtask so the final patcher can reason atomically.
 
+    # Approved custom tools:
+    - The user prompt may list approved custom tools exposed by the selected skills.
+    - Use `custom_tool_calls` only for exact tool names in that list.
+    - Never invent tool names or pass `repo_root`; the runtime injects repository scope.
+    - Prefer zero custom tool calls when normal repository search/context is sufficient.
+    - Treat custom tools as read-only inspection helpers, not patch or shell mechanisms.
+
     # Web search:
     - Provide an optional `web_search_query` when the current repository context is clearly insufficient
       and up-to-date external information (docs, release notes, API references, etc.) is likely needed.
@@ -330,6 +337,10 @@ def build_planner_user_prompt(request: str) -> str:
         - Put file types such as `.py`, `.md`, `.tsx`, or `.sql` in `file_extensions`.
         - Use `mode="all"` by default, `mode="symbol"` for Python symbol lookup, and `mode="any"` only for broad fallback or path-only discovery.
         - Do not use unsupported search syntax such as `in:path:`, `path:`, `file:`, or shell globs inside `terms`.
+        - If an "Approved custom tools available for this run" section is present, you may add up to four `custom_tool_calls`.
+        - `custom_tool_calls[].tool_name` must exactly match that catalog and `arguments` must contain only the named keyword arguments required by the tool.
+        - Never include repo_root in custom tool arguments; the runtime injects it.
+        - Leave `custom_tool_calls` empty when the repository search/context is already sufficient.
         - Provide a `web_search_query` only when the repository alone cannot satisfy the request (e.g., a new library, external API docs, or a framework version not yet visible in the repo).
         - Validation commands must be safe.
         - Do not invent specific files unless the request clearly names them.

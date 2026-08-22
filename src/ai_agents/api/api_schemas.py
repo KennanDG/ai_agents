@@ -478,7 +478,13 @@ class ToolSummary(BaseModel):
     name: str
     module: str
     purpose: str
-    status: Literal["builtin", "pending_review"]
+    status: Literal["builtin", "approved", "pending_review"]
+
+
+class ToolReviewResponse(ToolSummary):
+    source: str
+    approval_ready: bool = False
+    validation_errors: list[str] = Field(default_factory=list)
 
 
 

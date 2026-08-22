@@ -16,6 +16,9 @@ CodingAgentStatus = Literal[
     "web_search_failed",
     "gmail_access_skipped",
     "gmail_access_completed",
+    "custom_tools_skipped",
+    "custom_tools_completed",
+    "custom_tools_failed",
     "context_gathered",
     "context_failed",
     "patched",
@@ -59,6 +62,8 @@ class CodingAgentState(TypedDict, total=False):
     selected_skill: str
     selected_skills: list[str]
     selected_skill_tools: list[str]
+    custom_tool_calls: list[dict[str, Any]]
+    custom_tool_results: list[dict[str, Any]]
     skill_instructions: str
     route_confidence: float
     route_reason: str

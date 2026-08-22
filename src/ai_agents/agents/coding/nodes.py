@@ -36,8 +36,12 @@ from ai_agents.agents.coding.prompts import (
 )
 
 
-from ai_agents.agents.coding.registry import MAX_SELECTED_SKILLS, SkillRegistry
+from ai_agents.agents.coding.skill_registry import MAX_SELECTED_SKILLS, SkillRegistry
 from ai_agents.agents.coding.model_factory import build_chat_model
+from ai_agents.agents.coding.tool_registry import (
+    ApprovedCustomToolRegistry,
+    MAX_CUSTOM_TOOL_CALLS,
+)
 from ai_agents.config.settings import settings as app_settings
 from ai_agents.agents.coding.routing import patch_attempts_remaining
 from ai_agents.agents.coding.runtime import allow_write as resolve_allow_write
@@ -405,6 +409,17 @@ def plan_node(
     request = state["user_request"]
     task_mode = state.get("task_mode") or _classify_task_mode(state, cfg)
     deterministic_search = _deterministic_search_requests(state)
+    approved_custom_tool_registry = ApprovedCustomToolRegistry().load()
+    selected_tool_names = list(state.get("selected_skill_tools") or [])
+    has_selected_custom_tools = any(
+        approved_custom_tool_registry.has(name) for name in selected_tool_names
+    )
+
+    # The simple fast path skips the planner. Promote the run to standard when a
+    # selected skill exposes an approved custom tool so the planner gets a chance
+    # to decide whether and how to call it.
+    if task_mode == "simple" and has_selected_custom_tools:
+        task_mode = "standard"
 
     if task_mode == "simple":
         return {
@@ -417,6 +432,7 @@ def plan_node(
             "search_requests": deterministic_search,
             "search_queries": [],
             "subtasks": _fallback_subtasks(state, deterministic_search),
+            "custom_tool_calls": [],
             "validation_commands": state.get("validation_commands", []),
             "status": "planned",
         }
@@ -433,6 +449,16 @@ def plan_node(
             f"{bullets(selected_skills)}\n\n"
             "Combined skill guidance for planning:\n"
             f"{skill_instructions_for_llm(state.get('skill_instructions', ''))}"
+        )
+
+    approved_custom_tool_catalog = approved_custom_tool_registry.prompt_catalog(selected_tool_names)
+    if approved_custom_tool_catalog:
+        planner_prompt += (
+            "\n\nApproved custom tools available for this run:\n"
+            f"{approved_custom_tool_catalog}\n\n"
+            "Use custom_tool_calls only when one of these tools materially improves "
+            "repository inspection. Tool arguments must be JSON-compatible and must "
+            "not include repo_root."
         )
 
     memories = state.get("long_term_memories", [])
@@ -472,6 +498,9 @@ def plan_node(
             "search_requests": search_requests,
             "search_queries": decision.search_queries,
             "subtasks": subtasks,
+            "custom_tool_calls": [
+                item.model_dump() for item in decision.custom_tool_calls[:MAX_CUSTOM_TOOL_CALLS]
+            ],
             "validation_commands": decision.validation_commands,
             "web_search_query": decision.web_search_query or "",
             "status": "planned",
@@ -487,6 +516,7 @@ def plan_node(
             "search_requests": deterministic_search,
             "search_queries": [],
             "subtasks": _fallback_subtasks(state, deterministic_search),
+            "custom_tool_calls": [],
             "web_search_query": "",
             "errors": [
                 *state.get("errors", []),
@@ -495,6 +525,85 @@ def plan_node(
             "status": "planned",
         }
 
+
+
+def custom_tools_node(
+    state: CodingAgentState,
+    cfg: CodingAgentSettings = default_settings,
+) -> CodingAgentState:
+    """Execute approved custom inspection tools requested by the planner.
+
+    Only tools explicitly exposed by the selected skills may run. Repository scope
+    is injected by the runtime and cannot be overridden by model-generated args.
+    """
+
+    calls = list(state.get("custom_tool_calls") or [])[:MAX_CUSTOM_TOOL_CALLS]
+    if not calls:
+        return {"custom_tool_results": [], "status": "custom_tools_skipped"}
+
+    cfg = _settings_for_state(state, cfg)
+    repo_root = resolve_repo_root(state, cfg)
+    allowed = set(state.get("selected_skill_tools") or [])
+    custom_tool_registry = ApprovedCustomToolRegistry().load()
+    results: list[dict[str, Any]] = []
+    errors = list(state.get("errors", []))
+
+    for raw_call in calls:
+        tool_name = str(raw_call.get("tool_name", "")).strip()
+        arguments = raw_call.get("arguments") or {}
+        reason = str(raw_call.get("reason", "")).strip()
+
+        if not tool_name:
+            continue
+        if tool_name not in allowed:
+            errors.append(
+                f"Skipped custom tool '{tool_name}': it is not allowed by the selected skills."
+            )
+            continue
+        if not custom_tool_registry.has(tool_name):
+            errors.append(
+                f"Skipped custom tool '{tool_name}': it is not approved/available at runtime."
+            )
+            continue
+        if not isinstance(arguments, dict):
+            errors.append(f"Skipped custom tool '{tool_name}': arguments must be an object.")
+            continue
+
+        try:
+            result = custom_tool_registry.invoke(
+                tool_name,
+                repo_root=repo_root,
+                arguments=arguments,
+            )
+            result["reason"] = reason
+            results.append(result)
+
+        except Exception as exc:
+            errors.append(f"Approved custom tool '{tool_name}' failed: {exc}")
+            results.append(
+                {
+                    "tool_name": tool_name,
+                    "arguments": arguments,
+                    "reason": reason,
+                    "output": str(exc),
+                    "truncated": False,
+                    "success": False,
+                }
+            )
+
+    if not results:
+        status = "custom_tools_failed" if calls else "custom_tools_skipped"
+        
+    elif any(bool(item.get("success")) for item in results):
+        status = "custom_tools_completed"
+    else:
+        status = "custom_tools_failed"
+
+    return {
+        "custom_tool_results": results,
+        "errors": errors,
+        "status": status,
+    }
 
 
 def repo_navigator_node(
@@ -939,6 +1048,20 @@ def gather_context_node(
         f"Plan:\n{bullets(state.get('plan', []))}\n"
         f"Selected repository paths:\n{bullets(selected_paths)}"
     )
+
+    for tool_result in state.get("custom_tool_results", []):
+        tool_name = str(tool_result.get("tool_name", "custom_tool"))
+        if tool_result.get("success"):
+            candidate_blocks.append(
+                f"# Approved custom tool result: {tool_name}\n"
+                f"Reason: {tool_result.get('reason', '')}\n"
+                f"{tool_result.get('output', '')}"
+            )
+        else:
+            errors.append(
+                f"Custom tool {tool_name} did not produce usable context: "
+                f"{tool_result.get('output', '')}"
+            )
 
     for result in worker_results:
         worker_errors = [str(item) for item in result.get("errors", [])]
@@ -1615,6 +1738,12 @@ Selected skills:
 
 Plan:
 {bullets(state.get('plan', []))}
+
+Approved custom tools used:
+{bullets([
+    item.get('tool_name', '') + (' (ok)' if item.get('success') else ' (failed)')
+    for item in state.get('custom_tool_results', [])
+]) if state.get('custom_tool_results') else 'None'}
 
 Files inspected:
 {bullets(state.get('files_inspected', []))}

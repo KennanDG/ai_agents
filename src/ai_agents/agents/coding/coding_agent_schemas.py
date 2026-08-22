@@ -59,6 +59,18 @@ class SubtaskDecision(BaseModel):
     )
 
 
+class CustomToolCallDecision(BaseModel):
+    tool_name: str = Field(description="Exact approved custom tool name to invoke.")
+    arguments: dict[str, object] = Field(
+        default_factory=dict,
+        description=(
+            "JSON-compatible keyword arguments for the tool. Never include repo_root; "
+            "the runtime injects that value."
+        ),
+    )
+    reason: str = Field(default="", description="Why this tool call will improve implementation context.")
+
+
 class PlanDecision(BaseModel):
     task_mode: TaskMode = Field(
         default="standard",
@@ -83,6 +95,14 @@ class PlanDecision(BaseModel):
     web_search_query: str = Field(
         default="",
         description="Optional web search query when current context is insufficient and external information is needed.",
+    )
+    custom_tool_calls: list[CustomToolCallDecision] = Field(
+        default_factory=list,
+        max_length=4,
+        description=(
+            "Optional calls to approved custom read-only tools exposed by selected skills. "
+            "Leave empty unless a listed tool materially improves repository context."
+        ),
     )
     subtasks: list[SubtaskDecision] = Field(
         default_factory=list,
@@ -289,3 +309,6 @@ class ProgressDecision(BaseModel):
         default="",
         description="Useful notes to carry into the next patch loop.",
     )
+
+
+    

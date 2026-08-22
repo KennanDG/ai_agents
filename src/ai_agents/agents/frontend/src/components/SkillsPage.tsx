@@ -1,6 +1,8 @@
 import { type ChangeEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
+  CheckCircle2,
   CircleAlert,
+  Eye,
   FilePlus2,
   LoaderCircle,
   RefreshCcw,
@@ -9,16 +11,21 @@ import {
   Trash2,
   Upload,
   Wrench,
+  X,
 } from "lucide-react";
 import {
+  approveTool,
   deleteSkill,
   draftSkill,
   fetchSkills,
+  fetchToolReview,
   fetchTools,
   quarantineTool,
+  rejectTool,
   saveSkill,
   type AgentKind,
   type SkillSummary,
+  type ToolReviewResponse,
   type ToolSummary,
 } from "../lib/adminApi";
 
@@ -83,6 +90,8 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
   const [toolPurpose, setToolPurpose] = useState("");
   const [toolName, setToolName] = useState("");
   const [toolSource, setToolSource] = useState("");
+  const [reviewingTool, setReviewingTool] = useState<ToolReviewResponse | null>(null);
+  const [toolReviewLoading, setToolReviewLoading] = useState(false);
   const skillFileRef = useRef<HTMLInputElement | null>(null);
   const toolFileRef = useRef<HTMLInputElement | null>(null);
 
@@ -94,6 +103,7 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
   const load = async (targetAgent = agent) => {
     setLoading(true);
     setError(null);
+    setReviewingTool(null);
     try {
       const [skillResults, toolResults] = await Promise.all([
         fetchSkills({ apiBaseUrl, apiKey, agent: targetAgent }),
@@ -289,10 +299,72 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
       setToolPurpose("");
       setToolSource("");
       setMessage(
-        `Uploaded '${result.name}' to the review queue. It is not executable until a developer promotes and wires it into the agent graph.`,
+        `Uploaded '${result.name}' to the review queue. Review the source, then approve or reject it below.`,
       );
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Failed to upload tool.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const reviewPendingTool = async (tool: ToolSummary) => {
+    if (tool.status !== "pending_review") return;
+    setToolReviewLoading(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const review = await fetchToolReview({
+        apiBaseUrl,
+        apiKey,
+        agent,
+        name: tool.name,
+      });
+      setReviewingTool(review);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Failed to load tool review.");
+    } finally {
+      setToolReviewLoading(false);
+    }
+  };
+
+  const approvePendingTool = async () => {
+    if (!reviewingTool) return;
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const approved = await approveTool({
+        apiBaseUrl,
+        apiKey,
+        agent,
+        name: reviewingTool.name,
+      });
+      setReviewingTool(null);
+      await load(agent);
+      setMessage(
+        `Approved '${approved.name}'. It is now available to coding skills and the runtime tool registry.`,
+      );
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Failed to approve tool.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const rejectPendingTool = async () => {
+    if (!reviewingTool) return;
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const rejectedName = reviewingTool.name;
+      await rejectTool({ apiBaseUrl, apiKey, agent, name: rejectedName });
+      setReviewingTool(null);
+      await load(agent);
+      setMessage(`Rejected '${rejectedName}'. The quarantined source was removed.`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Failed to reject tool.");
     } finally {
       setSaving(false);
     }
@@ -475,28 +547,106 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
             <Wrench size={14} className="text-accent-light" />
             <div>
               <h2 className="text-xs font-semibold text-ink">Tool catalog</h2>
-              <p className="mt-0.5 text-[9px] text-muted">Built-ins plus quarantined uploads</p>
+              <p className="mt-0.5 text-[9px] text-muted">Built-ins, approved custom tools, and pending reviews</p>
             </div>
           </div>
 
           <div className="mt-3 max-h-56 space-y-1 overflow-auto">
-            {tools.map((tool) => (
-              <div key={`${tool.status}:${tool.module}:${tool.name}`} className="rounded-md border border-line bg-panel p-2.5">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="truncate font-mono text-xs text-ink-soft">{tool.name}</span>
-                  <span className={`text-[8px] uppercase ${tool.status === "builtin" ? "text-emerald-300" : "text-amber-300"}`}>
-                    {tool.status.replace("_", " ")}
-                  </span>
+            {tools.map((tool) => {
+              const statusClass =
+                tool.status === "pending_review"
+                  ? "text-amber-300"
+                  : "text-emerald-300";
+              return (
+                <div key={`${tool.status}:${tool.module}:${tool.name}`} className="rounded-md border border-line bg-panel p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate font-mono text-xs text-ink-soft">{tool.name}</span>
+                    <span className={`text-[8px] uppercase ${statusClass}`}>
+                      {tool.status.replace("_", " ")}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs leading-5 text-faint">{tool.purpose || tool.module}</p>
+                  {tool.status === "pending_review" ? (
+                    <button
+                      type="button"
+                      className="secondary-button mt-2 h-7 w-full justify-center"
+                      disabled={toolReviewLoading || saving}
+                      onClick={() => void reviewPendingTool(tool)}
+                    >
+                      {toolReviewLoading ? <LoaderCircle size={11} className="animate-spin" /> : <Eye size={11} />}
+                      Review
+                    </button>
+                  ) : null}
                 </div>
-                <p className="mt-1 text-xs leading-5 text-faint">{tool.purpose || tool.module}</p>
-              </div>
-            ))}
+              );
+            })}
           </div>
+
+          {reviewingTool ? (
+            <div className="mt-5 rounded-md border border-amber-400/25 bg-amber-400/5 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-xs font-semibold text-ink">Review {reviewingTool.name}</h3>
+                  <p className="mt-1 text-[9px] leading-4 text-muted">
+                    Approval moves this file from custom_pending to custom_approved. The runtime will load only approved custom tools.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label="Close tool review"
+                  onClick={() => setReviewingTool(null)}
+                >
+                  <X size={13} />
+                </button>
+              </div>
+
+              <textarea
+                value={reviewingTool.source}
+                readOnly
+                rows={14}
+                spellCheck={false}
+                className="mt-3 w-full resize-y rounded-md border border-line bg-surface px-3 py-2 font-mono text-[10px] leading-4 text-ink-soft outline-none"
+              />
+
+              {reviewingTool.approval_ready ? (
+                <p className="mt-2 flex items-center gap-1.5 text-[10px] text-emerald-300">
+                  <CheckCircle2 size={12} /> Static approval checks passed. Review the source before approving.
+                </p>
+              ) : (
+                <div className="mt-2 rounded border border-rose-500/20 bg-rose-500/8 p-2 text-[10px] leading-4 text-rose-300">
+                  {reviewingTool.validation_errors.map((item) => (
+                    <p key={item}>{item}</p>
+                  ))}
+                </div>
+              )}
+
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  className="secondary-button h-8 justify-center border-rose-500/30 text-rose-300"
+                  disabled={saving}
+                  onClick={() => void rejectPendingTool()}
+                >
+                  <Trash2 size={12} /> Reject
+                </button>
+                <button
+                  type="button"
+                  className="primary-button h-8 justify-center"
+                  disabled={saving || !reviewingTool.approval_ready}
+                  onClick={() => void approvePendingTool()}
+                >
+                  {saving ? <LoaderCircle size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
+                  Approve
+                </button>
+              </div>
+            </div>
+          ) : null}
 
           <div className="mt-5 border-t border-line pt-4">
             <h3 className="text-xs font-semibold text-ink">Upload tool for review</h3>
             <p className="mt-1 text-[9px] leading-4 text-muted">
-              Arbitrary Python is not imported into the API process. Uploads remain quarantined until code review and explicit graph integration.
+              Uploaded Python stays quarantined until you review and approve it. Approved coding tools are loaded through the restricted runtime registry; pending tools are never imported.
             </p>
 
             <input
