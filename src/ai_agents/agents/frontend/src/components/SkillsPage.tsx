@@ -343,7 +343,7 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
       setReviewingTool(null);
       await load(agent);
       setMessage(
-        `Approved '${approved.name}'. It is now available to coding skills and the runtime tool registry.`,
+        `Approved '${approved.name}'. It is now available to ${agent} skills and the ${agent} runtime tool registry.`,
       );
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Failed to approve tool.");
@@ -588,7 +588,7 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
                 <div>
                   <h3 className="text-xs font-semibold text-ink">Review {reviewingTool.name}</h3>
                   <p className="mt-1 text-[9px] leading-4 text-muted">
-                    Approval moves this file from custom_pending to custom_approved. The runtime will load only approved custom tools.
+                    Approval moves this file from custom_pending to custom_approved. The selected agent runtime loads only approved custom tools.
                   </p>
                 </div>
                 <button
@@ -646,7 +646,7 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
           <div className="mt-5 border-t border-line pt-4">
             <h3 className="text-xs font-semibold text-ink">Upload tool for review</h3>
             <p className="mt-1 text-[9px] leading-4 text-muted">
-              Uploaded Python stays quarantined until you review and approve it. Approved coding tools are loaded through the restricted runtime registry; pending tools are never imported.
+              Uploaded Python stays quarantined until you review and approve it. Approved custom tools are loaded through the selected agent's restricted runtime registry; pending tools are never imported.
             </p>
 
             <input

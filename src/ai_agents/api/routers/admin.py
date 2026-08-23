@@ -19,6 +19,11 @@ from ai_agents.agents.coding.tool_registry import (
     CustomToolValidationError,
     validate_approved_custom_tool_source,
 )
+from ai_agents.agents.voice.tool_registry import (
+    VOICE_TOOLS_DIR,
+    ApprovedCustomVoiceToolRegistry,
+    validate_voice_custom_tool_source,
+)
 from ai_agents.agents.coding.model_factory import build_chat_model
 from ai_agents.agents.coding.utils.text import message_content_to_text
 from ai_agents.config.model_catalog import ModelCapability, discover_models
@@ -40,6 +45,7 @@ from ai_agents.api.api_schemas import (
 )
 from ai_agents.config.constants import (
     AI_AGENTS_ROOT,
+    VOICE_SKILLS_DIR,
     CUSTOM_PREFIX,
     CODING_RUNTIME_FIELDS,
     CODING_RUNTIME_BOUNDS, 
@@ -52,13 +58,13 @@ SKILL_DIRS: dict[AgentKind, Path] = {
     # Use the same directory as the runtime SkillRegistry so custom skills saved
     # from the UI are immediately visible to route_node on the next run.
     "coding": SkillRegistry().skills_dir.resolve(),
-    "voice": AI_AGENTS_ROOT / "agents" / "voice" / "skills",
+    "voice": VOICE_SKILLS_DIR.resolve(),
 }
 TOOL_DIRS: dict[AgentKind, Path] = {
     # Resolve coding tools from the importable ai_agents package itself. This avoids
     # accidentally creating src/agents/coding/tools beside src/ai_agents/... .
     "coding": CODING_TOOLS_DIR,
-    "voice": AI_AGENTS_ROOT / "agents" / "voice" / "tools",
+    "voice": VOICE_TOOLS_DIR.resolve(),
 }
 
 
@@ -140,6 +146,45 @@ def _migrate_legacy_coding_assets() -> None:
                 target = target_dir / source.name
                 if not target.exists():
                     os.replace(source, target)
+
+
+def _migrate_legacy_voice_assets() -> None:
+    """Move voice assets created under the old src/agents/... root into ai_agents."""
+
+    legacy_root = (AI_AGENTS_ROOT / "agents" / "voice").resolve()
+    canonical_skill_root = SKILL_DIRS["voice"].resolve()
+    canonical_tool_root = TOOL_DIRS["voice"].resolve()
+
+    legacy_skill_root = legacy_root / "skills"
+
+    if legacy_skill_root != canonical_skill_root and legacy_skill_root.exists():
+        canonical_skill_root.mkdir(parents=True, exist_ok=True)
+        for source in legacy_skill_root.glob("custom_*.md"):
+            target = canonical_skill_root / source.name
+            if not target.exists():
+                os.replace(source, target)
+
+    legacy_tool_root = legacy_root / "tools"
+
+    if legacy_tool_root != canonical_tool_root and legacy_tool_root.exists():
+        for directory_name in ("custom_pending", "custom_approved"):
+            source_dir = legacy_tool_root / directory_name
+            target_dir = canonical_tool_root / directory_name
+            if not source_dir.exists():
+                continue
+            target_dir.mkdir(parents=True, exist_ok=True)
+            for source in source_dir.glob("*.py"):
+                target = target_dir / source.name
+                if not target.exists():
+                    os.replace(source, target)
+
+
+
+def _migrate_agent_assets(agent: AgentKind) -> None:
+    if agent == "coding":
+        _migrate_legacy_coding_assets()
+    else:
+        _migrate_legacy_voice_assets()
 
 
 def _atomic_write(path: Path, content: str) -> None:
@@ -545,8 +590,7 @@ def update_agent_configuration(request: AgentConfigurationUpdate) -> dict[str, A
 def list_skills(
     agent: AgentKind = Query(...),
 ) -> list[SkillSummary]:
-    if agent == "coding":
-        _migrate_legacy_coding_assets()
+    _migrate_agent_assets(agent)
     registry = SkillRegistry(_safe_agent_dir(SKILL_DIRS, agent)).load()
     return [_skill_summary(agent, skill) for skill in registry.list()]
 
@@ -599,8 +643,7 @@ def delete_skill(agent: AgentKind, name: str) -> dict[str, bool]:
 
 @router.get("/tools", response_model=list[ToolSummary])
 def list_tools(agent: AgentKind = Query(...)) -> list[ToolSummary]:
-    if agent == "coding":
-        _migrate_legacy_coding_assets()
+    _migrate_agent_assets(agent)
 
     tool_root = _safe_agent_dir(TOOL_DIRS, agent)
     pending_root = (tool_root / "custom_pending").resolve()
@@ -650,14 +693,22 @@ def _custom_tool_path(agent: AgentKind, name: str, *, status: Literal["pending_r
     return path
 
 
-def _approval_validation_errors(name: str, source: str) -> list[str]:
+def _approval_validation_errors(agent: AgentKind, name: str, source: str) -> list[str]:
     try:
         _validate_quarantined_tool_source(name, source)
         validate_approved_custom_tool_source(name, source)
+        if agent == "voice":
+            validate_voice_custom_tool_source(name, source)
     except (HTTPException, CustomToolValidationError) as exc:
         detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
         return [str(detail)]
     return []
+
+
+def _candidate_registry(agent: AgentKind, directory: Path):
+    if agent == "coding":
+        return ApprovedCustomToolRegistry(directory)
+    return ApprovedCustomVoiceToolRegistry(directory)
 
 
 @router.get("/tools/{agent}/{name}", response_model=ToolReviewResponse)
@@ -678,7 +729,7 @@ def review_tool(agent: AgentKind, name: str) -> ToolReviewResponse:
     if match is None:
         raise HTTPException(status_code=400, detail="Could not discover the pending tool function.")
 
-    validation_errors = _approval_validation_errors(path.stem, source)
+    validation_errors = _approval_validation_errors(agent, path.stem, source)
 
     return ToolReviewResponse(
         **match.model_dump(),
@@ -690,12 +741,6 @@ def review_tool(agent: AgentKind, name: str) -> ToolReviewResponse:
 
 @router.post("/tools/{agent}/{name}/approve", response_model=ToolSummary)
 def approve_tool(agent: AgentKind, name: str) -> ToolSummary:
-    if agent != "coding":
-        raise HTTPException(
-            status_code=400,
-            detail="Approved custom runtime tools are currently supported only for the coding agent.",
-        )
-
     pending_path = _custom_tool_path(agent, name, status="pending_review")
     approved_path = _custom_tool_path(agent, name, status="approved")
 
@@ -709,16 +754,18 @@ def approve_tool(agent: AgentKind, name: str) -> ToolSummary:
 
     try:
         source = validate_approved_custom_tool_source(pending_path.stem, source)
+        if agent == "voice":
+            source = validate_voice_custom_tool_source(pending_path.stem, source)
     except CustomToolValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # Import/signature-check the candidate outside custom_approved first. This keeps
-    # approval atomic from the runtime registry's perspective: a concurrent coding
+    # approval atomic from the runtime registry's perspective: a concurrent agent
     # run can see either the pending file or the fully validated approved file.
     with tempfile.TemporaryDirectory(prefix="ai-agents-tool-approval-") as temporary_dir:
         candidate_path = Path(temporary_dir) / pending_path.name
         _atomic_write(candidate_path, source)
-        candidate_registry = ApprovedCustomToolRegistry(Path(temporary_dir)).load()
+        candidate_registry = _candidate_registry(agent, Path(temporary_dir)).load()
 
         if not candidate_registry.has(pending_path.stem):
             raise HTTPException(

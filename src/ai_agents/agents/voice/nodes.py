@@ -5,8 +5,15 @@ import logging
 from typing import Any
 
 from ai_agents.agents.voice.prompts import VOICE_INTAKE_SYSTEM_PROMPT
+from ai_agents.agents.coding.skill_registry import SkillRegistry
+from ai_agents.agents.voice.tool_registry import (
+    ApprovedCustomVoiceToolRegistry,
+    MAX_VOICE_CUSTOM_TOOL_CALLS,
+    MAX_VOICE_CUSTOM_TOOL_TOTAL_CHARS,
+)
 from ai_agents.agents.voice.voice_agent_schemas import VoiceIntakeDecision
 from ai_agents.config.settings import settings
+from ai_agents.config.constants import VOICE_SKILLS_DIR
 from ai_agents.agents.voice.state import VoiceAgentState
 from ai_agents.agents.voice.utils.constants import (
     MAX_CONTEXT_JSON_CHARS,
@@ -163,6 +170,92 @@ def gather_context_node(state: VoiceAgentState) -> VoiceAgentState:
 
 
 
+def custom_tools_node(state: VoiceAgentState) -> VoiceAgentState:
+    """Run approved custom voice tools before the intake-model call.
+
+    The intake model never receives callable tools. Instead, voice skills declare
+    approved custom tools in ``Allowed tools`` and this node executes the relevant
+    ones with backend-owned, read-only runtime context.
+    """
+
+    combined_request = "\n".join(
+        part
+        for part in (
+            state.get("prompt_text", "").strip(),
+            state.get("transcript", "").strip(),
+        )
+        if part
+    )
+    errors = list(state.get("errors", []))
+    tools_used = list(state.get("tools_used", []))
+
+    try:
+        skill_registry = SkillRegistry(VOICE_SKILLS_DIR).load()
+        selected_skills = skill_registry.rank_for_request(
+            combined_request or "voice intake",
+            max_skills=3,
+        )
+        allowed_tools = skill_registry.allowed_tools_for(selected_skills)
+    except Exception as exc:
+        errors.append(f"Voice skill routing for custom tools failed: {exc}")
+        return {
+            "selected_voice_skills": [],
+            "custom_tool_results": [],
+            "tools_used": list(dict.fromkeys(tools_used)),
+            "errors": errors,
+        }
+
+    registry = ApprovedCustomVoiceToolRegistry().load()
+    selected_custom_tools = [
+        name
+        for name in dict.fromkeys(allowed_tools)
+        if registry.has(name)
+    ][:MAX_VOICE_CUSTOM_TOOL_CALLS]
+
+    results: list[dict[str, Any]] = []
+    used_result_chars = 0
+
+    for name in selected_custom_tools:
+        try:
+            result = registry.invoke_from_state(name, state)
+            output = str(result.get("output", ""))
+            remaining = MAX_VOICE_CUSTOM_TOOL_TOTAL_CHARS - used_result_chars
+
+            if remaining <= 0:
+                errors.append(
+                    "Voice custom-tool context budget reached; skipped remaining tool output."
+                )
+
+                break
+
+            if len(output) > remaining:
+                output = output[:remaining] + "\n...[voice custom-tool budget truncated]"
+                result = {**result, "output": output, "truncated": True}
+
+            used_result_chars += len(output)
+            results.append(result)
+            tools_used.append(name)
+            
+        except Exception as exc:
+            errors.append(f"Voice custom tool '{name}' failed: {exc}")
+            results.append(
+                {
+                    "tool_name": name,
+                    "success": False,
+                    "output": "Tool execution failed; see errors for details.",
+                    "truncated": False,
+                }
+            )
+
+    return {
+        "selected_voice_skills": selected_skills,
+        "custom_tool_results": results,
+        "tools_used": list(dict.fromkeys(tools_used)),
+        "errors": errors,
+    }
+
+
+
 
 def intake_node(state: VoiceAgentState) -> VoiceAgentState:
     transcript = state.get("transcript", "").strip()
@@ -196,7 +289,9 @@ def intake_node(state: VoiceAgentState) -> VoiceAgentState:
             for item in state.get("attached_files", [])
         ],
         "recommended_skills": state.get("recommended_skills", []),
+        "selected_voice_skills": state.get("selected_voice_skills", []),
         "context_sources_used": state.get("tools_used", []),
+        "approved_custom_tool_results": state.get("custom_tool_results", []),
         "repository_context": repository_context,
     }
 
@@ -223,9 +318,10 @@ def intake_node(state: VoiceAgentState) -> VoiceAgentState:
         f"ask something genuinely different):\n{previous_questions_list}\n\n"
         f"Previously used clarification topics: {previous_topics_list}\n"
         "Choose a different, unanswered clarification topic or return status=ready.\n\n"
-        "All repository and attachment inspection has already been performed by the backend. "
+        "All repository, attachment, and approved custom-tool inspection has already been performed by the backend. "
         "You have no callable tools or functions in this step. Treat context_sources_used as audit metadata, "
-        "and never attempt to call those names. Use only the supplied pre-gathered evidence. "
+        "and approved_custom_tool_results as read-only evidence. Never attempt to call those names. "
+        "Use only the supplied pre-gathered evidence. "
         "If ready, return a concise coding_request string, with implementation steps in plan and paths "
         "in target_files. Do not copy raw repository context. If the clarification limit is reached, "
         "return status=ready with the best repository-grounded plan."

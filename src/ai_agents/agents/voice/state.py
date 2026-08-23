@@ -18,6 +18,8 @@ class VoiceAgentState(TypedDict, total=False):
     repo_context: dict[str, Any]
     context_summary: str
     recommended_skills: list[str]
+    selected_voice_skills: list[str]
+    custom_tool_results: list[dict[str, Any]]
     tools_used: list[str]
     asked_questions: list[str]
 
