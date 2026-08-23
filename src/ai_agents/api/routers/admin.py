@@ -39,6 +39,7 @@ from ai_agents.api.api_schemas import (
     SkillDraftResponse,
     SkillDraftDecision,
     ToolQuarantineRequest,
+    ToolFileUpdateRequest,
     SkillSummary,
     ToolSummary,
     ToolReviewResponse,
@@ -737,6 +738,18 @@ def review_tool(agent: AgentKind, name: str) -> ToolReviewResponse:
         approval_ready=not validation_errors,
         validation_errors=validation_errors,
     )
+
+
+@router.post("/tools/content", response_model=ToolReviewResponse)
+def update_tool_file(request: ToolFileUpdateRequest) -> ToolReviewResponse:
+    name = Path(request.path).stem
+    path = _custom_tool_path(request.agent, name, status="pending_review")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Pending tool does not exist.")
+
+    source = _validate_quarantined_tool_source(name, request.content)
+    _atomic_write(path, source)
+    return review_tool(request.agent, name)
 
 
 @router.post("/tools/{agent}/{name}/approve", response_model=ToolSummary)

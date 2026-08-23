@@ -5,6 +5,7 @@ import {
   Eye,
   FilePlus2,
   LoaderCircle,
+  Pencil,
   RefreshCcw,
   Save,
   Sparkles,
@@ -23,11 +24,13 @@ import {
   quarantineTool,
   rejectTool,
   saveSkill,
+  updateToolFile,
   type AgentKind,
   type SkillSummary,
   type ToolReviewResponse,
   type ToolSummary,
 } from "../lib/adminApi";
+import { CodeEditorModal } from "./CodeEditorModal";
 
 type SkillsPageProps = {
   apiBaseUrl: string;
@@ -91,6 +94,7 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
   const [toolName, setToolName] = useState("");
   const [toolSource, setToolSource] = useState("");
   const [reviewingTool, setReviewingTool] = useState<ToolReviewResponse | null>(null);
+  const [editingTool, setEditingTool] = useState<ToolReviewResponse | null>(null);
   const [toolReviewLoading, setToolReviewLoading] = useState(false);
   const skillFileRef = useRef<HTMLInputElement | null>(null);
   const toolFileRef = useRef<HTMLInputElement | null>(null);
@@ -326,6 +330,43 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
     } finally {
       setToolReviewLoading(false);
     }
+  };
+
+
+  const editPendingTool = async (tool: ToolSummary) => {
+    if (tool.status !== "pending_review") return;
+    setToolReviewLoading(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const review = await fetchToolReview({
+        apiBaseUrl,
+        apiKey,
+        agent,
+        name: tool.name,
+      });
+      setEditingTool(review);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Failed to load tool file.");
+    } finally {
+      setToolReviewLoading(false);
+    }
+  };
+
+  const saveToolEdit = async (source: string) => {
+    if (!editingTool) return;
+
+    const updated = await updateToolFile({
+      apiBaseUrl,
+      apiKey,
+      agent,
+      path: `custom_pending/${editingTool.name}.py`,
+      content: source,
+    });
+    setEditingTool(null);
+    setReviewingTool(updated);
+    await load(agent);
+    setMessage(`Saved changes to pending tool '${updated.name}'. Review it again before approval.`);
   };
 
   const approvePendingTool = async () => {
@@ -567,15 +608,26 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
                   </div>
                   <p className="mt-1 text-xs leading-5 text-faint">{tool.purpose || tool.module}</p>
                   {tool.status === "pending_review" ? (
-                    <button
-                      type="button"
-                      className="secondary-button mt-2 h-7 w-full justify-center"
-                      disabled={toolReviewLoading || saving}
-                      onClick={() => void reviewPendingTool(tool)}
-                    >
-                      {toolReviewLoading ? <LoaderCircle size={11} className="animate-spin" /> : <Eye size={11} />}
-                      Review
-                    </button>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        className="secondary-button h-7 justify-center"
+                        disabled={toolReviewLoading || saving}
+                        onClick={() => void reviewPendingTool(tool)}
+                      >
+                        {toolReviewLoading ? <LoaderCircle size={11} className="animate-spin" /> : <Eye size={11} />}
+                        Review
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button h-7 justify-center"
+                        disabled={toolReviewLoading || saving}
+                        onClick={() => void editPendingTool(tool)}
+                      >
+                        <Pencil size={11} />
+                        Edit
+                      </button>
+                    </div>
                   ) : null}
                 </div>
               );
@@ -705,6 +757,13 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
           </div>
         </aside>
       </div>
+      <CodeEditorModal
+        open={editingTool !== null}
+        title={editingTool ? `Edit ${editingTool.name}` : "Edit pending tool"}
+        initialContent={editingTool?.source ?? ""}
+        onCancel={() => setEditingTool(null)}
+        onSave={saveToolEdit}
+      />
     </section>
   );
 }

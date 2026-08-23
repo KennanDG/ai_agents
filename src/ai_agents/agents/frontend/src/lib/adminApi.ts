@@ -223,6 +223,29 @@ export const fetchToolReview = async ({
   return readJson<ToolReviewResponse>(response);
 };
 
+
+export const updateToolFile = async ({
+  apiBaseUrl,
+  apiKey,
+  agent,
+  path,
+  content,
+}: ApiClientConfig & {
+  agent: AgentKind;
+  path: string;
+  content: string;
+}): Promise<ToolReviewResponse> => {
+  const response = await fetch(`${apiBaseUrl}/admin/tools/content`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...authHeaders(apiKey),
+    },
+    body: JSON.stringify({ agent, path, content }),
+  });
+  return readJson<ToolReviewResponse>(response);
+};
+
 export const approveTool = async ({
   apiBaseUrl,
   apiKey,
