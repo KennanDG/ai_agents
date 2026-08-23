@@ -25,7 +25,8 @@ MAX_VOICE_ATTACHMENTS = 5
 MAX_VOICE_ATTACHMENT_CONTENT_CHARS = 20_000
 MAX_TOTAL_VOICE_ATTACHMENT_CONTENT_CHARS = 60_000
 MAX_VOICE_SKILL_CONTEXT_CHARS = 3_600
-VOICE_SKILLS_DIR = Path(__file__).resolve().parents[2] / "agents" / "voice" / "skills"
+VOICE_SKILLS_DIR = Path(__file__).resolve().parents[2] / "ai_agents" / "agents" / "voice" / "skills"
+# print("voice skills dir:", VOICE_SKILLS_DIR)
 
 
 
