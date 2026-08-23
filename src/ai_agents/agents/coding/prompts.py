@@ -111,6 +111,9 @@ PLANNER_SYSTEM_PROMPT = dedent(
     - Use extension filters when the request clearly names file types such as .py, .md, .tsx, or .sql.
     - Choose safe validation commands.
     - Do not invent specific file paths unless they are provided in context.
+    - Treat exact repository attachment paths and ranked repository search paths as authoritative.
+    - If prose in the request conflicts with an authoritative repository path, use the repository path.
+      Never prepend or rewrite directory components just to make a path look plausible.
     - Do not plan broad rewrites unless the user explicitly requested one.
 
     # Search request rules:
@@ -344,6 +347,9 @@ def build_planner_user_prompt(request: str) -> str:
         - Provide a `web_search_query` only when the repository alone cannot satisfy the request (e.g., a new library, external API docs, or a framework version not yet visible in the repo).
         - Validation commands must be safe.
         - Do not invent specific files unless the request clearly names them.
+        - When attached repository files or ranked search results provide an exact path,
+          preserve that exact path. Treat those paths as more reliable than path text
+          copied into the request by another model or handoff layer.
 
         # Good search_request examples:
         - For "update the coding graph node": terms=["graph", "node"], path_includes=["agents/coding"], file_extensions=[".py"], mode="all"

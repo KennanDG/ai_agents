@@ -33,7 +33,7 @@ import {
   type GitHubRepositoryStatus,
   type GitHubRepositorySummary,
 } from "./lib/repositoryApi";
-import { submitVoiceTurn } from "./lib/voiceAgentApi";
+import { selectVoiceContextAttachments, submitVoiceTurn } from "./lib/voiceAgentApi";
 import {
   fetchAgentConfiguration,
   type AgentConfiguration,
@@ -940,6 +940,11 @@ const App = () => {
     attachedFiles: CodingAgentAttachedFile[],
   ): Promise<boolean> => {
     try {
+      // Keep the voice agent and downstream coding agent on the same attachment set.
+      // Otherwise the voice handoff can be grounded in five files while the coding
+      // run is unexpectedly classified/planned from a much larger set.
+      const voiceAttachments = selectVoiceContextAttachments(attachedFiles);
+
       const response = await submitVoiceTurn({
         apiBaseUrl,
         apiKey,
@@ -947,7 +952,7 @@ const App = () => {
         sessionId: voiceSessionId,
         history: voiceHistory,
         promptText,
-        attachedFiles,
+        attachedFiles: voiceAttachments,
         repoRoot,
         workspaceRoot: effectiveWorkspaceRoot,
         activePath,
@@ -958,8 +963,8 @@ const App = () => {
 
       const draftContext = promptText.trim() ? `\n\nTyped draft:\n${promptText.trim()}` : "";
 
-      const attachmentContext = attachedFiles.length > 0
-        ? `\n\nAttached files:\n${attachedFiles.map((file) => `- ${file.name}`).join("\n")}`
+      const attachmentContext = voiceAttachments.length > 0
+        ? `\n\nAttached files:\n${voiceAttachments.map((file) => `- ${file.name}`).join("\n")}`
         : "";
 
 
@@ -1024,7 +1029,7 @@ const App = () => {
 
         setVoiceHistory([]);
         setVoiceSessionId(null);
-        runCodingAgent(response.coding_request, attachedFiles);
+        runCodingAgent(response.coding_request, voiceAttachments);
         return true;
       }
 
