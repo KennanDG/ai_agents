@@ -492,8 +492,15 @@ def build_patcher_user_prompt(
         - Do not modify secrets, `.env` files, lock files, generated caches, or unrelated files.
         - Include validation commands relevant to the changed files.
         - If there is not enough context, return an empty `edits` array and populate
-          `context_requests` with the exact file path, line range, or search terms needed.
-        - Do not request an entire large file when a line range or symbol search is sufficient.
+          `context_requests` with exact repository-relative FILE paths plus bounded line
+          ranges or symbol/search terms.
+        - `context_requests[].path` must name a file, not a directory. Never prepend
+          duplicated repository prefixes such as `src/ai_agents/` or `ai_agents/` when
+          the supplied context already shows paths relative to that package root.
+        - If line numbers are unknown, leave both start_line and end_line null and put
+          concrete function/class/component names in `terms`. Do not use start_line=1
+          with an omitted end_line as shorthand for "the whole file".
+        - Do not request an entire large file when a bounded line range or symbol search is sufficient.
         - Prefer completing the requested task when the inspected context is sufficient.
         - Do not avoid edits solely because the change touches more than one file.
         - Multi-file edits are allowed when each file is directly relevant and present in context.

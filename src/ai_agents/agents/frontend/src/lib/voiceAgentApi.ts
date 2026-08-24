@@ -36,7 +36,7 @@ const toVoiceHistory = (messages: AgentMessage[]) => {
 };
 
 
-export const MAX_VOICE_CONTEXT_ATTACHMENTS = 5;
+export const MAX_VOICE_CONTEXT_ATTACHMENTS = 20;
 
 export const selectVoiceContextAttachments = (
     attachedFiles: CodingAgentAttachedFile[],
