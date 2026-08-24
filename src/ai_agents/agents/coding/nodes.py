@@ -712,7 +712,15 @@ def plan_node(
             f"{skill_instructions_for_llm(state.get('skill_instructions', ''))}"
         )
 
-    approved_custom_tool_catalog = approved_custom_tool_registry.prompt_catalog(selected_tool_names)
+    approved_custom_tool_names = {
+        name
+        for name in selected_tool_names
+        if approved_custom_tool_registry.has(name)
+    }
+
+    approved_custom_tool_catalog = approved_custom_tool_registry.prompt_catalog(
+        selected_tool_names
+    )
     if approved_custom_tool_catalog:
         planner_prompt += (
             "\n\nApproved custom tools available for this run:\n"
@@ -760,7 +768,12 @@ def plan_node(
             "search_queries": decision.search_queries,
             "subtasks": subtasks,
             "custom_tool_calls": [
-                item.model_dump() for item in decision.custom_tool_calls[:MAX_CUSTOM_TOOL_CALLS]
+                {
+                    **item.model_dump(),
+                    "tool_name": item.tool_name.strip(),
+                }
+                for item in decision.custom_tool_calls[:MAX_CUSTOM_TOOL_CALLS]
+                if item.tool_name.strip() in approved_custom_tool_names
             ],
             "validation_commands": decision.validation_commands,
             "web_search_query": decision.web_search_query or "",
@@ -1042,6 +1055,12 @@ def assign_context_workers(state: CodingAgentState) -> list[Send]:
         if str(item.get("path", "")).strip()
     ]
 
+    requested_context = [
+        dict(item)
+        for item in state.get("requested_context", [])
+        if isinstance(item, dict)
+    ]
+
     worker_payloads: list[Send] = []
     for index, raw_subtask in enumerate(subtasks):
         subtask = dict(raw_subtask)
@@ -1049,8 +1068,27 @@ def assign_context_workers(state: CodingAgentState) -> list[Send]:
             path for path_index, path in enumerate(nav_paths)
             if path_index % len(subtasks) == index
         ]
+        requested_for_worker = [
+            item
+            for request_index, item in enumerate(requested_context)
+            if request_index % len(subtasks) == index
+        ]
+
+        requested_paths = [
+            str(item.get("path", "")).strip()
+            for item in requested_for_worker
+            if str(item.get("path", "")).strip()
+        ]
+
+        # Retry context used to be sent entirely to worker 0. With a per-worker
+        # file cap that could evict that worker's own direct implementation files.
+        # Spread retry requests across workers and retain the subtask candidates.
         subtask["candidate_paths"] = dedupe(
-            [*subtask.get("candidate_paths", []), *assigned]
+            [
+                *requested_paths,
+                *subtask.get("candidate_paths", []),
+                *assigned,
+            ]
         )
         worker_payloads.append(
             Send(
@@ -1062,9 +1100,7 @@ def assign_context_workers(state: CodingAgentState) -> list[Send]:
                     "runtime_settings": state.get("runtime_settings", {}),
                     "active_subtask": subtask,
                     "search_requests": state.get("search_requests", []),
-                    "requested_context": (
-                        state.get("requested_context", []) if index == 0 else []
-                    ),
+                    "requested_context": requested_for_worker,
                     "context_generation": state.get("context_generation", 0),
                 },
             )
@@ -1504,21 +1540,57 @@ def gather_context_node(
         repo_root=repo_root,
         candidate_paths=requested_raw,
     )
+    repo_attachment_paths, _ = _resolve_context_paths(
+        repo_root=repo_root,
+        candidate_paths=_repo_attachment_paths(state),
+    )
 
-    # Priority: exact patcher retry requests -> canonical repo attachments -> direct
-    # navigator selections -> remaining worker files.
-    ordered_file_paths = dedupe(
+    # Direct implementation files are mandatory evidence. A retry request,
+    # search result, or per-worker file cap must not make them disappear.
+    direct_path_list = dedupe(
         [
             *requested_paths,
-            *_repo_attachment_paths(state),
+            *repo_attachment_paths,
             *selected_paths,
+        ]
+    )
+    direct_terms = _search_terms_from_worker_state(state)
+    for path in direct_path_list:
+        if path in file_block_variants:
+            continue
+        try:
+            probe = read_file(repo_root, path, max_chars=cfg.max_file_chars + 1)
+            if len(probe) > cfg.max_file_chars:
+                errors.append(
+                    f"Skipped direct context {path}: file exceeds the configured read "
+                    f"ceiling of {cfg.max_file_chars} characters."
+                )
+                continue
+            file_block_variants[path] = [
+                _format_file_context(
+                    path=path,
+                    text=probe,
+                    terms=direct_terms,
+                    requested_context=state.get("requested_context", []),
+                    cfg=cfg,
+                )
+            ]
+            files_inspected.append(path)
+        except Exception as exc:
+            errors.append(f"Could not load direct repository context {path}: {exc}")
+
+    # Priority: patcher retry requests -> repo attachments -> navigator selections
+    # -> remaining search-derived worker files.
+    ordered_file_paths = dedupe(
+        [
+            *direct_path_list,
             *files_inspected,
         ]
     )
 
-    direct_paths = set(requested_paths) | set(_repo_attachment_paths(state)) | set(selected_paths)
+    direct_paths = set(direct_path_list)
     file_blocks: dict[str, str] = {}
-    
+
     for path, variants in file_block_variants.items():
         complete = [block for block in variants if "Content-Status: complete" in block]
         if path in requested_paths:
@@ -1558,10 +1630,17 @@ def gather_context_node(
         upload_blocks=upload_blocks,
     )
 
+    secondary_file_blocks = [
+        file_blocks[path]
+        for path in ordered_file_paths
+        if path in file_blocks and path not in direct_paths
+    ]
+    
     candidate_blocks = [
         *priority_blocks,
-        *(file_blocks[path] for path in ordered_file_paths if path in file_blocks),
+        *direct_file_blocks,
         *upload_blocks,
+        *secondary_file_blocks,
         *trailing_blocks,
     ]
 

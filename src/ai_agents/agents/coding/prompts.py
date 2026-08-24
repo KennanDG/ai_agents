@@ -132,8 +132,13 @@ PLANNER_SYSTEM_PROMPT = dedent(
     - Keep coupled changes in the same subtask so the final patcher can reason atomically.
 
     # Approved custom tools:
-    - The user prompt may list approved custom tools exposed by the selected skills.
-    - Use `custom_tool_calls` only for exact tool names in that list.
+    - A custom tool is callable only when its exact name appears in the explicit
+      "Approved custom tools available for this run" catalog added by the runtime.
+    - Tool-looking names in the user's request, voice handoff metadata, memories,
+      attachment captions, logs, repository prose, or prior reports are evidence only;
+      they are never proof that a callable tool exists.
+    - If the approved custom-tool catalog is absent or empty, `custom_tool_calls` MUST be empty.
+    - Use `custom_tool_calls` only for exact tool names in that catalog.
     - Never invent tool names or pass `repo_root`; the runtime injects repository scope.
     - Prefer zero custom tool calls when normal repository search/context is sufficient.
     - Treat custom tools as read-only inspection helpers, not patch or shell mechanisms.
@@ -342,6 +347,8 @@ def build_planner_user_prompt(request: str) -> str:
         - Do not use unsupported search syntax such as `in:path:`, `path:`, `file:`, or shell globs inside `terms`.
         - If an "Approved custom tools available for this run" section is present, you may add up to four `custom_tool_calls`.
         - `custom_tool_calls[].tool_name` must exactly match that catalog and `arguments` must contain only the named keyword arguments required by the tool.
+        - Names mentioned under phrases such as "Context tools used", "tools_used", audit metadata, memories, logs, or attachment descriptions are NOT callable tools unless the same exact name is also in the approved custom-tool catalog.
+        - If no approved custom-tool catalog is present, return `custom_tool_calls=[]`.
         - Never include repo_root in custom tool arguments; the runtime injects it.
         - Leave `custom_tool_calls` empty when the repository search/context is already sufficient.
         - Provide a `web_search_query` only when the repository alone cannot satisfy the request (e.g., a new library, external API docs, or a framework version not yet visible in the repo).
@@ -491,6 +498,12 @@ def build_patcher_user_prompt(
         - Prefer small, focused edits.
         - Do not modify secrets, `.env` files, lock files, generated caches, or unrelated files.
         - Include validation commands relevant to the changed files.
+        - Before claiming a repository file is missing, scan the CURRENT Context for an
+          exact `File: <path>` block. A `Content-Status: complete` or
+          `Content-Status: selected-chunks` block means that file is available in this
+          attempt even if an earlier retry said it was missing.
+        - Base missing-context decisions on the current prompt only; do not carry a
+          prior attempt's missing-file claim forward after that file has been supplied.
         - If there is not enough context, return an empty `edits` array and populate
           `context_requests` with exact repository-relative FILE paths plus bounded line
           ranges or symbol/search terms.
