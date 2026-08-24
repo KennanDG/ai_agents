@@ -1394,6 +1394,36 @@ def _context_block_path(block: str) -> str | None:
     return path or None
 
 
+def _adaptive_context_prompt_budget(
+    *,
+    cfg: CodingAgentSettings,
+    priority_blocks: list[str],
+    direct_file_blocks: list[str],
+    upload_blocks: list[str],
+) -> tuple[int, int]:
+    """Choose a bounded context budget based on exact high-priority evidence.
+
+    ``context_prompt_base_chars`` keeps ordinary runs small. Broad runs grow only
+    when user attachments, navigator-selected files, patcher retry requests, or
+    other priority blocks actually require more room. ``max_context_prompt_chars``
+    remains the hard safety ceiling.
+    """
+
+    hard_cap = max(1, int(cfg.max_context_prompt_chars))
+    base = min(
+        hard_cap,
+        max(1, int(getattr(cfg, "context_prompt_base_chars", hard_cap))),
+    )
+    reserve = max(0, int(getattr(cfg, "context_prompt_reserve_chars", 0)))
+
+    priority_chars = sum(
+        len(block)
+        for block in [*priority_blocks, *direct_file_blocks, *upload_blocks]
+    )
+    desired = max(base, priority_chars + reserve)
+    return min(hard_cap, desired), priority_chars
+
+
 def gather_context_node(
     state: CodingAgentState,
     cfg: CodingAgentSettings = default_settings,
@@ -1516,6 +1546,18 @@ def gather_context_node(
             "# Web search results\n" + str(state.get("web_search_results"))[:8_000]
         )
 
+    direct_file_blocks = [
+        file_blocks[path]
+        for path in ordered_file_paths
+        if path in file_blocks and path in direct_paths
+    ]
+    effective_context_budget, priority_context_chars = _adaptive_context_prompt_budget(
+        cfg=cfg,
+        priority_blocks=priority_blocks,
+        direct_file_blocks=direct_file_blocks,
+        upload_blocks=upload_blocks,
+    )
+
     candidate_blocks = [
         *priority_blocks,
         *(file_blocks[path] for path in ordered_file_paths if path in file_blocks),
@@ -1523,21 +1565,30 @@ def gather_context_node(
         *trailing_blocks,
     ]
 
-    # Keep blocks whole, but because requested ranges and direct files now come first,
-    # low-priority context is what gets dropped when the budget is tight.
+    # Keep blocks whole. Requested/direct files come first, and the budget expands
+    # automatically when those exact files need more than the normal baseline.
     context: list[str] = []
     used_chars = 0
     omitted_blocks = 0
     for block in candidate_blocks:
-        if used_chars + len(block) > cfg.max_context_prompt_chars:
+        if used_chars + len(block) > effective_context_budget:
             omitted_blocks += 1
             continue
         context.append(block)
         used_chars += len(block)
 
-    if omitted_blocks:
+    if priority_context_chars > effective_context_budget:
         errors.append(
-            "Context prompt budget reached; omitted "
+            "High-priority repository context exceeds the hard context ceiling: "
+            f"{priority_context_chars:,} required chars vs "
+            f"{effective_context_budget:,} allowed chars. "
+            "The patcher should request narrower file ranges or symbols."
+        )
+    elif omitted_blocks:
+        errors.append(
+            "Context prompt budget reached at "
+            f"{used_chars:,}/{effective_context_budget:,} chars "
+            f"(hard cap {cfg.max_context_prompt_chars:,}); omitted "
             f"{omitted_blocks} lower-priority block(s) after preserving requested/direct context."
         )
 
