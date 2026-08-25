@@ -1,8 +1,8 @@
 # ai_agents
 
-`ai_agents` is a work in progress agent harness built around LangGraph, FastAPI, React, and Electron. The project currently centers on a repository-aware coding agent, a voice intake agent, a desktop/web workspace, GitHub source-control integration, configurable model routing, local persistent coding memory, and user-managed skills and tools.
+`ai_agents` is an experimental agent harness built around LangGraph, FastAPI, React, and Electron. The project currently centers on a repository-aware coding agent, a voice intake agent, a desktop/web workspace, GitHub source-control integration, configurable model routing, local persistent coding memory, and user-managed skills and tools.
 
-The repository also contains a broader RAG subsystem. The coding/voice agent platform and the RAG stack share the repository, but they have different persistence and runtime requirements. The agentic platform will eventually be packaged into its own managed repository.
+The repository also contains a broader RAG subsystem. The coding/voice agent platform and the RAG stack share the repository, but they have different persistence and runtime requirements.
 
 > **Project status:** active development. Interfaces, configuration fields, and agent workflows may change while the harness is being hardened.
 
@@ -51,7 +51,7 @@ The repository also contains a broader RAG subsystem. The coding/voice agent pla
 React / Electron frontend
         |
         v
-Local FastAPI backend
+FastAPI backend
         |
         +-------------------------+
         |                         |
@@ -240,14 +240,14 @@ The frontend Agent Settings modal configures model routing and coding execution 
 
 ## Supported providers
 
-| Capability                | Supported providers                                   |
-| ------------------------- | ----------------------------------------------------- |
-| Coding chat               | Groq, DeepSeek, OpenRouter, OpenAI, Anthropic, Google |
-| Reasoning chat            | Groq, DeepSeek, OpenRouter, OpenAI, Anthropic, Google |
-| Vision / image captioning | Groq, OpenRouter, OpenAI, Anthropic, Google           |
-| Voice chat                | Groq, DeepSeek, OpenRouter, OpenAI, Anthropic, Google |
-| Speech-to-text            | Groq, OpenAI                                          |
-| Text-to-speech            | Groq, OpenAI                                          |
+| Capability | Supported providers |
+| --- | --- |
+| Coding chat | Groq, DeepSeek, OpenRouter, OpenAI, Anthropic, Google |
+| Reasoning chat | Groq, DeepSeek, OpenRouter, OpenAI, Anthropic, Google |
+| Vision / image captioning | Groq, OpenRouter, OpenAI, Anthropic, Google |
+| Voice chat | Groq, DeepSeek, OpenRouter, OpenAI, Anthropic, Google |
+| Speech-to-text | Groq, OpenAI |
+| Text-to-speech | Groq, OpenAI |
 
 Model selectors are capability-aware. When credentials are available, the backend attempts live account-aware model discovery. When live discovery is unavailable, the UI can use the backend fallback catalog.
 
@@ -268,15 +268,15 @@ Non-secret model selections are persisted by the backend under `.ai-agents/` so 
 
 ## Coding execution settings
 
-| Setting                            | Default / recommended | Allowed range |
-| ---------------------------------- | --------------------: | ------------: |
-| Max sub-agent/context-worker count |                     3 |          1–6 |
-| Router max tokens                  |                   700 |    256–2,000 |
-| Planner max tokens                 |                 2,400 |    512–6,000 |
-| Repo navigator max tokens          |                 1,600 |    512–4,000 |
-| Simple patch max tokens            |                 6,000 | 2,000–16,000 |
-| Standard patch max tokens          |                12,000 | 4,000–32,000 |
-| Progress max tokens                |                 1,200 |    512–4,000 |
+| Setting | Default / recommended | Allowed range |
+| --- | ---: | ---: |
+| Max sub-agent/context-worker count | 3 | 1–6 |
+| Router max tokens | 700 | 256–2,000 |
+| Planner max tokens | 2,400 | 512–6,000 |
+| Repo navigator max tokens | 1,600 | 512–4,000 |
+| Simple patch max tokens | 6,000 | 2,000–16,000 |
+| Standard patch max tokens | 12,000 | 4,000–32,000 |
+| Progress max tokens | 1,200 | 512–4,000 |
 
 These values can also be supplied as per-run API overrides, but the backend enforces the same hard bounds.
 
@@ -307,20 +307,22 @@ The Skills and Tools page is an admin surface for extending agent behavior witho
 The feature deliberately treats **skills** and **tools** differently:
 
 - A **skill** is Markdown guidance. It is never executed.
-- A **tool** is Python code. **Approved tools execute inside the backend process and therefore require a stronger validation and human-review lifecycle.**
+- A **tool** is Python code. Approved tools execute inside the backend process and therefore require a stronger validation and human-review lifecycle.
 
 ## Current support matrix
 
-| Feature                                      | Coding agent | Voice agent                                               |
-| -------------------------------------------- | ------------ | --------------------------------------------------------- |
-| List built-in/custom skills in admin UI      | Yes          | Yes                                                       |
-| Create/edit custom skill Markdown            | Yes          | Yes                                                       |
-| Generate skill with AI                       | Yes          | Yes                                                       |
-| Import + normalize Markdown skill            | Yes          | Yes                                                       |
-| Dynamic runtime`SkillRegistry` routing     | Yes          | Voice intake still uses its existing recommendation logic |
-| Upload tool to quarantine/review             | Yes          | Yes                                                       |
-| Approve custom tool for runtime execution    | Yes          | Yes                                                       |
-| Invoke approved custom tool during agent run | Yes          | Yes                                                       |
+| Feature | Coding agent | Voice agent |
+| --- | --- | --- |
+| List built-in/custom skills in admin UI | Yes | Yes |
+| Create/edit custom skill Markdown | Yes | Yes |
+| Generate skill with AI | Yes | Yes |
+| Import + normalize Markdown skill | Yes | Yes |
+| Dynamic runtime `SkillRegistry` routing | Yes | Partial — voice intake still uses its existing recommendation logic |
+| Upload tool to quarantine/review | Yes | Yes |
+| Approve custom tool for runtime execution | Yes | **Not yet** |
+| Invoke approved custom tool during agent run | Yes | **Not yet** |
+
+The backend currently rejects approval of custom runtime tools for agents other than `coding`. This is intentional until the voice runtime has an equivalent approved-tool registry and execution boundary.
 
 ---
 
@@ -902,17 +904,17 @@ Do not confuse `DATABASE_URL` for the RAG subsystem with coding-agent memory; co
 
 # Planned Future Development
 
-- [X] Build the coding-agent LangGraph workflow.
-- [X] Add parallel read-only context workers and simple-task fast path.
-- [X] Replace coding-agent Postgres memory with local SQLite.
-- [X] Add local FastEmbed semantic coding memory.
-- [X] Add a voice intake agent.
-- [X] Add provider-agnostic model configuration for coding, reasoning, vision, and voice slots.
-- [X] Add Anthropic/OpenAI/Google provider support to runtime model configuration.
-- [X] Add local-directory repository selection in the desktop app.
-- [X] Add managed GitHub repository discovery/checkouts and source-control operations.
-- [X] Add custom skill authoring, AI drafting, and Markdown import normalization.
-- [X] Add custom coding-tool quarantine, review, approval, and runtime execution.
+- [x] Build the coding-agent LangGraph workflow.
+- [x] Add parallel read-only context workers and simple-task fast path.
+- [x] Replace coding-agent Postgres memory with local SQLite.
+- [x] Add local FastEmbed semantic coding memory.
+- [x] Add a voice intake agent.
+- [x] Add provider-agnostic model configuration for coding, reasoning, vision, and voice slots.
+- [x] Add Anthropic/OpenAI/Google provider support to runtime model configuration.
+- [x] Add local-directory repository selection in the desktop app.
+- [x] Add managed GitHub repository discovery/checkouts and source-control operations.
+- [x] Add custom skill authoring, AI drafting, and Markdown import normalization.
+- [x] Add custom coding-tool quarantine, review, approval, and runtime execution.
 - [ ] Complete dynamic custom skill routing inside the voice runtime.
 - [ ] Add an approved custom-tool runtime/approval registry for the voice agent.
 - [ ] Add optional AI-assisted custom tool scaffolding while preserving human review.
