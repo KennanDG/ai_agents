@@ -346,3 +346,28 @@ export const draftSkill = async ({
   });
   return readJson<SkillDraftResponse>(response);
 };
+export type ToolGenerateRequest = {
+  toolType: AgentKind;
+  prompt: string;
+};
+
+export type ToolGenerationResponse = ToolReviewResponse;
+
+export const generateTool = async ({
+  apiBaseUrl,
+  apiKey,
+  toolType,
+  prompt,
+}: ApiClientConfig & ToolGenerateRequest): Promise<ToolGenerationResponse> => {
+  const response = await fetch(`${apiBaseUrl}/admin/generate-tools`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...authHeaders(apiKey),
+    },
+    body: JSON.stringify({ tool_type: toolType, prompt }),
+  });
+  return readJson<ToolGenerationResponse>(response);
+};
+
+export const generateTools = generateTool;

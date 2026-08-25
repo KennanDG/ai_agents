@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from langchain_core.output_parsers import PydanticOutputParser
+from pydantic import BaseModel
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -428,6 +429,79 @@ Create or normalize a custom skill for the {request.agent} agent.
     )
 
 
+class _ToolGenerateRequest(BaseModel):
+    tool_type: AgentKind
+    prompt: str
+
+
+class _GeneratedToolDraft(BaseModel):
+    name: str
+    purpose: str
+    source: str
+
+
+def _generate_tool_draft(request: _ToolGenerateRequest) -> tuple[str, str, str]:
+    tools = _executable_tool_catalog(request.tool_type)
+    tool_catalog = '\n'.join(
+        f'- {tool.name}: {tool.purpose or tool.module}'
+        for tool in tools
+    ) or '- No executable tools are currently registered for this agent.'
+
+    parser = PydanticOutputParser(pydantic_object=_GeneratedToolDraft)
+    system_prompt = (
+        'You create safe custom Python tools for AI agents. Return only the requested structured object. '
+        'Preserve the user intent. Do not generate code that reads secrets, disables safety checks, '
+        'performs destructive operations, or makes undocumented network calls. '
+        'The generated source must be a complete, importable Python module.'
+    )
+    user_prompt = f'''
+Create a custom tool for the {request.tool_type} agent.
+
+# User instruction
+{request.prompt}
+
+# Existing executable tools
+{tool_catalog}
+
+# Requirements
+- name must be lowercase snake_case.
+- purpose must be a concise one-sentence description.
+- source must contain only Python code for a single module.
+- The module must define exactly one public function whose name matches the requested name.
+- Keep the implementation small, explicit, and non-destructive.
+- Use standard library or already available dependencies only.
+
+{parser.get_format_instructions()}
+'''.strip()
+
+    try:
+        model = build_chat_model(
+            provider=config_settings.coding_provider,
+            model_name=config_settings.coding_model,
+            max_tokens=3_200,
+            temperature=0.1,
+        )
+        response = model.invoke(
+            [('system', system_prompt), ('human', user_prompt)],
+            config={
+                'run_name': 'admin_tool_draft',
+                'tags': ['admin', 'tool-draft', request.tool_type],
+            },
+        )
+        draft = parser.parse(message_content_to_text(response.content))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f'Tool generation failed: {exc}',
+        ) from exc
+
+    name = draft.name.strip().lower().replace('-', '_')
+    purpose = draft.purpose.strip()
+    source = draft.source.strip()
+    if not name or not purpose or not source:
+        raise HTTPException(status_code=502, detail='Tool generation returned an incomplete draft.')
+    return name, purpose, source
+
 def _skill_summary(agent: AgentKind, skill: Any) -> SkillSummary:
     return SkillSummary(
         agent=agent,
@@ -816,6 +890,32 @@ def reject_tool(agent: AgentKind, name: str) -> dict[str, bool]:
     pending_path.unlink()
     return {"rejected": True}
 
+
+@router.post("/generate-tools", response_model=ToolReviewResponse)
+def generate_tools(request: _ToolGenerateRequest) -> ToolReviewResponse:
+    '''Generate a custom tool draft and quarantine it for review.'''
+
+    name, purpose, source = _generate_tool_draft(request)
+
+    path = _custom_tool_path(request.tool_type, name, status='pending_review')
+    approved_path = _custom_tool_path(request.tool_type, name, status='approved')
+    if path.exists():
+        raise HTTPException(status_code=409, detail=f'Pending tool already exists: {name}')
+    if approved_path.exists() or any(
+        item.name == name and item.status == 'builtin'
+        for item in list_tools(request.tool_type)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=f'An executable tool named \'{name}\' already exists.',
+        )
+
+    source = _validate_quarantined_tool_source(name, source)
+    if not source.lstrip().startswith(('"""', "'''")):
+        source = f'"""{purpose}"""\n\n' + source
+    _atomic_write(path, source)
+
+    return review_tool(request.tool_type, name)
 
 @router.post("/tools/quarantine", response_model=ToolSummary)
 def quarantine_tool(request: ToolQuarantineRequest) -> ToolSummary:

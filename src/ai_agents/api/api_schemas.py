@@ -464,6 +464,11 @@ class ToolQuarantineRequest(BaseModel):
         return value.strip()
 
 
+class ToolGenerateRequest(BaseModel):
+    tool_type: AgentKind
+    prompt: str = Field(min_length=3, max_length=8_000)
+
+
 class ToolFileUpdateRequest(BaseModel):
     agent: AgentKind
     path: str

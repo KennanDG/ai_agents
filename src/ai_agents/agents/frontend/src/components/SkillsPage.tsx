@@ -18,6 +18,7 @@ import {
   approveTool,
   deleteSkill,
   draftSkill,
+  generateTool,
   fetchSkills,
   fetchToolReview,
   fetchTools,
@@ -89,6 +90,7 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [draftPrompt, setDraftPrompt] = useState("");
+  const [generationKind, setGenerationKind] = useState<"skill" | "tool">("skill");
   const [drafting, setDrafting] = useState(false);
   const [toolPurpose, setToolPurpose] = useState("");
   const [toolName, setToolName] = useState("");
@@ -411,6 +413,37 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
     }
   };
 
+  const generateToolFromPrompt = async () => {
+    const prompt = draftPrompt.trim();
+    if (!prompt) return;
+
+    setDrafting(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const generated = await generateTool({
+        apiBaseUrl,
+        apiKey,
+        toolType: agent,
+        prompt,
+      });
+      setTools((current) => [
+        generated,
+        ...current.filter((item) => item.name !== generated.name),
+      ]);
+      setToolName(generated.name);
+      setToolPurpose(generated.purpose);
+      setToolSource(generated.source);
+      setMessage(
+        `Generated '${generated.name}'. Review the source and static validation details before approving it.`,
+      );
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Failed to generate tool.");
+    } finally {
+      setDrafting(false);
+    }
+  };
+
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-canvas">
       <header className="flex h-12 shrink-0 items-center justify-between border-b border-line px-5">
@@ -518,30 +551,56 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
             </div>
 
             <div className="mt-4 rounded-md border border-line bg-panel-soft p-3">
-              <div className="flex items-center gap-2">
-                <Sparkles size={13} className="text-accent-light" />
-                <div>
-                  <h3 className="text-xs font-semibold text-ink">Generate skill with AI</h3>
-                  <p className="mt-0.5 text-[9px] leading-4 text-muted">
-                    The backend generates canonical Markdown using only executable tools registered for the selected agent.
-                  </p>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <Sparkles size={13} className="text-accent-light" />
+                  <div>
+                    <h3 className="text-xs font-semibold text-ink">Generate with AI</h3>
+                    <p className="mt-0.5 text-[9px] leading-4 text-muted">
+                      Generate a canonical skill draft or a custom tool for review.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex rounded-md border border-line bg-surface p-0.5">
+                  <button
+                    type="button"
+                    className={`rounded px-2 py-1 text-[9px] font-medium ${
+                      generationKind === "skill" ? "bg-selected text-ink-soft" : "text-muted hover:text-ink-soft"
+                    }`}
+                    onClick={() => setGenerationKind("skill")}
+                  >
+                    Skill
+                  </button>
+                  <button
+                    type="button"
+                    className={`rounded px-2 py-1 text-[9px] font-medium ${
+                      generationKind === "tool" ? "bg-selected text-ink-soft" : "text-muted hover:text-ink-soft"
+                    }`}
+                    onClick={() => setGenerationKind("tool")}
+                  >
+                    Tool
+                  </button>
                 </div>
               </div>
               <textarea
                 value={draftPrompt}
                 onChange={(event) => setDraftPrompt(event.target.value)}
                 rows={4}
-                placeholder="Example: Create a skill for reviewing FastAPI endpoint changes, checking schemas, auth, error handling, and targeted tests."
+                placeholder={
+                  generationKind === "skill"
+                    ? "Example: Create a skill for reviewing FastAPI endpoint changes, checking schemas, auth, error handling, and targeted tests."
+                    : "Example: Create a voice tool that summarizes repository context from the transcript before intake."
+                }
                 className="mt-3 w-full resize-y rounded-md border border-line bg-surface px-3 py-2 text-xs leading-5 text-ink outline-none focus:border-accent/70"
               />
               <button
                 type="button"
                 className="secondary-button mt-2 justify-center"
                 disabled={drafting || !draftPrompt.trim()}
-                onClick={generateFromPrompt}
+                onClick={generationKind === "skill" ? generateFromPrompt : generateToolFromPrompt}
               >
                 {drafting ? <LoaderCircle size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                Generate draft
+                {generationKind === "skill" ? "Generate draft" : "Generate tool for review"}
               </button>
             </div>
 
