@@ -36,10 +36,19 @@ const toVoiceHistory = (messages: AgentMessage[]) => {
 };
 
 
+export const MAX_VOICE_CONTEXT_ATTACHMENTS = 20;
+
+export const selectVoiceContextAttachments = (
+    attachedFiles: CodingAgentAttachedFile[],
+): CodingAgentAttachedFile[] => {
+    return attachedFiles.slice(0, MAX_VOICE_CONTEXT_ATTACHMENTS);
+};
+
+
 const toVoiceAttachments = (attachedFiles: CodingAgentAttachedFile[]) => {
     let remainingContentChars = 60_000;
 
-    return attachedFiles.slice(0, 5).map((file) => {
+    return selectVoiceContextAttachments(attachedFiles).map((file) => {
         const rawContent = file.data_url ? "" : (file.content ?? "");
         const maxChars = Math.min(20_000, Math.max(0, remainingContentChars));
         const content = rawContent.slice(0, maxChars);

@@ -150,7 +150,7 @@ def remember_run_node(state: CodingAgentState, runtime) -> CodingAgentState:
 
 
 _FILE_REFERENCE_RE = re.compile(
-    r"(?P<path>[A-Za-z0-9_./()\-]+\.(?:py|tsx?|jsx?|css|html|json|md|sql|pls|fex|toml|ya?ml))",
+    r"(?P<path>[A-Za-z0-9_][A-Za-z0-9_./()\-]*\.(?:py|tsx?|jsx?|css|html|json|md|sql|pls|fex|toml|ya?ml))",
     re.IGNORECASE,
 )
 _TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
@@ -188,7 +188,6 @@ def _classify_task_mode(
     if (
         bullet_count >= 3
         or len(file_refs | repo_attachments) >= 4
-        or len(attached) >= 4
         or any(marker in lowered for marker in parallel_markers)
     ):
         return "parallel"
@@ -215,12 +214,274 @@ def _classify_task_mode(
     return "standard"
 
 
-def _explicit_request_paths(state: CodingAgentState) -> list[str]:
-    request_paths = [
-        match.group("path").replace("\\", "/")
-        for match in _FILE_REFERENCE_RE.finditer(state.get("user_request", ""))
+def _clean_repo_path_reference(value: str) -> str:
+    """Normalize path text emitted by users/models without changing repository scope."""
+
+    candidate = str(value or "").strip().replace("\\", "/")
+    candidate = candidate.strip("`\"'")
+    candidate = candidate.lstrip("([{<,;:").rstrip(")]}>,;:")
+    candidate = re.sub(r"/+", "/", candidate)
+
+    while candidate.startswith("./"):
+        candidate = candidate[2:]
+    return candidate.strip()
+
+
+def _repo_path_variants(candidate: str, repo_files: list[str]) -> list[str]:
+    """Return safe repo-relative variants for common duplicated-root handoffs.
+
+    The coding API already runs with repo_root at ``.../src/ai_agents``. Voice/model
+    handoffs sometimes repeat ``src/ai_agents`` or ``ai_agents`` in front of an
+    otherwise valid repository path. Only strip leading segments when the remaining
+    path starts with a top-level directory that actually exists in the repository.
+    """
+
+    normalized = _clean_repo_path_reference(candidate)
+    if not normalized:
+        return []
+
+    path = Path(normalized)
+    if path.is_absolute() or normalized.startswith("/") or ".." in path.parts:
+        return []
+
+    normalized = normalized.lstrip("/")
+
+    variants = [normalized]
+    top_levels = {item.split("/", 1)[0] for item in repo_files if item}
+
+    parts = [part for part in normalized.split("/") if part]
+    for index in range(1, len(parts)):
+        if parts[index] not in top_levels:
+            continue
+        variant = "/".join(parts[index:])
+        if variant and variant not in variants:
+            variants.append(variant)
+
+    return variants
+
+
+def _resolve_repo_file_reference(
+    *,
+    repo_root: Path,
+    candidate: str,
+    repo_files: list[str],
+) -> str | None:
+    """Resolve a loose reference to one canonical repository file."""
+
+    for variant in _repo_path_variants(candidate, repo_files):
+        resolved = _resolve_existing_repo_path(
+            repo_root=repo_root,
+            candidate=variant,
+            repo_files=repo_files,
+        )
+        if resolved:
+            return resolved
+    return None
+
+
+def _resolve_repo_directory_reference(
+    *,
+    repo_root: Path,
+    candidate: str,
+    repo_files: list[str],
+) -> str | None:
+    """Resolve a loose reference to a canonical repository directory."""
+
+    root = repo_root.resolve()
+    known_directories: set[str] = set()
+    for repo_file in repo_files:
+        parts = Path(repo_file).parts[:-1]
+        for index in range(1, len(parts) + 1):
+            known_directories.add(Path(*parts[:index]).as_posix())
+
+    for variant in _repo_path_variants(candidate, repo_files):
+        target = (root / variant).resolve()
+        if root not in target.parents and target != root:
+            continue
+        if target.is_dir():
+            return target.relative_to(root).as_posix() or "."
+        if variant in known_directories:
+            return variant
+    return None
+
+
+def _rank_directory_context_files(
+    *,
+    directory: str,
+    repo_files: list[str],
+    terms: Iterable[str] = (),
+    limit: int = 4,
+) -> list[str]:
+    """Choose a small useful file sample when a model requests a directory."""
+
+    prefix = directory.rstrip("/") + "/"
+    candidates = [path for path in repo_files if path.startswith(prefix)]
+    if not candidates:
+        return []
+
+    needles = [
+        token.lower()
+        for value in terms
+        for token in _TOKEN_RE.findall(str(value))
+        if len(token) >= 3
     ]
-    return dedupe(filter_context_paths([*request_paths, *_repo_attachment_paths(state)]))
+
+    def score(path: str) -> tuple[int, int, int, str]:
+        lowered = path.lower()
+        term_hits = sum(1 for term in needles if term in lowered)
+        direct_depth = path[len(prefix):].count("/")
+        test_bonus = 1 if ("test" in lowered or "spec" in lowered) else 0
+        return (-term_hits, -test_bonus, direct_depth, path)
+
+    return sorted(candidates, key=score)[:limit]
+
+
+def _explicit_request_paths(state: CodingAgentState) -> list[str]:
+    attachment_paths = dedupe(filter_context_paths(_repo_attachment_paths(state)))
+    attachment_basenames = {Path(path).name for path in attachment_paths}
+
+    request_paths: list[str] = []
+    for match in _FILE_REFERENCE_RE.finditer(state.get("user_request", "")):
+        candidate = _clean_repo_path_reference(match.group("path"))
+        if not candidate:
+            continue
+
+        # A bare filename repeated in prose is weaker evidence than an exact repo
+        # attachment path. This also prevents ambiguous names such as tool_registry.py
+        # from generating a false resolution error when both coding/voice versions
+        # were already attached canonically.
+        if "/" not in candidate and Path(candidate).name in attachment_basenames:
+            continue
+        request_paths.append(candidate)
+
+    return dedupe(filter_context_paths([*attachment_paths, *request_paths]))
+
+
+def _resolve_context_paths(
+    *,
+    repo_root: Path,
+    candidate_paths: Iterable[str],
+    repo_files: list[str] | None = None,
+    max_depth: int = 12,
+    directory_terms: Iterable[str] = (),
+    directory_file_limit: int = 4,
+) -> tuple[list[str], list[str]]:
+    """Resolve loose file or directory references to canonical repo-relative files."""
+
+    if repo_files is None:
+        repo_files = filter_context_paths(list_files(repo_root, ".", max_depth=max_depth))
+
+    resolved: list[str] = []
+    unresolved: list[str] = []
+
+    for raw_candidate in candidate_paths:
+        candidate = _clean_repo_path_reference(str(raw_candidate))
+        if not candidate:
+            continue
+
+        resolved_path = _resolve_repo_file_reference(
+            repo_root=repo_root,
+            candidate=candidate,
+            repo_files=repo_files,
+        )
+        if resolved_path:
+            resolved.append(resolved_path)
+            continue
+
+        directory = _resolve_repo_directory_reference(
+            repo_root=repo_root,
+            candidate=candidate,
+            repo_files=repo_files,
+        )
+        if directory:
+            resolved.extend(
+                _rank_directory_context_files(
+                    directory=directory,
+                    repo_files=repo_files,
+                    terms=directory_terms,
+                    limit=directory_file_limit,
+                )
+            )
+            continue
+
+        unresolved.append(candidate)
+
+    return dedupe(resolved), dedupe(unresolved)
+
+
+def _canonicalize_context_requests(
+    *,
+    repo_root: Path,
+    requests: list[dict[str, Any]],
+    repo_files: list[str],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Canonicalize patcher context requests before they enter another graph loop."""
+
+    canonical: list[dict[str, Any]] = []
+    unresolved: list[str] = []
+
+    for item in requests:
+        raw_path = _clean_repo_path_reference(str(item.get("path", "")))
+        if not raw_path:
+            continue
+
+        requested_terms = [
+            str(term).strip()
+            for term in item.get("terms", [])
+            if str(term).strip()
+        ]
+        reason = str(item.get("reason", "")).strip()
+        directory_terms = [*requested_terms, reason]
+
+        file_path = _resolve_repo_file_reference(
+            repo_root=repo_root,
+            candidate=raw_path,
+            repo_files=repo_files,
+        )
+        if file_path:
+            canonical.append({**item, "path": file_path})
+            continue
+
+        directory = _resolve_repo_directory_reference(
+            repo_root=repo_root,
+            candidate=raw_path,
+            repo_files=repo_files,
+        )
+        if directory:
+            for path in _rank_directory_context_files(
+                directory=directory,
+                repo_files=repo_files,
+                terms=directory_terms,
+                limit=4,
+            ):
+                canonical.append(
+                    {
+                        **item,
+                        "path": path,
+                        # Directory ranges are not meaningful for the discovered files.
+                        "start_line": None,
+                        "end_line": None,
+                    }
+                )
+            continue
+
+        unresolved.append(raw_path)
+
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[object, ...]] = set()
+    for item in canonical:
+        key = (
+            item.get("path"),
+            item.get("start_line"),
+            item.get("end_line"),
+            tuple(item.get("terms") or []),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+
+    return deduped, dedupe(unresolved)
 
 
 def _deterministic_search_requests(state: CodingAgentState) -> list[dict[str, Any]]:
@@ -451,7 +712,15 @@ def plan_node(
             f"{skill_instructions_for_llm(state.get('skill_instructions', ''))}"
         )
 
-    approved_custom_tool_catalog = approved_custom_tool_registry.prompt_catalog(selected_tool_names)
+    approved_custom_tool_names = {
+        name
+        for name in selected_tool_names
+        if approved_custom_tool_registry.has(name)
+    }
+
+    approved_custom_tool_catalog = approved_custom_tool_registry.prompt_catalog(
+        selected_tool_names
+    )
     if approved_custom_tool_catalog:
         planner_prompt += (
             "\n\nApproved custom tools available for this run:\n"
@@ -499,7 +768,12 @@ def plan_node(
             "search_queries": decision.search_queries,
             "subtasks": subtasks,
             "custom_tool_calls": [
-                item.model_dump() for item in decision.custom_tool_calls[:MAX_CUSTOM_TOOL_CALLS]
+                {
+                    **item.model_dump(),
+                    "tool_name": item.tool_name.strip(),
+                }
+                for item in decision.custom_tool_calls[:MAX_CUSTOM_TOOL_CALLS]
+                if item.tool_name.strip() in approved_custom_tool_names
             ],
             "validation_commands": decision.validation_commands,
             "web_search_query": decision.web_search_query or "",
@@ -610,10 +884,11 @@ def repo_navigator_node(
     state: CodingAgentState,
     cfg: CodingAgentSettings = default_settings,
 ) -> CodingAgentState:
-    """Select files deterministically; use an LLM navigator only as an opt-in fallback."""
+    """Select canonical repository files before any context worker reads them."""
 
     cfg = _settings_for_state(state, cfg)
     repo_root = resolve_repo_root(state, cfg)
+    repo_files = filter_context_paths(list_files(repo_root, ".", max_depth=12))
     errors = list(state.get("errors", []))
     search_requests = _search_requests_from_state(state) or _deterministic_search_requests(state)
     search_result_dicts = list(state.get("search_results") or [])
@@ -638,28 +913,40 @@ def repo_navigator_node(
         except Exception as exc:
             errors.append(f"Repo navigation search failed: {exc}")
 
-    selected_paths = dedupe(
-        filter_context_paths(
-            [
-                *explicit_paths,
-                *requested_paths,
-                *paths_from_ranked_results(search_result_dicts),
-            ]
-        )
-    )[:MAX_REPO_NAVIGATION_FILES]
+    ranked_paths = paths_from_ranked_results(search_result_dicts)
+    # Patcher context requests are highest priority on retry. Canonical repo
+    # attachments come before any path text synthesized in the user/voice handoff.
+    raw_candidates = [
+        *requested_paths,
+        *explicit_paths,
+        *ranked_paths,
+    ]
+    resolved_paths, unresolved_paths = _resolve_context_paths(
+        repo_root=repo_root,
+        candidate_paths=raw_candidates,
+        repo_files=repo_files,
+    )
+    selected_paths = resolved_paths[:MAX_REPO_NAVIGATION_FILES]
+
+    # Unresolved explicit/request paths are useful diagnostics, but do not let them
+    # consume navigation slots or fan out into repeated worker read failures.
+    important_unresolved = set(requested_paths + explicit_paths)
+    for path in unresolved_paths:
+        if path in important_unresolved:
+            message = f"Could not resolve repository path reference: {path}"
+            if message not in errors:
+                errors.append(message)
 
     navigation_summary = (
-        "Selected files from explicit attachments, patcher context requests, and "
-        "ranked structured search results."
+        "Selected canonical files from patcher context requests, repository "
+        "attachments/request paths, and ranked structured search results."
     )
     confidence = 0.9 if selected_paths else 0.45
     missing_context: list[str] = []
 
     if not selected_paths and cfg.llm_navigation_enabled:
         try:
-            root_files = filter_context_paths(list_files(repo_root, ".", max_depth=6))[
-                : cfg.max_search_results
-            ]
+            root_files = repo_files[: cfg.max_search_results]
             decision: RepoNavigationDecision = invoke_parsed_decision(
                 model=_coding_node_model(
                     cfg.repo_navigation_max_tokens,
@@ -671,7 +958,9 @@ def repo_navigator_node(
                 system_prompt=REPO_NAVIGATOR_SYSTEM_PROMPT,
                 user_prompt=build_repo_navigator_user_prompt(
                     request=state["user_request"],
-                    selected_skill=", ".join(state.get("selected_skills") or [state.get("selected_skill", "")]),
+                    selected_skill=", ".join(
+                        state.get("selected_skills") or [state.get("selected_skill", "")]
+                    ),
                     skill_instructions=skill_instructions_for_llm(
                         state.get("skill_instructions", "")
                     ),
@@ -686,21 +975,46 @@ def repo_navigator_node(
                 ),
                 max_attempts=1,
             )
-            selected_paths = dedupe(
-                filter_context_paths([item.path for item in decision.files_to_inspect])
-            )[:MAX_REPO_NAVIGATION_FILES]
+
+            selected_paths, unresolved_llm_paths = _resolve_context_paths(
+                repo_root=repo_root,
+                candidate_paths=[item.path for item in decision.files_to_inspect],
+                repo_files=repo_files,
+            )
+
+            selected_paths = selected_paths[:MAX_REPO_NAVIGATION_FILES]
+            if unresolved_llm_paths:
+                errors.append(
+                    "Optional LLM repo navigator returned unresolved paths: "
+                    + ", ".join(unresolved_llm_paths[:5])
+                )
+
             navigation_summary = decision.task_summary or navigation_summary
             confidence = decision.confidence
             missing_context = decision.missing_context
         except Exception as exc:
             errors.append(f"Optional LLM repo navigator failed: {exc}")
 
+    requested_resolved, _ = _resolve_context_paths(
+        repo_root=repo_root,
+        candidate_paths=requested_paths,
+        repo_files=repo_files,
+    )
+
+    explicit_resolved, _ = _resolve_context_paths(
+        repo_root=repo_root,
+        candidate_paths=explicit_paths,
+        repo_files=repo_files,
+    )
+
+    high_priority = set(requested_resolved + explicit_resolved)
+
     navigation_files = [
         {
             "path": path,
             "reason": (
                 "Explicit file/context request."
-                if path in set(_explicit_request_paths(state) + requested_paths)
+                if path in high_priority
                 else "Ranked structured-search result."
             ),
         }
@@ -741,6 +1055,12 @@ def assign_context_workers(state: CodingAgentState) -> list[Send]:
         if str(item.get("path", "")).strip()
     ]
 
+    requested_context = [
+        dict(item)
+        for item in state.get("requested_context", [])
+        if isinstance(item, dict)
+    ]
+
     worker_payloads: list[Send] = []
     for index, raw_subtask in enumerate(subtasks):
         subtask = dict(raw_subtask)
@@ -748,8 +1068,27 @@ def assign_context_workers(state: CodingAgentState) -> list[Send]:
             path for path_index, path in enumerate(nav_paths)
             if path_index % len(subtasks) == index
         ]
+        requested_for_worker = [
+            item
+            for request_index, item in enumerate(requested_context)
+            if request_index % len(subtasks) == index
+        ]
+
+        requested_paths = [
+            str(item.get("path", "")).strip()
+            for item in requested_for_worker
+            if str(item.get("path", "")).strip()
+        ]
+
+        # Retry context used to be sent entirely to worker 0. With a per-worker
+        # file cap that could evict that worker's own direct implementation files.
+        # Spread retry requests across workers and retain the subtask candidates.
         subtask["candidate_paths"] = dedupe(
-            [*subtask.get("candidate_paths", []), *assigned]
+            [
+                *requested_paths,
+                *subtask.get("candidate_paths", []),
+                *assigned,
+            ]
         )
         worker_payloads.append(
             Send(
@@ -761,9 +1100,7 @@ def assign_context_workers(state: CodingAgentState) -> list[Send]:
                     "runtime_settings": state.get("runtime_settings", {}),
                     "active_subtask": subtask,
                     "search_requests": state.get("search_requests", []),
-                    "requested_context": (
-                        state.get("requested_context", []) if index == 0 else []
-                    ),
+                    "requested_context": requested_for_worker,
                     "context_generation": state.get("context_generation", 0),
                 },
             )
@@ -861,19 +1198,37 @@ def _chunk_ranges_for_text(
     return output
 
 
-def _requested_ranges_for_path(
+def _requested_context_for_path(
     requested_context: list[dict[str, Any]],
     path: str,
-) -> list[tuple[int, int]]:
+) -> tuple[list[tuple[int, int]], list[str], bool]:
     ranges: list[tuple[int, int]] = []
+    terms: list[str] = []
+    matched = False
+    canonical = path.strip().replace("\\", "/")
+
     for item in requested_context:
-        if str(item.get("path", "")).strip() != path:
+        requested = _clean_repo_path_reference(str(item.get("path", ""))).lstrip("/")
+        if not requested or requested != canonical:
             continue
+
+        matched = True
         start = item.get("start_line")
         end = item.get("end_line")
-        if isinstance(start, int):
-            ranges.append((start, end if isinstance(end, int) else start + 120))
-    return ranges
+
+        # A bounded range is meaningful only when both ends are explicit. If the
+        # model knows only one end, use terms/chunking instead of silently turning
+        # "1-?" into the first 121 lines and calling that sufficient context.
+        if isinstance(start, int) and isinstance(end, int):
+            ranges.append((start, end))
+
+        terms.extend(
+            str(term).strip()
+            for term in item.get("terms", [])
+            if str(term).strip()
+        )
+
+    return ranges, dedupe(terms), matched
 
 
 def _format_file_context(
@@ -884,16 +1239,44 @@ def _format_file_context(
     requested_context: list[dict[str, Any]],
     cfg: CodingAgentSettings,
 ) -> str:
-    if len(text) <= cfg.max_full_file_chars:
+    requested_ranges, requested_terms, explicitly_requested = _requested_context_for_path(
+        requested_context,
+        path,
+    )
+
+    if len(text) <= cfg.max_full_file_chars and not requested_ranges:
         return (
             f"File: {path}\nContent-Status: complete\n"
             f"```\n{text}\n```"
         )
 
+    effective_terms = requested_terms or terms
+
+    # An explicit retry request with no bounded range/terms means "I need this file
+    # generally", not "give me lines 1-121". Allow a complete representation when
+    # it can consume at most one third of the total patch-context budget.
+    retry_full_file_limit = min(
+        cfg.max_file_chars,
+        max(cfg.max_full_file_chars, cfg.max_context_prompt_chars // 3),
+    )
+    if (
+        explicitly_requested
+        and not requested_ranges
+        and not requested_terms
+        and len(text) <= retry_full_file_limit
+    ):
+        return (
+            f"File: {path}\nContent-Status: complete\n"
+            f"```\n{text}\n```"
+        )
+
+    if explicitly_requested and not requested_ranges and not requested_terms:
+        effective_terms = [Path(path).stem, *terms]
+
     ranges = _chunk_ranges_for_text(
         text,
-        terms=terms,
-        requested_ranges=_requested_ranges_for_path(requested_context, path),
+        terms=[] if requested_ranges else effective_terms,
+        requested_ranges=requested_ranges,
         cfg=cfg,
     )
     blocks = [
@@ -918,9 +1301,9 @@ def context_worker_node(
     worker_id = str(subtask.get("id") or "context")
     search_requests = subtask.get("search_requests") or state.get("search_requests", [])
     errors: list[str] = []
-    paths = filter_context_paths(list(subtask.get("candidate_paths") or []))
+    candidate_paths = filter_context_paths(list(subtask.get("candidate_paths") or []))
 
-    should_search = not (state.get("task_mode") == "simple" and bool(paths))
+    should_search = not (state.get("task_mode") == "simple" and bool(candidate_paths))
     if search_requests and should_search:
         try:
             results = search_repository(
@@ -928,16 +1311,36 @@ def context_worker_node(
                 search_requests,
                 max_results=max(10, cfg.max_worker_files * 4),
             )
-            paths.extend(paths_from_ranked_results([item.to_dict() for item in results]))
+            candidate_paths.extend(
+                paths_from_ranked_results([item.to_dict() for item in results])
+            )
+
         except Exception as exc:
             errors.append(f"Worker {worker_id} search failed: {exc}")
 
-    for item in state.get("requested_context", []):
-        path = str(item.get("path", "")).strip()
-        if path:
-            paths.append(path)
+    # Patcher-requested files go first on retries.
+    requested_paths = [
+        str(item.get("path", "")).strip()
+        for item in state.get("requested_context", [])
+        if str(item.get("path", "")).strip()
+    ]
 
-    paths = dedupe(filter_context_paths(paths))[: cfg.max_worker_files]
+    candidate_paths = [*requested_paths, *candidate_paths]
+
+    paths, unresolved = _resolve_context_paths(
+        repo_root=repo_root,
+        candidate_paths=dedupe(filter_context_paths(candidate_paths)),
+    )
+
+    paths = paths[: cfg.max_worker_files]
+
+    # The navigator reports unresolved explicit paths once. Workers only report
+    # unresolved retry requests, avoiding the same stale alias error per worker.
+    requested_set = set(requested_paths)
+    for path in unresolved:
+        if path in requested_set:
+            errors.append(f"Worker {worker_id} could not resolve requested context path {path}.")
+
     terms = _search_terms_from_worker_state(state)
     context_blocks: list[str] = []
     inspected: list[str] = []
@@ -1019,13 +1422,52 @@ def _compact_upload_context(
     return blocks, used, errors
 
 
+def _context_block_path(block: str) -> str | None:
+    first_line = block.splitlines()[0].strip() if block else ""
+    if not first_line.startswith("File: "):
+        return None
+    path = first_line.removeprefix("File: ").strip()
+    return path or None
+
+
+def _adaptive_context_prompt_budget(
+    *,
+    cfg: CodingAgentSettings,
+    priority_blocks: list[str],
+    direct_file_blocks: list[str],
+    upload_blocks: list[str],
+) -> tuple[int, int]:
+    """Choose a bounded context budget based on exact high-priority evidence.
+
+    ``context_prompt_base_chars`` keeps ordinary runs small. Broad runs grow only
+    when user attachments, navigator-selected files, patcher retry requests, or
+    other priority blocks actually require more room. ``max_context_prompt_chars``
+    remains the hard safety ceiling.
+    """
+
+    hard_cap = max(1, int(cfg.max_context_prompt_chars))
+    base = min(
+        hard_cap,
+        max(1, int(getattr(cfg, "context_prompt_base_chars", hard_cap))),
+    )
+    reserve = max(0, int(getattr(cfg, "context_prompt_reserve_chars", 0)))
+
+    priority_chars = sum(
+        len(block)
+        for block in [*priority_blocks, *direct_file_blocks, *upload_blocks]
+    )
+    desired = max(base, priority_chars + reserve)
+    return min(hard_cap, desired), priority_chars
+
+
 def gather_context_node(
     state: CodingAgentState,
     cfg: CodingAgentSettings = default_settings,
 ) -> CodingAgentState:
-    """Fan-in worker results and build a bounded, high-signal patch prompt."""
+    """Fan-in worker results and build a bounded, priority-aware patch prompt."""
 
     cfg = _settings_for_state(state, cfg)
+    repo_root = resolve_repo_root(state, cfg)
     generation = int(state.get("context_generation", 0))
     worker_results = [
         item
@@ -1034,14 +1476,13 @@ def gather_context_node(
     ]
     errors = list(state.get("errors", []))
     files_inspected: list[str] = []
-    candidate_blocks: list[str] = []
 
     selected_paths = [
         str(item.get("path", "")).strip()
         for item in state.get("repo_navigation_files", [])
         if str(item.get("path", "")).strip()
     ]
-    candidate_blocks.append(
+    execution_block = (
         "# Execution context\n"
         f"Task mode: {state.get('task_mode', 'standard')}\n"
         f"Selected skills: {', '.join(state.get('selected_skills') or [state.get('selected_skill', 'none')])}\n"
@@ -1049,10 +1490,15 @@ def gather_context_node(
         f"Selected repository paths:\n{bullets(selected_paths)}"
     )
 
+    priority_blocks: list[str] = [execution_block]
+    loop_focus = _format_loop_context_focus(state)
+    if loop_focus:
+        priority_blocks.append("# Retry focus\n" + loop_focus)
+
     for tool_result in state.get("custom_tool_results", []):
         tool_name = str(tool_result.get("tool_name", "custom_tool"))
         if tool_result.get("success"):
-            candidate_blocks.append(
+            priority_blocks.append(
                 f"# Approved custom tool result: {tool_name}\n"
                 f"Reason: {tool_result.get('reason', '')}\n"
                 f"{tool_result.get('output', '')}"
@@ -1063,49 +1509,167 @@ def gather_context_node(
                 f"{tool_result.get('output', '')}"
             )
 
+    # Fan-out result order is not stable. Keep all representations until request
+    # priority is known; a short selected chunk must not replace a complete file that
+    # the patcher explicitly asked to inspect on retry.
+    file_block_variants: dict[str, list[str]] = {}
+    worker_notes: list[str] = []
     for result in worker_results:
         worker_errors = [str(item) for item in result.get("errors", [])]
         errors.extend(worker_errors)
         files_inspected.extend(str(path) for path in result.get("files_inspected", []))
-        blocks = result.get("context_blocks", [])
+
+        blocks = [str(block) for block in result.get("context_blocks", [])]
         if blocks:
-            candidate_blocks.append(
-                f"# Context worker: {result.get('worker_id', 'worker')}\n"
-                f"Objective: {result.get('objective', '')}"
+            worker_notes.append(
+                f"- {result.get('worker_id', 'worker')}: {result.get('objective', '')}"
             )
-            candidate_blocks.extend(str(block) for block in blocks)
+        for block in blocks:
+            path = _context_block_path(block)
+            if not path:
+                continue
+            file_block_variants.setdefault(path, []).append(block)
+
+    requested_raw = [
+        str(item.get("path", "")).strip()
+        for item in state.get("requested_context", [])
+        if str(item.get("path", "")).strip()
+    ]
+    
+    requested_paths, _ = _resolve_context_paths(
+        repo_root=repo_root,
+        candidate_paths=requested_raw,
+    )
+    repo_attachment_paths, _ = _resolve_context_paths(
+        repo_root=repo_root,
+        candidate_paths=_repo_attachment_paths(state),
+    )
+
+    # Direct implementation files are mandatory evidence. A retry request,
+    # search result, or per-worker file cap must not make them disappear.
+    direct_path_list = dedupe(
+        [
+            *requested_paths,
+            *repo_attachment_paths,
+            *selected_paths,
+        ]
+    )
+    direct_terms = _search_terms_from_worker_state(state)
+    for path in direct_path_list:
+        if path in file_block_variants:
+            continue
+        try:
+            probe = read_file(repo_root, path, max_chars=cfg.max_file_chars + 1)
+            if len(probe) > cfg.max_file_chars:
+                errors.append(
+                    f"Skipped direct context {path}: file exceeds the configured read "
+                    f"ceiling of {cfg.max_file_chars} characters."
+                )
+                continue
+            file_block_variants[path] = [
+                _format_file_context(
+                    path=path,
+                    text=probe,
+                    terms=direct_terms,
+                    requested_context=state.get("requested_context", []),
+                    cfg=cfg,
+                )
+            ]
+            files_inspected.append(path)
+        except Exception as exc:
+            errors.append(f"Could not load direct repository context {path}: {exc}")
+
+    # Priority: patcher retry requests -> repo attachments -> navigator selections
+    # -> remaining search-derived worker files.
+    ordered_file_paths = dedupe(
+        [
+            *direct_path_list,
+            *files_inspected,
+        ]
+    )
+
+    direct_paths = set(direct_path_list)
+    file_blocks: dict[str, str] = {}
+
+    for path, variants in file_block_variants.items():
+        complete = [block for block in variants if "Content-Status: complete" in block]
+        if path in requested_paths:
+            # Retry requests need the richest exact representation available.
+            file_blocks[path] = min(complete, key=len) if complete else max(variants, key=len)
+        elif path in direct_paths:
+            file_blocks[path] = min(complete, key=len) if complete else max(variants, key=len)
+        else:
+            # Secondary search-derived context should stay compact.
+            file_blocks[path] = min(variants, key=len)
 
     upload_blocks, attached_files_used, upload_errors = _compact_upload_context(state, cfg)
-    candidate_blocks.extend(upload_blocks)
     errors.extend(upload_errors)
 
+    trailing_blocks: list[str] = []
+    if worker_notes:
+        trailing_blocks.append("# Context workers\n" + "\n".join(worker_notes))
     memories = state.get("long_term_memories", [])
     if memories:
-        candidate_blocks.append(
+        trailing_blocks.append(
             "# Relevant prior coding memories\n" + bullets(memories[:5])
         )
     if state.get("web_search_results"):
-        candidate_blocks.append(
+        trailing_blocks.append(
             "# Web search results\n" + str(state.get("web_search_results"))[:8_000]
         )
-    loop_focus = _format_loop_context_focus(state)
-    if loop_focus:
-        candidate_blocks.append("# Retry focus\n" + loop_focus)
 
-    # Never silently truncate a file block. Include whole selected blocks until the
-    # prompt budget is reached, then report what was omitted so the patcher can ask
-    # for a narrower range on its next pass.
+    direct_file_blocks = [
+        file_blocks[path]
+        for path in ordered_file_paths
+        if path in file_blocks and path in direct_paths
+    ]
+    effective_context_budget, priority_context_chars = _adaptive_context_prompt_budget(
+        cfg=cfg,
+        priority_blocks=priority_blocks,
+        direct_file_blocks=direct_file_blocks,
+        upload_blocks=upload_blocks,
+    )
+
+    secondary_file_blocks = [
+        file_blocks[path]
+        for path in ordered_file_paths
+        if path in file_blocks and path not in direct_paths
+    ]
+    
+    candidate_blocks = [
+        *priority_blocks,
+        *direct_file_blocks,
+        *upload_blocks,
+        *secondary_file_blocks,
+        *trailing_blocks,
+    ]
+
+    # Keep blocks whole. Requested/direct files come first, and the budget expands
+    # automatically when those exact files need more than the normal baseline.
     context: list[str] = []
     used_chars = 0
+    omitted_blocks = 0
     for block in candidate_blocks:
-        if used_chars + len(block) > cfg.max_context_prompt_chars:
-            errors.append(
-                "Context prompt budget reached; omitted lower-priority blocks. "
-                "The patcher can request exact file ranges if needed."
-            )
+        if used_chars + len(block) > effective_context_budget:
+            omitted_blocks += 1
             continue
         context.append(block)
         used_chars += len(block)
+
+    if priority_context_chars > effective_context_budget:
+        errors.append(
+            "High-priority repository context exceeds the hard context ceiling: "
+            f"{priority_context_chars:,} required chars vs "
+            f"{effective_context_budget:,} allowed chars. "
+            "The patcher should request narrower file ranges or symbols."
+        )
+    elif omitted_blocks:
+        errors.append(
+            "Context prompt budget reached at "
+            f"{used_chars:,}/{effective_context_budget:,} chars "
+            f"(hard cap {cfg.max_context_prompt_chars:,}); omitted "
+            f"{omitted_blocks} lower-priority block(s) after preserving requested/direct context."
+        )
 
     files_inspected = dedupe(files_inspected)
     has_usable_context = bool(context and (files_inspected or attached_files_used))
@@ -1219,15 +1783,23 @@ def patch_node(
             }
     
 
-    requested_context = [item.model_dump() for item in decision.context_requests]
-
     repo_files = filter_context_paths(list_files(repo_root, ".", max_depth=12))
+    requested_context, unresolved_context_requests = _canonicalize_context_requests(
+        repo_root=repo_root,
+        requests=[item.model_dump() for item in decision.context_requests],
+        repo_files=repo_files,
+    )
+    for unresolved_path in unresolved_context_requests:
+        errors.append(
+            f"Could not resolve patcher context request to a repository file or directory: "
+            f"{unresolved_path}"
+        )
 
     for edit in decision.edits:
 
-        path = edit.path.strip()
+        path = _clean_repo_path_reference(edit.path)
 
-        resolved_path = _resolve_existing_repo_path(
+        resolved_path = _resolve_repo_file_reference(
             repo_root=repo_root,
             candidate=path,
             repo_files=repo_files,

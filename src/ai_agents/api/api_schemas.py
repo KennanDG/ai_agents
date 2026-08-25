@@ -464,6 +464,26 @@ class ToolQuarantineRequest(BaseModel):
         return value.strip()
 
 
+class ToolGenerateRequest(BaseModel):
+    tool_type: AgentKind
+    prompt: str = Field(min_length=3, max_length=8_000)
+
+
+class ToolFileUpdateRequest(BaseModel):
+    agent: AgentKind
+    path: str
+    content: str = Field(min_length=1, max_length=MAX_TOOL_CHARS)
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        normalized = value.strip()
+        match = re.fullmatch(r"custom_pending/([a-z][a-z0-9_]*)\.py", normalized)
+        if match is None or not NAME_RE.fullmatch(match.group(1)):
+            raise ValueError("Only custom_pending/<tool_name>.py files may be edited.")
+        return normalized
+
+
 class SkillSummary(BaseModel):
     agent: AgentKind
     name: str

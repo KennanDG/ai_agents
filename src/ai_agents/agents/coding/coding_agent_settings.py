@@ -78,8 +78,17 @@ class CodingAgentSettings:
     context_chunk_overlap_chars: int = _env_int(
         "CODING_AGENT_CONTEXT_CHUNK_OVERLAP_CHARS", 1_500
     )
+    # Patch-context budgeting is adaptive. Most runs stay near the 120k baseline,
+    # while broad multi-file runs can expand up to the hard ceiling. Keeping the
+    # ceiling separate prevents a single large task from creating an unbounded prompt.
+    context_prompt_base_chars: int = _env_int(
+        "CODING_AGENT_CONTEXT_PROMPT_BASE_CHARS", 120_000
+    )
     max_context_prompt_chars: int = _env_int(
-        "CODING_AGENT_MAX_CONTEXT_PROMPT_CHARS", 120_000
+        "CODING_AGENT_MAX_CONTEXT_PROMPT_CHARS", 220_000
+    )
+    context_prompt_reserve_chars: int = _env_int(
+        "CODING_AGENT_CONTEXT_PROMPT_RESERVE_CHARS", 32_000
     )
     max_context_workers: int = _env_int("CODING_AGENT_MAX_CONTEXT_WORKERS", 4)
     max_worker_files: int = _env_int("CODING_AGENT_MAX_WORKER_FILES", 6)

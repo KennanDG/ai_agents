@@ -5,6 +5,7 @@ import {
   Eye,
   FilePlus2,
   LoaderCircle,
+  Pencil,
   RefreshCcw,
   Save,
   Sparkles,
@@ -17,17 +18,20 @@ import {
   approveTool,
   deleteSkill,
   draftSkill,
+  generateTool,
   fetchSkills,
   fetchToolReview,
   fetchTools,
   quarantineTool,
   rejectTool,
   saveSkill,
+  updateToolFile,
   type AgentKind,
   type SkillSummary,
   type ToolReviewResponse,
   type ToolSummary,
 } from "../lib/adminApi";
+import { CodeEditorModal } from "./CodeEditorModal";
 
 type SkillsPageProps = {
   apiBaseUrl: string;
@@ -86,11 +90,13 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [draftPrompt, setDraftPrompt] = useState("");
+  const [generationKind, setGenerationKind] = useState<"skill" | "tool">("skill");
   const [drafting, setDrafting] = useState(false);
   const [toolPurpose, setToolPurpose] = useState("");
   const [toolName, setToolName] = useState("");
   const [toolSource, setToolSource] = useState("");
   const [reviewingTool, setReviewingTool] = useState<ToolReviewResponse | null>(null);
+  const [editingTool, setEditingTool] = useState<ToolReviewResponse | null>(null);
   const [toolReviewLoading, setToolReviewLoading] = useState(false);
   const skillFileRef = useRef<HTMLInputElement | null>(null);
   const toolFileRef = useRef<HTMLInputElement | null>(null);
@@ -328,6 +334,43 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
     }
   };
 
+
+  const editPendingTool = async (tool: ToolSummary) => {
+    if (tool.status !== "pending_review") return;
+    setToolReviewLoading(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const review = await fetchToolReview({
+        apiBaseUrl,
+        apiKey,
+        agent,
+        name: tool.name,
+      });
+      setEditingTool(review);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Failed to load tool file.");
+    } finally {
+      setToolReviewLoading(false);
+    }
+  };
+
+  const saveToolEdit = async (source: string) => {
+    if (!editingTool) return;
+
+    const updated = await updateToolFile({
+      apiBaseUrl,
+      apiKey,
+      agent,
+      path: `custom_pending/${editingTool.name}.py`,
+      content: source,
+    });
+    setEditingTool(null);
+    setReviewingTool(updated);
+    await load(agent);
+    setMessage(`Saved changes to pending tool '${updated.name}'. Review it again before approval.`);
+  };
+
   const approvePendingTool = async () => {
     if (!reviewingTool) return;
     setSaving(true);
@@ -343,7 +386,7 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
       setReviewingTool(null);
       await load(agent);
       setMessage(
-        `Approved '${approved.name}'. It is now available to coding skills and the runtime tool registry.`,
+        `Approved '${approved.name}'. It is now available to ${agent} skills and the ${agent} runtime tool registry.`,
       );
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Failed to approve tool.");
@@ -367,6 +410,37 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
       setError(reason instanceof Error ? reason.message : "Failed to reject tool.");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const generateToolFromPrompt = async () => {
+    const prompt = draftPrompt.trim();
+    if (!prompt) return;
+
+    setDrafting(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const generated = await generateTool({
+        apiBaseUrl,
+        apiKey,
+        toolType: agent,
+        prompt,
+      });
+      setTools((current) => [
+        generated,
+        ...current.filter((item) => item.name !== generated.name),
+      ]);
+      setToolName(generated.name);
+      setToolPurpose(generated.purpose);
+      setToolSource(generated.source);
+      setMessage(
+        `Generated '${generated.name}'. Review the source and static validation details before approving it.`,
+      );
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Failed to generate tool.");
+    } finally {
+      setDrafting(false);
     }
   };
 
@@ -477,30 +551,56 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
             </div>
 
             <div className="mt-4 rounded-md border border-line bg-panel-soft p-3">
-              <div className="flex items-center gap-2">
-                <Sparkles size={13} className="text-accent-light" />
-                <div>
-                  <h3 className="text-xs font-semibold text-ink">Generate skill with AI</h3>
-                  <p className="mt-0.5 text-[9px] leading-4 text-muted">
-                    The backend generates canonical Markdown using only executable tools registered for the selected agent.
-                  </p>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <Sparkles size={13} className="text-accent-light" />
+                  <div>
+                    <h3 className="text-xs font-semibold text-ink">Generate with AI</h3>
+                    <p className="mt-0.5 text-[9px] leading-4 text-muted">
+                      Generate a canonical skill draft or a custom tool for review.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex rounded-md border border-line bg-surface p-0.5">
+                  <button
+                    type="button"
+                    className={`rounded px-2 py-1 text-[9px] font-medium ${
+                      generationKind === "skill" ? "bg-selected text-ink-soft" : "text-muted hover:text-ink-soft"
+                    }`}
+                    onClick={() => setGenerationKind("skill")}
+                  >
+                    Skill
+                  </button>
+                  <button
+                    type="button"
+                    className={`rounded px-2 py-1 text-[9px] font-medium ${
+                      generationKind === "tool" ? "bg-selected text-ink-soft" : "text-muted hover:text-ink-soft"
+                    }`}
+                    onClick={() => setGenerationKind("tool")}
+                  >
+                    Tool
+                  </button>
                 </div>
               </div>
               <textarea
                 value={draftPrompt}
                 onChange={(event) => setDraftPrompt(event.target.value)}
                 rows={4}
-                placeholder="Example: Create a skill for reviewing FastAPI endpoint changes, checking schemas, auth, error handling, and targeted tests."
+                placeholder={
+                  generationKind === "skill"
+                    ? "Example: Create a skill for reviewing FastAPI endpoint changes, checking schemas, auth, error handling, and targeted tests."
+                    : "Example: Create a voice tool that summarizes repository context from the transcript before intake."
+                }
                 className="mt-3 w-full resize-y rounded-md border border-line bg-surface px-3 py-2 text-xs leading-5 text-ink outline-none focus:border-accent/70"
               />
               <button
                 type="button"
                 className="secondary-button mt-2 justify-center"
                 disabled={drafting || !draftPrompt.trim()}
-                onClick={generateFromPrompt}
+                onClick={generationKind === "skill" ? generateFromPrompt : generateToolFromPrompt}
               >
                 {drafting ? <LoaderCircle size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                Generate draft
+                {generationKind === "skill" ? "Generate draft" : "Generate tool for review"}
               </button>
             </div>
 
@@ -567,15 +667,26 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
                   </div>
                   <p className="mt-1 text-xs leading-5 text-faint">{tool.purpose || tool.module}</p>
                   {tool.status === "pending_review" ? (
-                    <button
-                      type="button"
-                      className="secondary-button mt-2 h-7 w-full justify-center"
-                      disabled={toolReviewLoading || saving}
-                      onClick={() => void reviewPendingTool(tool)}
-                    >
-                      {toolReviewLoading ? <LoaderCircle size={11} className="animate-spin" /> : <Eye size={11} />}
-                      Review
-                    </button>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        className="secondary-button h-7 justify-center"
+                        disabled={toolReviewLoading || saving}
+                        onClick={() => void reviewPendingTool(tool)}
+                      >
+                        {toolReviewLoading ? <LoaderCircle size={11} className="animate-spin" /> : <Eye size={11} />}
+                        Review
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button h-7 justify-center"
+                        disabled={toolReviewLoading || saving}
+                        onClick={() => void editPendingTool(tool)}
+                      >
+                        <Pencil size={11} />
+                        Edit
+                      </button>
+                    </div>
                   ) : null}
                 </div>
               );
@@ -588,7 +699,7 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
                 <div>
                   <h3 className="text-xs font-semibold text-ink">Review {reviewingTool.name}</h3>
                   <p className="mt-1 text-[9px] leading-4 text-muted">
-                    Approval moves this file from custom_pending to custom_approved. The runtime will load only approved custom tools.
+                    Approval moves this file from custom_pending to custom_approved. The selected agent runtime loads only approved custom tools.
                   </p>
                 </div>
                 <button
@@ -646,7 +757,7 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
           <div className="mt-5 border-t border-line pt-4">
             <h3 className="text-xs font-semibold text-ink">Upload tool for review</h3>
             <p className="mt-1 text-[9px] leading-4 text-muted">
-              Uploaded Python stays quarantined until you review and approve it. Approved coding tools are loaded through the restricted runtime registry; pending tools are never imported.
+              Uploaded Python stays quarantined until you review and approve it. Approved custom tools are loaded through the selected agent's restricted runtime registry; pending tools are never imported.
             </p>
 
             <input
@@ -705,6 +816,13 @@ export const SkillsPage = ({ apiBaseUrl, apiKey }: SkillsPageProps) => {
           </div>
         </aside>
       </div>
+      <CodeEditorModal
+        open={editingTool !== null}
+        title={editingTool ? `Edit ${editingTool.name}` : "Edit pending tool"}
+        initialContent={editingTool?.source ?? ""}
+        onCancel={() => setEditingTool(null)}
+        onSave={saveToolEdit}
+      />
     </section>
   );
 }

@@ -223,6 +223,29 @@ export const fetchToolReview = async ({
   return readJson<ToolReviewResponse>(response);
 };
 
+
+export const updateToolFile = async ({
+  apiBaseUrl,
+  apiKey,
+  agent,
+  path,
+  content,
+}: ApiClientConfig & {
+  agent: AgentKind;
+  path: string;
+  content: string;
+}): Promise<ToolReviewResponse> => {
+  const response = await fetch(`${apiBaseUrl}/admin/tools/content`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...authHeaders(apiKey),
+    },
+    body: JSON.stringify({ agent, path, content }),
+  });
+  return readJson<ToolReviewResponse>(response);
+};
+
 export const approveTool = async ({
   apiBaseUrl,
   apiKey,
@@ -323,3 +346,28 @@ export const draftSkill = async ({
   });
   return readJson<SkillDraftResponse>(response);
 };
+export type ToolGenerateRequest = {
+  toolType: AgentKind;
+  prompt: string;
+};
+
+export type ToolGenerationResponse = ToolReviewResponse;
+
+export const generateTool = async ({
+  apiBaseUrl,
+  apiKey,
+  toolType,
+  prompt,
+}: ApiClientConfig & ToolGenerateRequest): Promise<ToolGenerationResponse> => {
+  const response = await fetch(`${apiBaseUrl}/admin/generate-tools`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...authHeaders(apiKey),
+    },
+    body: JSON.stringify({ tool_type: toolType, prompt }),
+  });
+  return readJson<ToolGenerationResponse>(response);
+};
+
+export const generateTools = generateTool;
