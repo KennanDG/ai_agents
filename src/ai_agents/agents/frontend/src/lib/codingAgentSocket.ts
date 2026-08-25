@@ -9,6 +9,26 @@ export type CodingAgentAttachedFile = {
   truncated?: boolean | null;
 };
 
+export type CodingAgentTaskMode = "simple" | "standard" | "parallel";
+
+export type CodingAgentImplementationUnit = Record<string, unknown> & {
+  id?: string;
+  unit_id?: string;
+  title?: string;
+  objective?: string;
+  target_paths?: string[];
+  dependencies?: string[];
+  acceptance_criteria?: string[];
+};
+
+export type CodingAgentCompletionLedgerEntry = Record<string, unknown> & {
+  status?: string;
+  patch_retries?: number;
+  generation?: number;
+  message?: string;
+};
+
+export type CodingAgentCompletionLedger = Record<string, CodingAgentCompletionLedgerEntry>;
 
 export type CodingAgentRunRequest = {
   request: string;
@@ -19,11 +39,27 @@ export type CodingAgentRunRequest = {
   memory_user_id?: string | null;
   memory_namespace?: string | null;
   memory_enabled?: boolean | null;
-  setup_memory?: boolean;
+  setup_memory?: boolean | null;
+
+  /** Primary divide-and-conquer implementation loop limit. */
+  max_implementation_iterations?: number | null;
+  /** Legacy alias retained while older backends are still supported. */
   max_iterations?: number | null;
+
+  /** Primary worker-count override for implementation-unit fan out. */
+  subtask_worker_count?: number | null;
+  /** Legacy alias retained for existing admin configuration/backend versions. */
+  subagent_count?: number | null;
+
+  route_max_tokens?: number | null;
+  planner_max_tokens?: number | null;
+  repo_navigation_max_tokens?: number | null;
+  simple_patch_max_tokens?: number | null;
+  patch_max_tokens?: number | null;
+  progress_max_tokens?: number | null;
+
   attached_files?: CodingAgentAttachedFile[];
 };
-
 
 export type CodingAgentRunResult = {
   thread_id: string;
@@ -31,24 +67,40 @@ export type CodingAgentRunResult = {
 
   report?: string | null;
   selected_skill?: string | null;
+  selected_skills: string[];
+  task_mode?: CodingAgentTaskMode | null;
   route_confidence?: number | null;
   route_reason?: string | null;
-  
+
+  /** Legacy planning fields retained for older UI/reporting paths. */
+  subtasks: Record<string, unknown>[];
+  context_worker_count: number;
+
+  /** Divide-and-conquer execution state. */
+  implementation_units: CodingAgentImplementationUnit[];
+  completion_ledger: CodingAgentCompletionLedger;
+  implementation_generation: number;
+  implementation_iteration: number;
+  max_implementation_iterations: number;
+  subtask_worker_count: number;
+  subtask_worker_results: Record<string, unknown>[];
+  runtime_settings: Record<string, unknown>;
+
   plan: string[];
   files_inspected: string[];
   patch_summary?: string | null;
   file_changes: Record<string, unknown>[];
   diffs: string[];
-  
+
   validation_commands: string[];
   validation_results: Record<string, unknown>[];
-  
+
   approval_required: boolean;
   approval_status: "not_required" | "pending" | "applied" | "rejected";
   blocking_validation_failed: boolean;
   advisory_validation_failed: boolean;
   applied_files: string[];
-  
+
   memory_enabled: boolean;
   memory_namespace?: string | null;
   long_term_memories: string[];
@@ -73,6 +125,12 @@ export type CodingAgentServerEvent =
         repo_root: string;
         workspace_root: string | null;
         allow_write: boolean;
+        subtask_worker_count?: number;
+        /** Legacy alias. */
+        subagent_count?: number;
+        max_implementation_iterations?: number;
+        token_budgets?: Record<string, number>;
+        runtime_settings?: Record<string, unknown>;
       };
     }
   | {
@@ -150,7 +208,7 @@ const makeSocketUrl = (apiBaseUrl: string, apiKey?: string) => {
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   if (apiKey) url.searchParams.set("api_key", apiKey);
   return url;
-}
+};
 
 
 export const createCodingAgentSocket = (options: CodingAgentSocketOptions) => {
@@ -167,8 +225,8 @@ export const createCodingAgentSocket = (options: CodingAgentSocketOptions) => {
     }
 
     pendingMessages.push(serialized);
-  }
-
+  };
+  
 
   socket.addEventListener("open", () => {
     while (pendingMessages.length > 0) {
@@ -239,6 +297,5 @@ export const createCodingAgentSocket = (options: CodingAgentSocketOptions) => {
       socket.close();
     },
   };
-}
-
+};
 

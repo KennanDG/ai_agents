@@ -598,19 +598,82 @@ def _new_thread_id() -> str:
     return f"coding-run-{timestamp}-{uuid4().hex[:8]}"
 
 
+def _generation_result_count(
+    items: list[dict[str, Any]],
+    generation: int,
+) -> int:
+    """Count worker results for the active generation without hiding legacy data."""
+    matching = 0
+
+    for item in items:
+        try:
+            item_generation = int(item.get("generation", -1))
+        except (TypeError, ValueError):
+            continue
+
+        if item_generation == generation:
+            matching += 1
+
+    return matching if matching else len(items)
+
+
 def _public_result(state: dict[str, Any], thread_id: str) -> CodingAgentRunResult:
+    selected_skill = state.get("selected_skill")
+    selected_skills = list(state.get("selected_skills") or [])
+
+    if selected_skill and not selected_skills:
+        selected_skills = [str(selected_skill)]
+
+    context_worker_results = [
+        item
+        for item in state.get("context_worker_results", [])
+        if isinstance(item, dict)
+    ]
+
+    context_generation = int(state.get("context_generation", 0) or 0)
+
+    subtask_worker_results = [
+        item
+        for item in state.get("subtask_worker_results", [])
+        if isinstance(item, dict)
+    ]
+    
+    implementation_generation = int(state.get("implementation_generation", 0) or 0)
+    runtime_settings = dict(state.get("runtime_settings") or {})
+    configured_subtask_workers = int(
+        runtime_settings.get("max_subtask_workers")
+        or runtime_settings.get("max_context_workers")
+        or _generation_result_count(subtask_worker_results, implementation_generation)
+        or 0
+    )
+
     return CodingAgentRunResult(
         thread_id=thread_id,
         status=str(state.get("status", "unknown")),
         report=state.get("report"),
-        selected_skill=state.get("selected_skill"),
+        selected_skill=selected_skill,
+        selected_skills=selected_skills,
         task_mode=state.get("task_mode"),
+
+        # Legacy aliases remain populated while clients migrate.
         subtasks=list(state.get("subtasks") or []),
-        context_worker_count=sum(
-            1
-            for item in state.get("context_worker_results", [])
-            if int(item.get("generation", -1)) == int(state.get("context_generation", 0))
+        context_worker_count=_generation_result_count(
+            context_worker_results,
+            context_generation,
         ),
+
+        # Divide-and-conquer execution state.
+        implementation_units=list(state.get("implementation_units") or []),
+        completion_ledger=dict(state.get("completion_ledger") or {}),
+        implementation_generation=implementation_generation,
+        implementation_iteration=int(state.get("implementation_iteration", 0) or 0),
+        max_implementation_iterations=int(
+            state.get("max_implementation_iterations", state.get("max_iterations", 0)) or 0
+        ),
+        subtask_worker_count=configured_subtask_workers,
+        subtask_worker_results=subtask_worker_results,
+        runtime_settings=runtime_settings,
+
         route_confidence=state.get("route_confidence"),
         route_reason=state.get("route_reason"),
         plan=list(state.get("plan") or []),
@@ -656,12 +719,24 @@ def _stream_coding_agent_worker(
     
     thread_id = request.thread_id or _new_thread_id()
 
+    # Prefer divide-and-conquer names, while accepting the pre-migration aliases.
+    resolved_subtask_worker_count = (
+        request.subtask_worker_count
+        or request.subagent_count
+        or config_settings.coding_subagent_count
+    )
+    resolved_max_implementation_iterations = (
+        request.max_implementation_iterations
+        or request.max_iterations
+        or 3
+    )
+
     try:
         cfg = replace(
             default_coding_settings,
-            max_context_workers=(
-                request.subagent_count or config_settings.coding_subagent_count
-            ),
+            # The settings dataclass still exposes this as max_context_workers;
+            # semantically these are now implementation-unit subtask workers.
+            max_context_workers=resolved_subtask_worker_count,
             route_max_tokens=(
                 request.route_max_tokens or config_settings.coding_route_max_tokens
             ),
@@ -727,7 +802,10 @@ def _stream_coding_agent_worker(
                     "repo_root": repo_root,
                     "workspace_root": workspace_root,
                     "allow_write": request.allow_write,
+                    "subtask_worker_count": cfg.max_context_workers,
+                    # Compatibility alias for older frontends.
                     "subagent_count": cfg.max_context_workers,
+                    "max_implementation_iterations": resolved_max_implementation_iterations,
                     "token_budgets": {
                         "route": cfg.route_max_tokens,
                         "planner": cfg.planner_max_tokens,
@@ -735,6 +813,11 @@ def _stream_coding_agent_worker(
                         "simple_patch": cfg.simple_patch_max_tokens,
                         "patch": cfg.patch_max_tokens,
                         "progress": cfg.progress_max_tokens,
+                    },
+                    "runtime_settings": {
+                        "max_subtask_workers": cfg.max_context_workers,
+                        "max_context_workers": cfg.max_context_workers,
+                        "max_implementation_iterations": resolved_max_implementation_iterations,
                     },
                 },
             ),
@@ -758,7 +841,9 @@ def _stream_coding_agent_worker(
             "sandbox_enabled": True,
             "allow_write": request.allow_write,
             "runtime_settings": {
+                "max_subtask_workers": cfg.max_context_workers,
                 "max_context_workers": cfg.max_context_workers,
+                "max_implementation_iterations": resolved_max_implementation_iterations,
                 "route_max_tokens": cfg.route_max_tokens,
                 "planner_max_tokens": cfg.planner_max_tokens,
                 "repo_navigation_max_tokens": cfg.repo_navigation_max_tokens,
@@ -771,16 +856,29 @@ def _stream_coding_agent_worker(
             "attachment_errors": attachment_errors,
             "errors": [*attachment_errors],
             "memory_errors": [],
+            # Divide-and-conquer implementation lifecycle.
+            "implementation_units": [],
+            "active_implementation_unit": {},
+            "implementation_generation": 0,
+            "implementation_iteration": 0,
+            "max_implementation_iterations": resolved_max_implementation_iterations,
+            "subtask_worker_results": [],
+            "completion_ledger": {},
+
+            # Legacy loop/context fields remain initialized so older graph nodes and
+            # persisted threads can still resume during the migration.
             "iteration": 0,
-            "max_iterations": request.max_iterations or 3,
+            "max_iterations": resolved_max_implementation_iterations,
             "continue_loop": False,
             "remaining_tasks": [],
             "loop_notes": [],
             "task_mode": "standard",
             "subtasks": [],
+            "active_subtask": {},
             "context_generation": 0,
             "context_worker_results": [],
             "requested_context": [],
+            "patch_attempts": 0,
         }
 
         final_state = dict(initial_state)
@@ -954,7 +1052,7 @@ async def coding_agent_ws(websocket: WebSocket) -> None:
             type="session.ready",
             payload={
                 "message": "Coding agent WebSocket is ready.",
-                "protocol_version": "0.1.0",
+                "protocol_version": "0.2.0",
             },
         ).model_dump()
     )

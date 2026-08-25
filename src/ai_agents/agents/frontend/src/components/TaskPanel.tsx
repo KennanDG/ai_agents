@@ -1,7 +1,12 @@
 import { ArrowUp, Check, Circle, Mic, Paperclip, ShieldCheck, Sparkles, Square } from "lucide-react";
 import { type ChangeEvent, type ClipboardEvent, type DragEvent, type SubmitEvent, useRef, useState } from "react";
 import type { AgentMessage, AgentRunState, RepositoryFile } from "../types";
-import type { CodingAgentAttachedFile } from "../lib/codingAgentSocket";
+import type {
+  CodingAgentAttachedFile,
+  CodingAgentCompletionLedger,
+  CodingAgentImplementationUnit,
+  CodingAgentTaskMode,
+} from "../lib/codingAgentSocket";
 
 interface TaskPanelProps {
   messages: AgentMessage[];
@@ -36,8 +41,41 @@ const statusClass = {
 };
 
 
+type DivideConquerRunView = AgentRunState & {
+  taskMode?: CodingAgentTaskMode | null;
+  implementationUnits?: CodingAgentImplementationUnit[];
+  completionLedger?: CodingAgentCompletionLedger;
+  implementationIteration?: number;
+  maxImplementationIterations?: number;
+  subtaskWorkerCount?: number;
+};
+
+const COMPLETE_UNIT_STATUSES = new Set(["complete", "completed", "done", "success", "succeeded", "applied"]);
+const FAILED_UNIT_STATUSES = new Set(["blocked", "failed", "patch_failed"]);
+
+const implementationUnitId = (unit: CodingAgentImplementationUnit, index: number) => {
+  const candidate = unit.id ?? unit.unit_id;
+  return typeof candidate === "string" && candidate.trim() ? candidate : `unit-${index + 1}`;
+};
+
+const implementationUnitLabel = (unit: CodingAgentImplementationUnit, index: number) => {
+  for (const value of [unit.title, unit.objective, unit.id, unit.unit_id]) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return `Implementation unit ${index + 1}`;
+};
+
 const PlanCard = ({ run }: { run: AgentRunState }) => {
-  const allStepsDone = run.status === "completed" || run.status === "approval_pending" || run.status === "applied";
+  const divideRun = run as DivideConquerRunView;
+  const implementationUnits = divideRun.implementationUnits ?? [];
+  const completionLedger = divideRun.completionLedger ?? {};
+  const allUnitsDone = implementationUnits.length > 0 && implementationUnits.every((unit, index) => {
+    const unitId = implementationUnitId(unit, index);
+    const status = String(completionLedger[unitId]?.status ?? "").toLowerCase();
+    return COMPLETE_UNIT_STATUSES.has(status);
+  });
+  const terminalRun = run.status === "completed" || run.status === "approval_pending" || run.status === "applied";
+  const allStepsDone = terminalRun && (implementationUnits.length === 0 || allUnitsDone);
 
   return (
     <div className="rounded-lg border border-line bg-surface p-3">
@@ -72,6 +110,52 @@ const PlanCard = ({ run }: { run: AgentRunState }) => {
             : "No plan was returned for this run."}
         </p>
       )}
+
+      {implementationUnits.length > 0 ? (
+        <div className="mt-3 border-t border-line pt-3">
+          <div className="mb-2 flex items-center gap-2 text-[9px] font-semibold uppercase tracking-wider text-faint">
+            <span>Implementation units</span>
+            {divideRun.maxImplementationIterations ? (
+              <span className="ml-auto font-mono font-normal normal-case text-muted">
+                iteration {divideRun.implementationIteration ?? 0}/{divideRun.maxImplementationIterations}
+              </span>
+            ) : null}
+          </div>
+
+          <ol className="space-y-2">
+            {implementationUnits.map((unit, index) => {
+              const unitId = implementationUnitId(unit, index);
+              const ledgerEntry = completionLedger[unitId];
+              const unitStatus = String(ledgerEntry?.status ?? "pending").toLowerCase();
+              const complete = COMPLETE_UNIT_STATUSES.has(unitStatus);
+              const failed = FAILED_UNIT_STATUSES.has(unitStatus);
+              const retries = typeof ledgerEntry?.patch_retries === "number" ? ledgerEntry.patch_retries : null;
+
+              return (
+                <li key={unitId} className="flex items-start gap-2 text-[10px] leading-4 text-muted">
+                  {complete ? (
+                    <Check size={11} className="mt-0.5 shrink-0 text-emerald-300" />
+                  ) : (
+                    <Circle size={9} className={`mt-1 shrink-0 ${failed ? "text-rose-300" : "text-accent-light"}`} />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="wrap-break-word text-ink-soft">{implementationUnitLabel(unit, index)}</p>
+                    <p className="font-mono text-[9px] text-faint">
+                      {unitStatus}
+                      {retries != null ? ` · patch retries ${retries}` : ""}
+                    </p>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+
+          <p className="mt-2 text-[9px] text-faint">
+            Mode: <span className="font-mono text-muted">{divideRun.taskMode ?? "standard"}</span>
+            {divideRun.subtaskWorkerCount ? <span> · workers {divideRun.subtaskWorkerCount}</span> : null}
+          </p>
+        </div>
+      ) : null}
 
       {run.selectedSkill ? (
         <p className="mt-3 border-t border-line pt-3 text-[10px] leading-5 text-faint">

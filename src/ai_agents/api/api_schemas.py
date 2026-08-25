@@ -52,9 +52,16 @@ class CodingAgentRunRequest(BaseModel):
     )
     memory_enabled: bool | None = None
     setup_memory: bool | None = None
+
+    # Divide-and-conquer implementation loop. ``max_iterations`` remains as a
+    # compatibility alias for older frontend/backend builds.
+    max_implementation_iterations: int | None = Field(default=None, ge=1, le=8)
     max_iterations: int | None = Field(default=3, ge=1, le=8)
 
     # Optional per-run overrides. Defaults come from the saved admin profile.
+    # ``subagent_count`` is retained as a compatibility alias while the UI and
+    # runtime migrate to the more accurate subtask-worker terminology.
+    subtask_worker_count: int | None = Field(default=None, ge=1, le=6)
     subagent_count: int | None = Field(default=None, ge=1, le=6)
     route_max_tokens: int | None = Field(default=None, ge=256, le=2_000)
     planner_max_tokens: int | None = Field(default=None, ge=512, le=6_000)
@@ -74,8 +81,23 @@ class CodingAgentRunResult(BaseModel):
     selected_skill: str | None = None
     selected_skills: list[str] = Field(default_factory=list)
     task_mode: Literal["simple", "standard", "parallel"] | None = None
+
+    # Legacy planning/context aliases retained for compatibility.
     subtasks: List[Dict[str, Any]] = Field(default_factory=list)
     context_worker_count: int = 0
+
+    # Divide-and-conquer execution state. These fields make implementation-unit
+    # progress deterministic and observable without forcing clients to inspect
+    # the untyped ``raw`` graph state.
+    implementation_units: List[Dict[str, Any]] = Field(default_factory=list)
+    completion_ledger: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    implementation_generation: int = 0
+    implementation_iteration: int = 0
+    max_implementation_iterations: int = 0
+    subtask_worker_count: int = 0
+    subtask_worker_results: List[Dict[str, Any]] = Field(default_factory=list)
+    runtime_settings: Dict[str, Any] = Field(default_factory=dict)
+
     route_confidence: float | None = None
     route_reason: str | None = None
 
@@ -89,7 +111,7 @@ class CodingAgentRunResult(BaseModel):
     validation_results: List[Dict[str, Any]] = Field(default_factory=list)
 
     approval_required: bool = False
-    approval_status: str = "not_required"
+    approval_status: Literal["not_required", "pending", "applied", "rejected"] = "not_required"
     blocking_validation_failed: bool = False
     advisory_validation_failed: bool = False
     applied_files: list[str] = Field(default_factory=list)
