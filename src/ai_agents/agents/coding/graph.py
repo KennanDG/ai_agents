@@ -5,15 +5,17 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.store.base import BaseStore
 from langgraph.types import RetryPolicy
 
+from ai_agents.agents.coding.implementation import (
+    assess_progress_node,
+    assign_subtask_workers,
+    gather_subtask_results_node,
+    reconcile_subtask_patches_node,
+    subtask_worker_node,
+)
 from ai_agents.agents.coding.memory import CodingAgentRuntimeContext
 from ai_agents.agents.coding.nodes import (
-    assess_progress_node,
-    assign_context_workers,
-    context_worker_node,
     custom_tools_node,
-    gather_context_node,
     gmail_access_node,
-    patch_node,
     plan_node,
     recall_memory_node,
     remember_run_node,
@@ -25,7 +27,6 @@ from ai_agents.agents.coding.nodes import (
 )
 from ai_agents.agents.coding.routing import (
     route_after_assess,
-    route_after_context,
     route_after_patch,
     route_after_plan,
     route_after_validate,
@@ -41,8 +42,9 @@ def build_coding_agent_graph(
 ):
     builder = StateGraph(CodingAgentState, context_schema=CodingAgentRuntimeContext)
 
-    # Avoid multiplying provider retries, parser retries, and graph retries. Only
-    # external memory/connectors receive a second graph-level attempt.
+    # Provider/parser retry behavior is controlled inside the LLM wrapper and inside
+    # each implementation worker. Graph-level retries are reserved for external
+    # persistence/connectors so retry counts remain deterministic.
     no_retry = RetryPolicy(max_attempts=1)
     transient_retry = RetryPolicy(
         max_attempts=2,
@@ -54,19 +56,31 @@ def build_coding_agent_graph(
     builder.add_node("route", route_node, retry_policy=no_retry)
     builder.add_node("recall_memory", recall_memory_node, retry_policy=transient_retry)
     builder.add_node("plan", plan_node, retry_policy=no_retry)
-    builder.add_node("repo_navigator", repo_navigator_node, retry_policy=no_retry)
-    builder.add_node("context_worker", context_worker_node, retry_policy=no_retry)
     builder.add_node("custom_tools", custom_tools_node, retry_policy=no_retry)
-    builder.add_node("gather_context", gather_context_node, retry_policy=no_retry)
-    builder.add_node("patch", patch_node, retry_policy=no_retry)
+    builder.add_node("repo_navigator", repo_navigator_node, retry_policy=no_retry)
+
+    # Divide-and-conquer implementation path. Workers may read/search/call an LLM
+    # but never mutate repository files. Only the deterministic reconciler writes.
+    builder.add_node("subtask_worker", subtask_worker_node, retry_policy=no_retry)
+    builder.add_node(
+        "gather_subtask_results",
+        gather_subtask_results_node,
+        retry_policy=no_retry,
+    )
+    builder.add_node(
+        "patch",
+        reconcile_subtask_patches_node,
+        retry_policy=no_retry,
+    )
     builder.add_node("validate", validate_node, retry_policy=no_retry)
     builder.add_node("assess_progress", assess_progress_node, retry_policy=no_retry)
+
     builder.add_node("report", report_node, retry_policy=no_retry)
     builder.add_node("remember_run", remember_run_node, retry_policy=transient_retry)
     builder.add_node("web_search", web_search_node, retry_policy=transient_retry)
     builder.add_node("gmail_access", gmail_access_node, retry_policy=transient_retry)
 
-    # Routing and memory recall are independent and run in the same super-step.
+    # Routing and memory recall are independent.
     builder.add_edge(START, "route")
     builder.add_edge(START, "recall_memory")
     builder.add_edge(["route", "recall_memory"], "plan")
@@ -91,25 +105,22 @@ def build_coding_agent_graph(
     builder.add_edge("gmail_access", "custom_tools")
     builder.add_edge("custom_tools", "repo_navigator")
 
-    # Dynamic fan-out: every context worker receives an isolated subtask and all
-    # outputs are reduced into context_worker_results before gather_context runs.
+    # Every navigation pass advances implementation_generation. Only the next
+    # dependency-ready batch is fanned out; additional units are scheduled by the
+    # deterministic completion assessor in later implementation iterations.
     builder.add_conditional_edges(
         "repo_navigator",
-        assign_context_workers,
-        ["context_worker"],
+        assign_subtask_workers,
+        ["subtask_worker"],
     )
-    builder.add_edge("context_worker", "gather_context")
+    builder.add_edge("subtask_worker", "gather_subtask_results")
+    builder.add_edge("gather_subtask_results", "patch")
 
-    builder.add_conditional_edges(
-        "gather_context",
-        route_after_context,
-        {"patch": "patch", "report": "report"},
-    )
     builder.add_conditional_edges(
         "patch",
         route_after_patch,
         {
-            "repo_navigator": "repo_navigator",
+            "assess_progress": "assess_progress",
             "validate": "validate",
             "report": "report",
         },
@@ -125,8 +136,12 @@ def build_coding_agent_graph(
     builder.add_conditional_edges(
         "assess_progress",
         route_after_assess,
-        {"repo_navigator": "repo_navigator", "report": "report"},
+        {
+            "repo_navigator": "repo_navigator",
+            "report": "report",
+        },
     )
+
     builder.add_edge("report", "remember_run")
     builder.add_edge("remember_run", END)
 

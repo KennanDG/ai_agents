@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
-from uuid import uuid4
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.store.base import BaseStore
@@ -18,7 +17,7 @@ from ai_agents.agents.coding.coding_agent_settings import (
     settings as default_settings,
 )
 from ai_agents.agents.coding.state import CodingAgentState
-from ai_agents.agents.coding.utils.text import bullets, truncate
+from ai_agents.agents.coding.utils.text import dedupe, truncate
 
 
 try:
@@ -319,26 +318,21 @@ def _runtime_context(runtime: Any) -> CodingAgentRuntimeContext | None:
 
 
 
-def _format_memory_item(item: Any) -> str:
-
+def _memory_value(item: Any) -> dict[str, Any]:
     value = getattr(item, "value", {}) or {}
+    return value if isinstance(value, dict) else {}
 
-    if not isinstance(value, dict):
-        return truncate(str(value), 1_000)
 
+def _format_memory_item(item: Any) -> str:
+    value = _memory_value(item)
     text = value.get("text") or value.get("summary") or value.get("request") or ""
     score = getattr(item, "score", None)
     score_text = f" relevance={score:.2f}" if isinstance(score, float) else ""
     created_at = value.get("created_at", "")
-    prefix = f"- Memory{score_text}"
-
+    prefix = f"- Durable outcome{score_text}"
     if created_at:
         prefix += f" ({created_at})"
     return f"{prefix}: {truncate(str(text), 1_000)}"
-
-
-
-
 
 
 def recall_coding_memories(
@@ -346,10 +340,13 @@ def recall_coding_memories(
     runtime: Any,
     cfg: CodingAgentSettings = default_settings,
 ) -> CodingAgentState:
-    """Search cross-thread coding memories relevant to the current request."""
+    """Search only durable successful outcomes relevant to the current request.
+
+    Semantic retrieval fails closed. An embedding/index problem must not silently
+    inject unrelated recent runs into the next plan.
+    """
 
     store = _runtime_store(runtime)
-
     if store is None:
         return {"long_term_memories": [], "memory_enabled": False}
 
@@ -357,81 +354,104 @@ def recall_coding_memories(
     query = state.get("user_request", "")
 
     try:
-        items = store.search(namespace, query=query, limit=cfg.memory_search_limit)
+        items = store.search(
+            namespace,
+            query=query,
+            limit=max(cfg.memory_search_limit * 2, cfg.memory_search_limit),
+        )
     except Exception as exc:
-        try:
-            items = store.search(namespace, limit=cfg.memory_search_limit)
-        except Exception as fallback_exc:
-            return {
-                "long_term_memories": [],
-                "memory_enabled": True,
-                "memory_namespace": "/".join(namespace),
-                "memory_errors": [
-                    *state.get("memory_errors", []),
-                    f"Memory search failed: {exc}; fallback search failed: {fallback_exc}",
-                ],
-            }
+        return {
+            "long_term_memories": [],
+            "memory_enabled": True,
+            "memory_namespace": "/".join(namespace),
+            "memory_errors": [
+                *state.get("memory_errors", []),
+                f"Semantic memory search failed closed: {exc}",
+            ],
+        }
+
+    durable_items = [
+        item
+        for item in items
+        if _memory_value(item).get("type") == "coding_agent_outcome"
+        and _memory_value(item).get("validation_passed", True) is not False
+    ][: cfg.memory_search_limit]
 
     return {
-        "long_term_memories": [_format_memory_item(item) for item in items],
+        "long_term_memories": [_format_memory_item(item) for item in durable_items],
         "memory_enabled": True,
         "memory_namespace": "/".join(namespace),
     }
-
-
-
-
 
 
 def _validation_summary(results: list[dict[str, Any]]) -> str:
     if not results:
         return "No validation commands were run."
 
-    lines = []
-
-    for result in results:
-        lines.append(
-            f"{result.get('command', 'unknown command')} -> exit code "
-            f"{result.get('returncode', 'unknown')}"
-        )
-
-    return "; ".join(lines)
+    return "; ".join(
+        f"{result.get('command', 'unknown command')} -> exit code "
+        f"{result.get('returncode', 'unknown')}"
+        for result in results
+    )
 
 
+def _successful_unit_ids(state: CodingAgentState) -> list[str]:
+    successful = {"proposed", "implemented", "completed"}
+    return [
+        str(unit_id)
+        for unit_id, entry in (state.get("completion_ledger") or {}).items()
+        if str(entry.get("status", "")) in successful
+    ]
 
+
+def _outcome_is_durable(state: CodingAgentState) -> bool:
+    ledger = state.get("completion_ledger") or {}
+    if not ledger:
+        return False
+
+    durable = {"implemented", "completed"}
+    # A dry-run "proposed" unit is useful for the current report but does not
+    # describe repository state, so never feed it into future long-term memory.
+    if any(str(entry.get("status", "")) not in durable for entry in ledger.values()):
+        return False
+
+    return not bool(state.get("blocking_validation_failed"))
 
 
 def _build_run_memory_text(state: CodingAgentState) -> str:
-
-    changed_files = [
-        item.get("path", "")
-        for item in state.get("file_changes", [])
-        if item.get("path")
-    ]
-
-    inspected = state.get("files_inspected", [])
-    errors = state.get("errors", [])[-5:]
+    changed_files = dedupe(
+        [
+            str(item.get("path", ""))
+            for item in state.get("file_changes", [])
+            if item.get("path")
+        ]
+    )
+    completed_units = _successful_unit_ids(state)
 
     parts = [
         f"Request: {state.get('user_request', '')}",
-        f"Selected skill: {state.get('selected_skill', 'none')}",
-        f"Final status: {state.get('status', 'unknown')}",
-        f"Files inspected: {', '.join(inspected) if inspected else 'none'}",
-        f"Files changed/proposed: {', '.join(changed_files) if changed_files else 'none'}",
+        (
+            "Completed implementation units: "
+            + (", ".join(completed_units) if completed_units else "none")
+        ),
+        (
+            "Files changed/proposed: "
+            + (", ".join(changed_files) if changed_files else "none")
+        ),
         f"Validation: {_validation_summary(state.get('validation_results', []))}",
     ]
 
-    patch_summary = state.get("patch_summary")
+    patch_summary = str(state.get("patch_summary", "")).strip()
     if patch_summary:
-        parts.append(f"Patch summary: {truncate(patch_summary, 1_500)}")
-
-    if errors:
-        parts.append("Errors: " + bullets(errors))
+        parts.append(f"Outcome summary: {truncate(patch_summary, 1_500)}")
 
     return "\n".join(parts)
 
 
-
+def _stable_task_memory_key(request: str) -> str:
+    normalized = " ".join(request.casefold().split())
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:20]
+    return f"task:{digest}"
 
 
 def remember_coding_run(
@@ -439,40 +459,65 @@ def remember_coding_run(
     runtime: Any,
     cfg: CodingAgentSettings = default_settings,
 ) -> CodingAgentState:
-    """Persist a compact cross-thread memory after the run report is produced."""
+    """Persist one compact durable outcome per normalized task."""
 
     store = _runtime_store(runtime)
-    
     if store is None:
         return {"memory_saved": False, "memory_enabled": False}
 
     namespace = memory_namespace(state, _runtime_context(runtime), cfg)
+
+    if not _outcome_is_durable(state):
+        return {
+            "memory_saved": False,
+            "memory_enabled": True,
+            "memory_namespace": "/".join(namespace),
+        }
+
     created_at = datetime.now(timezone.utc).isoformat()
-    text = _build_run_memory_text(state)
-    key = f"run:{created_at}:{uuid4().hex}"
+    request = state.get("user_request", "")
+    changed_files = dedupe(
+        [
+            str(item.get("path", ""))
+            for item in state.get("file_changes", [])
+            if item.get("path")
+        ]
+    )
+    completed_units = _successful_unit_ids(state)
+    validation_results = state.get("validation_results", [])
+    validation_passed = all(
+        int(result.get("returncode", 0) or 0) == 0
+        for result in validation_results
+    )
 
     value = {
-        "type": "coding_agent_run",
-        "text": text,
-        "summary": state.get("patch_summary", ""),
-        "request": state.get("user_request", ""),
-        "selected_skill": state.get("selected_skill"),
-        "status": state.get("status"),
-        "files_inspected": state.get("files_inspected", []),
-        "file_changes": state.get("file_changes", []),
-        "validation_results": state.get("validation_results", []),
+        "type": "coding_agent_outcome",
+        "text": _build_run_memory_text(state),
+        "summary": truncate(str(state.get("patch_summary", "")), 1_500),
+        "request": request,
+        "changed_files": changed_files,
+        "completed_units": completed_units,
+        "validation_passed": validation_passed,
         "created_at": created_at,
     }
+    key = _stable_task_memory_key(request)
 
     try:
-        put_kwargs = {"index": list(cfg.memory_index_fields)} if cfg.memory_semantic_enabled else {}
+        put_kwargs = (
+            {"index": list(cfg.memory_index_fields)}
+            if cfg.memory_semantic_enabled
+            else {}
+        )
         store.put(namespace, key, value, **put_kwargs)
     except Exception as exc:
         return {
             "memory_saved": False,
             "memory_enabled": True,
             "memory_namespace": "/".join(namespace),
-            "memory_errors": [*state.get("memory_errors", []), f"Memory write failed: {exc}"],
+            "memory_errors": [
+                *state.get("memory_errors", []),
+                f"Memory write failed: {exc}",
+            ],
         }
 
     return {
@@ -480,4 +525,3 @@ def remember_coding_run(
         "memory_enabled": True,
         "memory_namespace": "/".join(namespace),
     }
-

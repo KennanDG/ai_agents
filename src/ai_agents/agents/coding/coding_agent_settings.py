@@ -78,20 +78,64 @@ class CodingAgentSettings:
     context_chunk_overlap_chars: int = _env_int(
         "CODING_AGENT_CONTEXT_CHUNK_OVERLAP_CHARS", 1_500
     )
-    # Patch-context budgeting is adaptive. Most runs stay near the 120k baseline,
-    # while broad multi-file runs can expand up to the hard ceiling. Keeping the
-    # ceiling separate prevents a single large task from creating an unbounded prompt.
-    context_prompt_base_chars: int = _env_int(
-        "CODING_AGENT_CONTEXT_PROMPT_BASE_CHARS", 120_000
+    # LLM prompt budgets are expressed in tokens. Character limits above remain
+    # storage/read safeguards only. Each worker clamps this configured budget to the
+    # selected model slot's context window after reserving output and safety tokens.
+    context_prompt_base_tokens: int = _env_int(
+        "CODING_AGENT_CONTEXT_PROMPT_BASE_TOKENS", 48_000
     )
-    max_context_prompt_chars: int = _env_int(
-        "CODING_AGENT_MAX_CONTEXT_PROMPT_CHARS", 220_000
+    max_context_prompt_tokens: int = _env_int(
+        "CODING_AGENT_MAX_CONTEXT_PROMPT_TOKENS", 96_000
     )
-    context_prompt_reserve_chars: int = _env_int(
-        "CODING_AGENT_CONTEXT_PROMPT_RESERVE_CHARS", 32_000
+    context_prompt_reserve_tokens: int = _env_int(
+        "CODING_AGENT_CONTEXT_PROMPT_RESERVE_TOKENS", 10_000
     )
-    max_context_workers: int = _env_int("CODING_AGENT_MAX_CONTEXT_WORKERS", 4)
+    context_window_safety_tokens: int = _env_int(
+        "CODING_AGENT_CONTEXT_WINDOW_SAFETY_TOKENS", 6_000
+    )
+
+    # Context-window fallbacks are slot-specific because the coding and reasoning
+    # models may use different providers/models. Override these when the selected
+    # provider advertises a different window.
+    coding_model_context_window_tokens: int = _env_int(
+        "CODING_AGENT_CODING_CONTEXT_WINDOW_TOKENS", 131_072
+    )
+    reasoning_model_context_window_tokens: int = _env_int(
+        "CODING_AGENT_REASONING_CONTEXT_WINDOW_TOKENS", 131_072
+    )
+
+    coding_model_max_output_tokens: int = _env_int(
+        "CODING_AGENT_CODING_MAX_OUTPUT_TOKENS", 32_000
+    )
+    reasoning_model_max_output_tokens: int = _env_int(
+        "CODING_AGENT_REASONING_MAX_OUTPUT_TOKENS", 32_000
+    )
+
+    # Optional exact provider/model overrides, e.g.
+    # {"groq:openai/gpt-oss-120b": 131072, "deepseek:deepseek-v4-pro": 163840}
+    # This lets the desktop runtime stay model-aware without hardcoding a provider
+    # catalog that can become stale.
+    model_context_window_overrides_json: str = os.getenv(
+        "CODING_AGENT_MODEL_CONTEXT_WINDOW_OVERRIDES_JSON", "{}"
+    )
+    model_max_output_overrides_json: str = os.getenv(
+        "CODING_AGENT_MODEL_MAX_OUTPUT_OVERRIDES_JSON", "{}"
+    )
+
+    # Worker count controls concurrency, not total work decomposition. A plan may
+    # contain more implementation units than active workers; unfinished units are
+    # scheduled in later deterministic batches.
+    max_context_workers: int = _env_int("CODING_AGENT_MAX_CONTEXT_WORKERS", 3)
     max_worker_files: int = _env_int("CODING_AGENT_MAX_WORKER_FILES", 6)
+    max_implementation_units: int = _env_int(
+        "CODING_AGENT_MAX_IMPLEMENTATION_UNITS", 12
+    )
+    max_patch_retries_per_unit: int = _env_int(
+        "CODING_AGENT_MAX_PATCH_RETRIES_PER_UNIT", 2
+    )
+    max_implementation_iterations: int = _env_int(
+        "CODING_AGENT_MAX_IMPLEMENTATION_ITERATIONS", 6
+    )
     max_attached_files: int = _env_int("CODING_AGENT_MAX_ATTACHED_FILES", 20)
     max_attachment_storage_chars: int = _env_int(
         "CODING_AGENT_MAX_ATTACHMENT_STORAGE_CHARS", 1_000_000
@@ -101,7 +145,8 @@ class CodingAgentSettings:
     )
 
     # Latency controls. Deterministic routing/navigation remove unnecessary LLM
-    # calls; the reasoning model is reserved for the final patch and repair loops.
+    # calls; implementation workers use the fast coding model only for simple first
+    # attempts and otherwise use the reasoning model for isolated unit proposals.
     fast_path_enabled: bool = _env_bool("CODING_AGENT_FAST_PATH_ENABLED", True)
     llm_skill_routing_enabled: bool = _env_bool(
         "CODING_AGENT_LLM_SKILL_ROUTING_ENABLED", False
@@ -167,7 +212,7 @@ class CodingAgentSettings:
 
     memory_search_limit: int = _env_int(
         "CODING_AGENT_MEMORY_SEARCH_LIMIT",
-        5,
+        3,
     )
 
     # Semantic memory is fully local.

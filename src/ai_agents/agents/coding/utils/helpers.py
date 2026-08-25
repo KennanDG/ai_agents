@@ -1,5 +1,5 @@
 from pathlib import Path
-from ai_agents.agents.coding.utils.constants import PATCH_CONTEXT_MAX_CHARS
+from ai_agents.agents.coding.utils.constants import SUCCESSFUL_UNIT_STATUSES
 from ai_agents.agents.coding.utils.search import (
     derive_search_requests,
     filter_context_paths,
@@ -392,24 +392,13 @@ def _context_file_read_limit(
     explicit_repo_file_count: int,
     cfg: CodingAgentSettings,
 ) -> int:
-    """Allocate more context to files explicitly attached by the user."""
+    """Return the raw file-read ceiling.
 
-    if path not in explicit_repo_paths:
-        return cfg.max_file_chars
+    Prompt budgeting is token based in the implementation worker. This helper is
+    retained only for older callers that still ask for a character read limit.
+    """
 
-    # Keep room for the request, plan, errors, navigation notes, and supporting
-    # files. Divide the remaining budget across explicit repository files.
-    reserved_chars = min(20_000, PATCH_CONTEXT_MAX_CHARS // 5)
-    available_chars = max(
-        cfg.max_file_chars,
-        PATCH_CONTEXT_MAX_CHARS - reserved_chars,
-    )
-
-    return max(
-        cfg.max_file_chars,
-        available_chars // max(1, explicit_repo_file_count),
-    )
-
+    return cfg.max_file_chars
 
 
 
@@ -417,3 +406,27 @@ def _same_file_content(existing: str, requested: str) -> bool:
     """Return True when an attempted create is effectively already applied."""
     return existing == requested or existing.rstrip("\n") == requested.rstrip("\n")
 
+
+
+
+
+def _implementation_complete(state: CodingAgentState) -> bool:
+    """Return True only when every implementation unit reached a success state."""
+
+    ledger = state.get("completion_ledger", {})
+    if not ledger:
+        return False
+
+    return all(
+        str(item.get("status", "")) in SUCCESSFUL_UNIT_STATUSES
+        for item in ledger.values()
+    )
+
+
+def _unfinished_unit_ids(state: CodingAgentState) -> list[str]:
+    ledger = state.get("completion_ledger", {})
+    return [
+        unit_id
+        for unit_id, item in ledger.items()
+        if str(item.get("status", "")) not in SUCCESSFUL_UNIT_STATUSES
+    ]
