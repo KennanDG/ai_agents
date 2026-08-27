@@ -82,10 +82,10 @@ class CodingAgentSettings:
     # storage/read safeguards only. Each worker clamps this configured budget to the
     # selected model slot's context window after reserving output and safety tokens.
     context_prompt_base_tokens: int = _env_int(
-        "CODING_AGENT_CONTEXT_PROMPT_BASE_TOKENS", 48_000
+        "CODING_AGENT_CONTEXT_PROMPT_BASE_TOKENS", 16_000
     )
     max_context_prompt_tokens: int = _env_int(
-        "CODING_AGENT_MAX_CONTEXT_PROMPT_TOKENS", 96_000
+        "CODING_AGENT_MAX_CONTEXT_PROMPT_TOKENS", 32_000
     )
     context_prompt_reserve_tokens: int = _env_int(
         "CODING_AGENT_CONTEXT_PROMPT_RESERVE_TOKENS", 10_000
@@ -125,16 +125,20 @@ class CodingAgentSettings:
     # Worker count controls concurrency, not total work decomposition. A plan may
     # contain more implementation units than active workers; unfinished units are
     # scheduled in later deterministic batches.
+    # Dedicated implementation-worker concurrency. Keep the legacy context-worker
+    # setting for compatibility with older API payloads/checkpoints, but new code uses
+    # max_subtask_workers.
+    max_subtask_workers: int = _env_int("CODING_AGENT_MAX_SUBTASK_WORKERS", 3)
     max_context_workers: int = _env_int("CODING_AGENT_MAX_CONTEXT_WORKERS", 3)
-    max_worker_files: int = _env_int("CODING_AGENT_MAX_WORKER_FILES", 6)
+    max_worker_files: int = _env_int("CODING_AGENT_MAX_WORKER_FILES", 4)
     max_implementation_units: int = _env_int(
         "CODING_AGENT_MAX_IMPLEMENTATION_UNITS", 12
     )
     max_patch_retries_per_unit: int = _env_int(
-        "CODING_AGENT_MAX_PATCH_RETRIES_PER_UNIT", 2
+        "CODING_AGENT_MAX_PATCH_RETRIES_PER_UNIT", 1
     )
     max_implementation_iterations: int = _env_int(
-        "CODING_AGENT_MAX_IMPLEMENTATION_ITERATIONS", 6
+        "CODING_AGENT_MAX_IMPLEMENTATION_ITERATIONS", 2
     )
     max_attached_files: int = _env_int("CODING_AGENT_MAX_ATTACHED_FILES", 20)
     max_attachment_storage_chars: int = _env_int(
@@ -145,8 +149,9 @@ class CodingAgentSettings:
     )
 
     # Latency controls. Deterministic routing/navigation remove unnecessary LLM
-    # calls; implementation workers use the fast coding model only for simple first
-    # attempts and otherwise use the reasoning model for isolated unit proposals.
+    # calls. Implementation workers always use the coding model; the reasoning model
+    # is reserved for one conditional reconciliation/escalation pass when concurrent
+    # proposals conflict.
     fast_path_enabled: bool = _env_bool("CODING_AGENT_FAST_PATH_ENABLED", True)
     llm_skill_routing_enabled: bool = _env_bool(
         "CODING_AGENT_LLM_SKILL_ROUTING_ENABLED", False
@@ -174,7 +179,18 @@ class CodingAgentSettings:
     simple_patch_max_tokens: int = _env_int(
         "CODING_AGENT_SIMPLE_PATCH_MAX_TOKENS", 8_000
     )
+    # Legacy patch_max_tokens remains available for older callers. Worker patches use
+    # simple_patch_max_tokens regardless of task mode.
     patch_max_tokens: int = _env_int("CODING_AGENT_PATCH_MAX_TOKENS", 20_000)
+    reconciliation_max_tokens: int = _env_int(
+        "CODING_AGENT_RECONCILIATION_MAX_TOKENS", 10_000
+    )
+    reconciliation_context_max_tokens: int = _env_int(
+        "CODING_AGENT_RECONCILIATION_CONTEXT_MAX_TOKENS", 24_000
+    )
+    max_reasoning_reconciliations: int = _env_int(
+        "CODING_AGENT_MAX_REASONING_RECONCILIATIONS", 1
+    )
     progress_max_tokens: int = _env_int("CODING_AGENT_PROGRESS_MAX_TOKENS", 1_200)
 
     dry_run: bool = True

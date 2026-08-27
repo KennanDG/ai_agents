@@ -135,6 +135,12 @@ PLANNER_SYSTEM_PROMPT = dedent(
     - Use `depends_on` only for earlier unit ids when one unit truly requires another
       unit's reconciled repository changes. Avoid dependencies when work can proceed independently.
     - Keep tightly coupled edits in one unit so a worker can reason about them atomically.
+    - Do NOT create implementation units whose only purpose is inspection, discovery,
+      repository understanding, visual review, running tests, building, linting, or generic
+      integration validation. Navigation and the dedicated validation node already own those jobs.
+    - Give implementation units exclusive file ownership whenever candidate paths are known.
+      If two concerns are expected to edit the same file, combine them into one unit instead of
+      creating parallel workers that will fight over the same source file.
 
     # Approved custom tools:
     - A custom tool is callable only when its exact name appears in the explicit
@@ -285,6 +291,30 @@ PATCHER_SYSTEM_PROMPT = dedent(
 ).strip()
 
 
+RECONCILER_SYSTEM_PROMPT = dedent(
+    f"""
+    {BASE_CODING_AGENT_PROMPT}
+
+    {SECURITY_GUARDRAILS_PROMPT}
+
+    {CLEAN_CODE_PROMPT}
+
+    You are the single reasoning reconciler for a coding-agent generation.
+
+    # Your job:
+    - Reconcile only the explicitly supplied conflicting implementation-unit proposals.
+    - Produce one coherent patch that satisfies those units without duplicating or undoing work.
+    - Use the current repository text as authoritative.
+    - Prefer targeted exact edits and preserve unrelated behavior.
+    - Do not inspect the broader repository, plan new work, or rewrite unrelated files.
+    - Return only unit ids that are actually covered by the merged patch.
+    - If the supplied evidence is insufficient, return no edits and explain the blocker.
+    - This reasoning pass is intentionally scarce; resolve conflicts decisively when the
+      provided exact source and proposals are sufficient.
+    """
+).strip()
+
+
 REPORTER_SYSTEM_PROMPT = dedent(
     f"""
     {BASE_CODING_AGENT_PROMPT}
@@ -353,6 +383,10 @@ def build_planner_user_prompt(request: str) -> str:
         - Each unit needs a stable id, narrow objective, concrete acceptance criteria,
           focused search requests/candidate paths, and optional validation commands.
         - Use `depends_on` only for earlier unit ids whose reconciled changes are required.
+        - Do not create inspect-only or validate-only implementation units. Repository
+          inspection happens before workers and final validation happens after reconciliation.
+        - When multiple requested changes target the same candidate file, merge them into one
+          implementation unit so each parallel worker owns a disjoint file set.
         - Prefer structured `search_requests` over legacy `search_queries`.
         - Put code identifiers, symbols, and concise domain words in `terms`.
         - Put known folders or path fragments in `path_includes`.
@@ -531,6 +565,41 @@ def build_patcher_user_prompt(
           in `blocking_reason`.
         - Never assume another worker's proposal has been applied. The deterministic
           reconciler serializes proposals after workers finish.
+        """
+    ).strip()
+
+
+def build_reconciler_user_prompt(
+    *,
+    request: str,
+    units: str,
+    proposals: str,
+    current_source: str,
+) -> str:
+    return dedent(
+        f"""
+        Reconcile the following overlapping coding-worker proposals.
+
+        # User request:
+        {request}
+
+        # Conflicting implementation units:
+        {units}
+
+        # Worker proposals:
+        {proposals}
+
+        # Current exact repository source for conflicted files:
+        {current_source}
+
+        # Output guidance:
+        - Return JSON matching ReconciliationDecision.
+        - `unit_ids` must contain only supplied conflicting unit ids.
+        - Prefer one merged edit per file when practical.
+        - For replace/insert operations, copy exact anchors from CURRENT repository source.
+        - Do not touch files outside the supplied conflict set.
+        - If safe reconciliation is not possible from this evidence, return edits=[] and
+          populate blocking_reason.
         """
     ).strip()
 

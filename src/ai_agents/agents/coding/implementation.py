@@ -8,7 +8,11 @@ from typing import Any, Iterable
 
 from langgraph.types import Send
 
-from ai_agents.agents.coding.coding_agent_schemas import FileEdit, PatchDecision
+from ai_agents.agents.coding.coding_agent_schemas import (
+    FileEdit,
+    PatchDecision,
+    ReconciliationDecision,
+)
 from ai_agents.agents.coding.coding_agent_settings import (
     CodingAgentSettings,
     settings as default_settings,
@@ -17,7 +21,9 @@ from ai_agents.agents.coding.llm import invoke_parsed_decision
 from ai_agents.agents.coding.model_factory import build_chat_model
 from ai_agents.agents.coding.prompts import (
     PATCHER_SYSTEM_PROMPT,
+    RECONCILER_SYSTEM_PROMPT,
     build_patcher_user_prompt,
+    build_reconciler_user_prompt,
 )
 from ai_agents.agents.coding.runtime import allow_write as resolve_allow_write
 from ai_agents.agents.coding.runtime import repo_root as resolve_repo_root
@@ -57,6 +63,7 @@ from ai_agents.config.settings import settings as app_settings
 _TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
 
 _RUNTIME_SETTING_FIELDS = {
+    "max_subtask_workers",
     "max_context_workers",
     "route_max_tokens",
     "planner_max_tokens",
@@ -75,6 +82,9 @@ _RUNTIME_SETTING_FIELDS = {
     "reasoning_model_context_window_tokens",
     "coding_model_max_output_tokens",
     "reasoning_model_max_output_tokens",
+    "reconciliation_max_tokens",
+    "reconciliation_context_max_tokens",
+    "max_reasoning_reconciliations",
 }
 
 
@@ -134,6 +144,15 @@ def _eligible_units(state: CodingAgentState) -> list[dict[str, Any]]:
         if _dependencies_satisfied(unit, ledger):
             eligible.append(unit)
 
+    # Schedule never-attempted work before repairs so worker concurrency does not
+    # consume the repair-round budget merely because there are more units than slots.
+    eligible.sort(
+        key=lambda item: (
+            0
+            if str((ledger.get(str(item.get("id", ""))) or {}).get("status", "pending")) == "pending"
+            else 1
+        )
+    )
     return eligible
 
 
@@ -141,11 +160,11 @@ def assign_subtask_workers(state: CodingAgentState) -> list[Send]:
     """Schedule the next bounded batch of implementation-unit workers.
 
     Total implementation units are independent from concurrency. Only dependency-ready
-    pending/retryable units are dispatched, up to ``max_context_workers``.
+    pending/retryable units are dispatched, up to ``max_subtask_workers``.
     """
 
     cfg = _settings_for_state(state)
-    units = _eligible_units(state)[: max(1, cfg.max_context_workers)]
+    units = _eligible_units(state)[: max(1, cfg.max_subtask_workers)]
     nav_paths = [
         str(item.get("path", "")).strip()
         for item in state.get("repo_navigation_files", [])
@@ -153,12 +172,20 @@ def assign_subtask_workers(state: CodingAgentState) -> list[Send]:
     ]
 
     sends: list[Send] = []
-    for index, unit in enumerate(units):
-        assigned_nav = [
-            path
-            for path_index, path in enumerate(nav_paths)
-            if path_index % max(1, len(units)) == index
-        ]
+    for unit in units:
+        owned_paths = {
+            str(path).strip()
+            for path in unit.get("candidate_paths", [])
+            if str(path).strip()
+        }
+        # Do not round-robin unrelated navigation files into worker prompts. A worker
+        # gets its owned candidate files; navigator hints are fallback context only when
+        # the planner could not identify any candidate path.
+        assigned_nav = (
+            [path for path in nav_paths if path in owned_paths]
+            if owned_paths
+            else nav_paths[: max(1, cfg.max_worker_files)]
+        )
         payload = {
             "repo_root": state.get("repo_root", ""),
             "original_repo_root": state.get("original_repo_root", ""),
@@ -476,21 +503,28 @@ def _canonicalize_context_requests(
 
 def _model_profile(
     *,
-    use_fast_model: bool,
+    role: str,
     cfg: CodingAgentSettings,
 ):
-    if use_fast_model:
+    if role == "coding":
         provider = app_settings.coding_provider
         model_name = app_settings.coding_model
         requested_output_tokens = cfg.simple_patch_max_tokens
         fallback_window = cfg.coding_model_context_window_tokens
         fallback_output = cfg.coding_model_max_output_tokens
-    else:
+        configured_input = cfg.max_context_prompt_tokens
+    elif role == "reasoning":
         provider = app_settings.reasoning_provider
         model_name = app_settings.reasoning_model
-        requested_output_tokens = cfg.patch_max_tokens
+        requested_output_tokens = cfg.reconciliation_max_tokens
         fallback_window = cfg.reasoning_model_context_window_tokens
         fallback_output = cfg.reasoning_model_max_output_tokens
+        configured_input = min(
+            cfg.max_context_prompt_tokens,
+            cfg.reconciliation_context_max_tokens,
+        )
+    else:
+        raise ValueError(f"Unknown model role: {role}")
 
     window = configured_context_window(
         provider=provider,
@@ -511,7 +545,7 @@ def _model_profile(
         model_name=model_name,
         context_window_tokens=window,
         requested_output_tokens=output_tokens,
-        configured_max_input_tokens=cfg.max_context_prompt_tokens,
+        configured_max_input_tokens=configured_input,
         reserve_tokens=cfg.context_prompt_reserve_tokens,
         safety_tokens=cfg.context_window_safety_tokens,
     )
@@ -552,12 +586,14 @@ def subtask_worker_node(
         *[str(path) for path in unit.get("candidate_paths", [])],
     ]
 
-    if search_requests:
+    # Candidate files are authoritative and cheap. Only broaden into repository
+    # search when planning/navigation did not identify a concrete file for this unit.
+    if search_requests and not [path for path in candidates if str(path).strip()]:
         try:
             results = search_repository(
                 repo_root,
                 search_requests,
-                max_results=max(12, cfg.max_worker_files * 4),
+                max_results=max(8, cfg.max_worker_files * 3),
             )
             candidates.extend(
                 paths_from_ranked_results([item.to_dict() for item in results])
@@ -622,8 +658,10 @@ def subtask_worker_node(
         )
         priority_blocks = [unit_block]
 
-        validation_feedback = format_failed_validation_results(
-            state.get("validation_results", [])
+        validation_feedback = (
+            format_failed_validation_results(state.get("validation_results", []))
+            if bool(state.get("blocking_validation_failed"))
+            else ""
         )
         if validation_feedback:
             priority_blocks.append(
@@ -645,12 +683,9 @@ def subtask_worker_node(
         ]
         upload_blocks = _format_upload_blocks(state, terms=terms, cfg=cfg)
 
-        use_fast_model = (
-            cfg.fast_path_enabled
-            and state.get("task_mode") == "simple"
-            and model_attempt == 1
-        )
-        profile = _model_profile(use_fast_model=use_fast_model, cfg=cfg)
+        # Every implementation worker uses the coding slot. The reasoning slot is
+        # reserved for one conditional reconciliation pass after fan-in.
+        profile = _model_profile(role="coding", cfg=cfg)
 
         all_blocks = [
             *priority_blocks,
@@ -1090,6 +1125,187 @@ def _upsert_diff(
     diffs.append(replacement)
 
 
+def _proposal_paths(
+    *,
+    repo_root: Path,
+    repo_files: list[str],
+    result: dict[str, Any],
+) -> list[str]:
+    edits = [item for item in result.get("edits", []) if isinstance(item, dict)]
+    if not edits:
+        return []
+    return _intended_edit_paths(
+        repo_root=repo_root,
+        repo_files=repo_files,
+        raw_edits=edits,
+    )
+
+
+def _overlapping_proposal_ids(
+    *,
+    repo_root: Path,
+    repo_files: list[str],
+    results_by_id: dict[str, dict[str, Any]],
+) -> tuple[list[str], list[str]]:
+    owners: dict[str, list[str]] = {}
+    for unit_id, result in results_by_id.items():
+        if str(result.get("status", "")) != "proposed":
+            continue
+        try:
+            paths = _proposal_paths(
+                repo_root=repo_root,
+                repo_files=repo_files,
+                result=result,
+            )
+        except Exception:
+            continue
+        for path in paths:
+            owners.setdefault(path, []).append(unit_id)
+
+    conflict_paths = sorted(path for path, unit_ids in owners.items() if len(unit_ids) > 1)
+    conflict_ids = dedupe(
+        unit_id
+        for path in conflict_paths
+        for unit_id in owners.get(path, [])
+    )
+    return conflict_ids, conflict_paths
+
+
+def _reasoning_reconcile_conflicts(
+    *,
+    state: CodingAgentState,
+    cfg: CodingAgentSettings,
+    repo_root: Path,
+    repo_files: list[str],
+    results_by_id: dict[str, dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], int, str]:
+    conflict_ids, conflict_paths = _overlapping_proposal_ids(
+        repo_root=repo_root,
+        repo_files=repo_files,
+        results_by_id=results_by_id,
+    )
+    used = int(state.get("reasoning_reconciliations_used", 0))
+    if (
+        len(conflict_ids) < 2
+        or used >= max(0, cfg.max_reasoning_reconciliations)
+        or not conflict_paths
+    ):
+        return results_by_id, used, ""
+
+    units_by_id = _unit_by_id(state)
+    source_blocks: list[str] = []
+    for path in conflict_paths:
+        try:
+            text = read_file(repo_root, path, max_chars=cfg.max_file_chars + 1)
+        except Exception:
+            continue
+        if len(text) > cfg.max_file_chars:
+            continue
+        if len(text) <= cfg.max_full_file_chars:
+            source_blocks.append(f"File: {path}\nContent-Status: complete\n```\n{text}\n```")
+        else:
+            # For large files, center chunks around exact old anchors from the worker proposals.
+            anchors: list[str] = []
+            for unit_id in conflict_ids:
+                for edit in results_by_id[unit_id].get("edits", []):
+                    if str(edit.get("path", "")).strip().replace("\\", "/") != path:
+                        continue
+                    old = str(edit.get("old", ""))
+                    if old:
+                        anchors.append(old[:120])
+            windows = _char_windows(
+                text,
+                terms=anchors or [Path(path).stem],
+                chunk_chars=cfg.context_chunk_chars,
+                overlap_chars=cfg.context_chunk_overlap_chars,
+                max_windows=4,
+            )
+            chunks = "\n\n".join(text[start:end] for start, end in windows)
+            source_blocks.append(
+                f"File: {path}\nContent-Status: selected-conflict-chunks\n```\n{chunks}\n```"
+            )
+
+    proposal_blocks = [
+        (
+            f"Unit {unit_id}: {results_by_id[unit_id].get('objective', '')}\n"
+            f"Summary: {results_by_id[unit_id].get('summary', '')}\n"
+            f"Edits: {results_by_id[unit_id].get('edits', [])}"
+        )
+        for unit_id in conflict_ids
+    ]
+    unit_blocks = [
+        (
+            f"{unit_id}: {units_by_id.get(unit_id, {}).get('objective', '')}\n"
+            f"Acceptance: {units_by_id.get(unit_id, {}).get('acceptance_criteria', [])}"
+        )
+        for unit_id in conflict_ids
+    ]
+
+    profile = _model_profile(role="reasoning", cfg=cfg)
+    included_source, _, _ = fit_blocks_to_token_budget(
+        source_blocks,
+        max_tokens=max(1, profile.max_input_tokens // 2),
+    )
+    prompt = build_reconciler_user_prompt(
+        request=state.get("user_request", ""),
+        units="\n\n".join(unit_blocks),
+        proposals="\n\n".join(proposal_blocks),
+        current_source="\n\n".join(included_source),
+    )
+
+    try:
+        decision: ReconciliationDecision = invoke_parsed_decision(
+            model=_worker_model(profile, cache_namespace="reasoning-reconciler"),
+            schema=ReconciliationDecision,
+            node_name="reasoning_reconciler",
+            state={**state, "reconciliation_unit_ids": conflict_ids},
+            system_prompt=RECONCILER_SYSTEM_PROMPT,
+            user_prompt=prompt,
+            max_attempts=1,
+        )
+    except Exception as exc:
+        return results_by_id, used + 1, f"Reasoning reconciliation failed: {exc}"
+
+    requested_covered = {unit_id for unit_id in decision.unit_ids if unit_id in conflict_ids}
+    covered = [
+        str(unit.get("id", ""))
+        for unit in state.get("implementation_units", [])
+        if str(unit.get("id", "")) in requested_covered
+    ]
+    if not decision.edits or len(covered) < 2:
+        reason = decision.blocking_reason or "Reasoning reconciler returned no merged patch."
+        return results_by_id, used + 1, reason
+
+    primary_id = covered[0]
+    merged_results = dict(results_by_id)
+    merged_results[primary_id] = {
+        **merged_results[primary_id],
+        "status": "proposed",
+        "summary": decision.summary or "Reasoning reconciler merged overlapping proposals.",
+        "edits": [item.model_dump() for item in decision.edits],
+        "validation_commands": dedupe(
+            [
+                *merged_results[primary_id].get("validation_commands", []),
+                *decision.validation_commands,
+            ]
+        ),
+        "reconciled_unit_ids": covered,
+        "reconciliation_model": profile.model_name,
+        "reconciliation_provider": profile.provider,
+    }
+    for unit_id in covered[1:]:
+        merged_results[unit_id] = {
+            **merged_results[unit_id],
+            "status": "reconciled_pending",
+            "reconciliation_owner": primary_id,
+            "summary": f"Pending merged reconciliation owned by {primary_id}.",
+            "edits": [],
+            "validation_commands": [],
+        }
+
+    return merged_results, used + 1, decision.summary
+
+
 def reconcile_subtask_patches_node(
     state: CodingAgentState,
     cfg: CodingAgentSettings = default_settings,
@@ -1117,6 +1333,16 @@ def reconcile_subtask_patches_node(
     repo_files = filter_context_paths(list_files(repo_root, ".", max_depth=12))
     summary_lines: list[str] = []
 
+    results_by_id, reconciliations_used, reconciliation_note = _reasoning_reconcile_conflicts(
+        state=state,
+        cfg=cfg,
+        repo_root=repo_root,
+        repo_files=repo_files,
+        results_by_id=results_by_id,
+    )
+    if reconciliation_note:
+        summary_lines.append(f"- reasoning reconciliation: {reconciliation_note}")
+
     for unit in state.get("implementation_units", []):
         unit_id = str(unit.get("id", "")).strip()
         result = results_by_id.get(unit_id)
@@ -1143,8 +1369,29 @@ def reconcile_subtask_patches_node(
             entry["last_context_budget_tokens"] = result.get(
                 "context_budget_tokens", 0
             )
+        if result.get("reconciliation_model"):
+            entry["last_reconciliation_model"] = result.get("reconciliation_model")
+            entry["last_reconciliation_provider"] = result.get("reconciliation_provider")
 
         result_status = str(result.get("status", "retryable"))
+        if result_status == "reconciled_pending":
+            owner_id = str(result.get("reconciliation_owner", "")).strip()
+            owner_entry = dict(ledger.get(owner_id) or {})
+            owner_status = str(owner_entry.get("status", "retryable"))
+            if owner_status in SUCCESSFUL_UNIT_STATUSES:
+                entry["status"] = owner_status
+                entry["last_error"] = ""
+                entry["summary"] = str(result.get("summary", ""))
+            else:
+                entry["status"] = "retryable"
+                entry["last_error"] = (
+                    f"Reasoning reconciliation owner {owner_id} did not apply successfully."
+                )
+            ledger[unit_id] = entry
+            summary_lines.append(
+                f"- {unit_id}: {entry['status']} via reasoning reconciliation owner {owner_id}."
+            )
+            continue
         if result_status == "completed":
             entry["status"] = "completed"
             entry["last_error"] = ""
@@ -1314,6 +1561,7 @@ def reconcile_subtask_patches_node(
             + ("\n".join(summary_lines) if summary_lines else "No worker proposals were available.")
         ),
         "errors": dedupe(errors),
+        "reasoning_reconciliations_used": reconciliations_used,
         "continue_loop": not _implementation_complete(
             {**state, "completion_ledger": ledger}
         ),
@@ -1337,7 +1585,7 @@ def assess_progress_node(
     state: CodingAgentState,
     cfg: CodingAgentSettings = default_settings,
 ) -> CodingAgentState:
-    """Advance implementation batches using the deterministic completion ledger."""
+    """Advance fresh batches freely while tightly bounding true repair rounds."""
 
     cfg = _settings_for_state(state, cfg)
     ledger = deepcopy(state.get("completion_ledger") or {})
@@ -1352,12 +1600,10 @@ def assess_progress_node(
         ),
     )
     loop_notes = list(state.get("loop_notes", []))
-    errors = list(state.get("errors", []))
     units = _unit_by_id(state)
 
-    # Global blocking validation turns successful units that actually changed files
-    # back into repair work. Their successful prior edits stay in the sandbox, so the
-    # worker sees the exact current state rather than regenerating unrelated units.
+    # Only genuine code-level blocking validation reaches this node. Infrastructure
+    # failures are downgraded to advisory by validate_node and therefore never reopen code.
     if bool(state.get("blocking_validation_failed")):
         changed_unit_ids = {
             str(item.get("implementation_unit", "")).strip()
@@ -1370,13 +1616,6 @@ def assess_progress_node(
             if str(entry.get("status", "")) in SUCCESSFUL_UNIT_STATUSES
             and (unit_id in changed_unit_ids or not changed_unit_ids)
         ]
-        if not reopen:
-            reopen = [
-                unit_id
-                for unit_id, entry in ledger.items()
-                if str(entry.get("status", "")) in SUCCESSFUL_UNIT_STATUSES
-            ]
-
         validation_feedback = format_failed_validation_results(
             state.get("validation_results", [])
         )
@@ -1384,13 +1623,11 @@ def assess_progress_node(
             entry = dict(ledger[unit_id])
             entry["status"] = "retryable"
             entry["last_error"] = (
-                "Blocking validation failed after reconciliation. "
+                "Blocking code validation failed after reconciliation. "
                 + validation_feedback[:2_000]
             )
             ledger[unit_id] = entry
 
-    # A failed dependency deterministically blocks downstream work instead of
-    # leaving pending units forever.
     for unit_id, unit in units.items():
         entry = dict(ledger.get(unit_id) or {})
         if str(entry.get("status", "pending")) not in RETRYABLE_UNIT_STATUSES:
@@ -1415,80 +1652,91 @@ def assess_progress_node(
         if str(entry.get("status", "pending")) not in SUCCESSFUL_UNIT_STATUSES
     ]
 
-    if iteration >= max_iterations:
-        for unit_id in unfinished:
-            entry = dict(ledger.get(unit_id) or {})
-            if str(entry.get("status", "pending")) in RETRYABLE_UNIT_STATUSES:
-                entry["status"] = "failed"
-                entry["last_error"] = (
-                    entry.get("last_error")
-                    or f"Implementation iteration limit reached ({iteration}/{max_iterations})."
-                )
-                ledger[unit_id] = entry
+    pending_ready = [
+        unit_id
+        for unit_id, unit in units.items()
+        if str((ledger.get(unit_id) or {}).get("status", "pending")) == "pending"
+        and _dependencies_satisfied(unit, ledger)
+    ]
+    retry_ready = [
+        unit_id
+        for unit_id, unit in units.items()
+        if str((ledger.get(unit_id) or {}).get("status", "pending")) == "retryable"
+        and _dependencies_satisfied(unit, ledger)
+    ]
+
+    # More units than worker slots simply require another generation; this is not a retry.
+    if pending_ready:
+        focus = "Schedule fresh dependency-ready implementation units: " + ", ".join(pending_ready)
         return {
             "completion_ledger": ledger,
             "implementation_iteration": iteration,
-            "continue_loop": False,
-            "remaining_tasks": unfinished,
-            "progress_reason": (
-                f"Implementation iteration limit reached at "
-                f"{iteration}/{max_iterations}."
-            ),
-            "loop_notes": [
-                *loop_notes,
-                f"Iteration {iteration}: deterministic implementation limit reached.",
-            ][-8:],
-            "status": "loop_limit_reached",
-        }
-
-    eligible = []
-    for unit_id, unit in units.items():
-        status = str((ledger.get(unit_id) or {}).get("status", "pending"))
-        if status in RETRYABLE_UNIT_STATUSES and _dependencies_satisfied(unit, ledger):
-            eligible.append(unit_id)
-
-    if not eligible:
-        # Nothing can make forward progress: remaining items are blocked by a
-        # terminal dependency or the ledger is inconsistent.
-        for unit_id in unfinished:
-            entry = dict(ledger.get(unit_id) or {})
-            if str(entry.get("status", "pending")) in RETRYABLE_UNIT_STATUSES:
-                entry["status"] = "blocked"
-                entry["last_error"] = (
-                    entry.get("last_error")
-                    or "No dependency-ready implementation path remains."
-                )
-                ledger[unit_id] = entry
-        return {
-            "completion_ledger": ledger,
-            "continue_loop": False,
-            "remaining_tasks": unfinished,
-            "progress_reason": "No dependency-ready implementation units remain.",
+            "continue_loop": True,
+            "remaining_tasks": pending_ready,
+            "progress_reason": focus,
+            "loop_context_focus": focus,
+            "loop_notes": [*loop_notes, focus][-8:],
+            "search_results": [],
+            "repo_navigation_summary": "",
+            "repo_navigation_files": [],
+            "repo_navigation_missing_context": [],
+            "blocking_validation_failed": False,
             "status": "assessed",
         }
 
-    next_iteration = iteration + 1
-    focus = (
-        f"Implementation iteration {next_iteration}/{max_iterations}. "
-        "Work only on dependency-ready unfinished units: "
-        + ", ".join(eligible)
-    )
+    if retry_ready:
+        if iteration >= max_iterations:
+            for unit_id in retry_ready:
+                entry = dict(ledger.get(unit_id) or {})
+                entry["status"] = "failed"
+                entry["last_error"] = (
+                    entry.get("last_error")
+                    or f"Repair-round limit reached ({iteration}/{max_iterations})."
+                )
+                ledger[unit_id] = entry
+            return {
+                "completion_ledger": ledger,
+                "implementation_iteration": iteration,
+                "continue_loop": False,
+                "remaining_tasks": retry_ready,
+                "progress_reason": f"Repair-round limit reached at {iteration}/{max_iterations}.",
+                "loop_notes": [*loop_notes, "Deterministic repair limit reached."][-8:],
+                "status": "loop_limit_reached",
+            }
+
+        next_iteration = iteration + 1
+        focus = (
+            f"Repair round {next_iteration}/{max_iterations}. Work only on: "
+            + ", ".join(retry_ready)
+        )
+        return {
+            "completion_ledger": ledger,
+            "implementation_iteration": next_iteration,
+            "continue_loop": True,
+            "remaining_tasks": retry_ready,
+            "progress_reason": focus,
+            "loop_context_focus": focus,
+            "loop_notes": [*loop_notes, focus][-8:],
+            "search_results": [],
+            "repo_navigation_summary": "",
+            "repo_navigation_files": [],
+            "repo_navigation_missing_context": [],
+            "blocking_validation_failed": False,
+            "status": "assessed",
+        }
+
+    for unit_id in unfinished:
+        entry = dict(ledger.get(unit_id) or {})
+        if str(entry.get("status", "pending")) in RETRYABLE_UNIT_STATUSES:
+            entry["status"] = "blocked"
+            entry["last_error"] = entry.get("last_error") or "No dependency-ready implementation path remains."
+            ledger[unit_id] = entry
+
     return {
         "completion_ledger": ledger,
-        "implementation_iteration": next_iteration,
-        "continue_loop": True,
-        "remaining_tasks": eligible,
-        "progress_reason": focus,
-        "loop_context_focus": focus,
-        "loop_notes": [
-            *loop_notes,
-            f"Iteration {iteration}: unfinished units -> {', '.join(eligible)}",
-        ][-8:],
-        # Force fresh deterministic search/navigation against the current sandbox.
-        "search_results": [],
-        "repo_navigation_summary": "",
-        "repo_navigation_files": [],
-        "repo_navigation_missing_context": [],
-        "blocking_validation_failed": False,
+        "continue_loop": False,
+        "remaining_tasks": unfinished,
+        "progress_reason": "No dependency-ready implementation units remain.",
         "status": "assessed",
     }
+

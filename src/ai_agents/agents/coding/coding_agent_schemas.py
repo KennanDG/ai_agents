@@ -310,6 +310,25 @@ class PatchDecision(BaseModel):
     )
 
 
+class ReconciliationDecision(BaseModel):
+    """One bounded reasoning pass used only to merge conflicting worker proposals."""
+
+    summary: str = ""
+    unit_ids: list[str] = Field(
+        default_factory=list,
+        description="Implementation unit ids covered by the reconciled patch.",
+    )
+    edits: list[FileEdit] = Field(
+        default_factory=list,
+        description="Merged edits that satisfy the covered implementation units.",
+    )
+    validation_commands: list[str] = Field(default_factory=list)
+    blocking_reason: str = Field(
+        default="",
+        description="Why the conflicting proposals could not be safely reconciled.",
+    )
+
+
 class ReportDecision(BaseModel):
     report: str
 

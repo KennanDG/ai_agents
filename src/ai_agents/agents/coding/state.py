@@ -62,6 +62,7 @@ class CodingAgentState(TypedDict, total=False):
     max_implementation_iterations: int
     subtask_worker_results: Annotated[list[dict[str, Any]], operator.add]
     completion_ledger: dict[str, dict[str, Any]]
+    reasoning_reconciliations_used: int
 
     # Legacy loop/context fields remain in state so older checkpoints and API
     # payloads can still deserialize during the architecture migration.

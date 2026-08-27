@@ -72,6 +72,7 @@ from ai_agents.agents.coding.utils.helpers import(
 
 
 _RUNTIME_SETTING_FIELDS = {
+    "max_subtask_workers",
     "max_context_workers",
     "route_max_tokens",
     "planner_max_tokens",
@@ -90,6 +91,9 @@ _RUNTIME_SETTING_FIELDS = {
     "reasoning_model_context_window_tokens",
     "coding_model_max_output_tokens",
     "reasoning_model_max_output_tokens",
+    "reconciliation_max_tokens",
+    "reconciliation_context_max_tokens",
+    "max_reasoning_reconciliations",
 }
 
 
@@ -655,6 +659,74 @@ def _fallback_implementation_units(
     ]
 
 
+def _is_non_implementation_unit(unit: dict[str, Any]) -> bool:
+    """Filter planner work that belongs to navigation or final validation instead.
+
+    Be conservative here: a product feature can legitimately be called "validate input".
+    We only remove clearly meta-level inspection/integration-validation units.
+    """
+
+    unit_id = str(unit.get("id", "")).strip().lower().replace("-", "_")
+    objective = str(unit.get("objective", "")).strip().lower()
+
+    if unit_id.startswith(("inspect_", "inspection_", "discover_", "understand_")):
+        return True
+    if objective.startswith(("inspect and understand ", "inspect the current ", "discover the current ")):
+        return True
+
+    validation_meta_markers = (
+        "integration", "all changes", "work together", "no regressions", "build",
+        "typecheck", "type-check", "run tests", "visual test", "responsive on",
+    )
+    looks_like_validation_unit = (
+        unit_id.startswith(("validate_", "validation_", "verify_integration"))
+        or objective.startswith(("validate integration", "validate that all", "verify integration"))
+    )
+    return looks_like_validation_unit and any(
+        marker in objective or marker in unit_id
+        for marker in validation_meta_markers
+    )
+
+
+def _merge_unit_into(target: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(target)
+    objectives = [
+        str(value).strip()
+        for value in (target.get("objective", ""), incoming.get("objective", ""))
+        if str(value).strip()
+    ]
+    merged["objective"] = " / ".join(dict.fromkeys(objectives))
+    merged["acceptance_criteria"] = dedupe(
+        [
+            *[str(value) for value in target.get("acceptance_criteria", [])],
+            *[str(value) for value in incoming.get("acceptance_criteria", [])],
+        ]
+    )[:8]
+    merged["search_requests"] = [
+        *list(target.get("search_requests") or []),
+        *list(incoming.get("search_requests") or []),
+    ]
+    merged["candidate_paths"] = dedupe(
+        [
+            *[str(path) for path in target.get("candidate_paths", [])],
+            *[str(path) for path in incoming.get("candidate_paths", [])],
+        ]
+    )
+    merged["depends_on"] = dedupe(
+        [
+            *[str(dep) for dep in target.get("depends_on", [])],
+            *[str(dep) for dep in incoming.get("depends_on", [])],
+        ]
+    )
+    merged["validation_commands"] = dedupe(
+        [
+            *[str(command) for command in target.get("validation_commands", [])],
+            *[str(command) for command in incoming.get("validation_commands", [])],
+        ]
+    )
+    return merged
+
+
 def _normalize_implementation_units(
     raw_units: list[dict[str, Any]],
     *,
@@ -662,14 +734,19 @@ def _normalize_implementation_units(
     search_requests: list[dict[str, Any]],
     cfg: CodingAgentSettings,
 ) -> list[dict[str, Any]]:
-    """Normalize IDs/dependencies and guarantee an acyclic, bounded unit list."""
+    """Normalize, remove non-implementation work, and coalesce shared-file units."""
 
-    units = raw_units[: max(1, cfg.max_implementation_units)]
+    units = [
+        dict(item)
+        for item in raw_units[: max(1, cfg.max_implementation_units)]
+        if not _is_non_implementation_unit(dict(item))
+    ]
     if not units:
         units = _fallback_implementation_units(state, search_requests)
 
     normalized: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
+    alias: dict[str, str] = {}
 
     for index, raw in enumerate(units, start=1):
         item = dict(raw)
@@ -678,14 +755,15 @@ def _normalize_implementation_units(
         if unit_id in seen_ids:
             unit_id = f"{unit_id}-{index}"
 
-        # Dependencies may reference only earlier normalized units. This guarantees
-        # a DAG and prevents a malformed planner response from deadlocking fan-out.
-        depends_on = [
-            str(dep).strip()
-            for dep in item.get("depends_on", [])
-            if str(dep).strip() in seen_ids
-        ]
-
+        candidate_paths = dedupe(
+            filter_context_paths(
+                [
+                    str(path).strip()
+                    for path in item.get("candidate_paths", [])
+                    if str(path).strip()
+                ]
+            )
+        )
         item.update(
             {
                 "id": unit_id,
@@ -697,16 +775,8 @@ def _normalize_implementation_units(
                     if str(value).strip()
                 ][:8],
                 "search_requests": list(item.get("search_requests") or search_requests),
-                "candidate_paths": dedupe(
-                    filter_context_paths(
-                        [
-                            str(path).strip()
-                            for path in item.get("candidate_paths", [])
-                            if str(path).strip()
-                        ]
-                    )
-                ),
-                "depends_on": depends_on,
+                "candidate_paths": candidate_paths,
+                "depends_on": [str(dep).strip() for dep in item.get("depends_on", []) if str(dep).strip()],
                 "validation_commands": [
                     str(command).strip()
                     for command in item.get("validation_commands", [])
@@ -714,8 +784,37 @@ def _normalize_implementation_units(
                 ],
             }
         )
+
+        # File ownership is exclusive. Merge units that advertise any common target
+        # file rather than allowing parallel workers to generate stale overlapping edits.
+        overlap_index = next(
+            (
+                existing_index
+                for existing_index, existing in enumerate(normalized)
+                if candidate_paths
+                and set(candidate_paths) & set(existing.get("candidate_paths", []))
+            ),
+            None,
+        )
+        if overlap_index is not None:
+            owner_id = str(normalized[overlap_index]["id"])
+            alias[unit_id] = owner_id
+            normalized[overlap_index] = _merge_unit_into(normalized[overlap_index], item)
+            continue
+
         normalized.append(item)
         seen_ids.add(unit_id)
+        alias[unit_id] = unit_id
+
+    valid_ids: set[str] = set()
+    for item in normalized:
+        remapped: list[str] = []
+        for dep in item.get("depends_on", []):
+            resolved = alias.get(str(dep), str(dep))
+            if resolved in valid_ids and resolved != item["id"]:
+                remapped.append(resolved)
+        item["depends_on"] = dedupe(remapped)
+        valid_ids.add(str(item["id"]))
 
     return normalized
 
@@ -859,15 +958,11 @@ def plan_node(
     if len(units) > 1:
         effective_mode = "parallel"
 
-    required_batches = math.ceil(len(units) / max(1, cfg.max_context_workers))
-    max_iterations = min(
-        cfg.max_implementation_units,
-        max(
-            cfg.max_implementation_iterations,
-            required_batches + 2,
-            len(units),
-            int(state.get("max_implementation_iterations", 0) or 0),
-        ),
+    # This is a repair-round ceiling, not a scheduling-batch ceiling. Fresh pending
+    # units may run in later generations without consuming another repair iteration.
+    max_iterations = max(
+        1,
+        int(state.get("max_implementation_iterations", 0) or cfg.max_implementation_iterations),
     )
 
     implementation_run_id = str(state.get("run_id", "")).strip() or uuid4().hex
@@ -884,6 +979,7 @@ def plan_node(
         "implementation_iteration": 1,
         "max_implementation_iterations": max_iterations,
         "subtask_worker_results": [],
+        "reasoning_reconciliations_used": 0,
         "custom_tool_calls": custom_tool_calls,
         "validation_commands": validation_commands,
         "web_search_query": web_search_query,
@@ -1147,6 +1243,33 @@ def repo_navigator_node(
     }
 
 
+_VALIDATION_INFRA_MARKERS = (
+    "not found",
+    "no such file or directory",
+    "command blocked",
+    "blocked by coding-agent allowlist",
+    "timed out",
+    "timeout",
+    "validation harness failed",
+    "executable file not found",
+    "is not recognized as an internal or external command",
+)
+
+
+def _validation_is_infrastructure_failure(result: dict[str, Any]) -> bool:
+    try:
+        returncode = int(result.get("returncode", 0))
+    except (TypeError, ValueError):
+        returncode = 1
+    if returncode == 0:
+        return False
+    haystack = "\n".join(
+        str(result.get(key, ""))
+        for key in ("stderr", "stdout", "reason")
+    ).lower()
+    return any(marker in haystack for marker in _VALIDATION_INFRA_MARKERS)
+
+
 def validate_node(
     state: CodingAgentState,
     cfg: CodingAgentSettings = default_settings,
@@ -1184,8 +1307,25 @@ def validate_node(
             }
         ]
 
-    blocking_failures = blocking_validation_failures(results)
-    advisory_failures = advisory_validation_failures(results)
+    infrastructure_failures = [
+        item for item in results if _validation_is_infrastructure_failure(item)
+    ]
+    code_results = [
+        item for item in results if not _validation_is_infrastructure_failure(item)
+    ]
+    for item in infrastructure_failures:
+        item["failure_kind"] = "infrastructure"
+        existing_reason = str(item.get("reason", "")).strip()
+        item["reason"] = (
+            "Validation infrastructure unavailable; this does not reopen implementation work."
+            + (f" {existing_reason}" if existing_reason else "")
+        )
+
+    blocking_failures = blocking_validation_failures(code_results)
+    advisory_failures = [
+        *advisory_validation_failures(code_results),
+        *infrastructure_failures,
+    ]
 
     errors = list(state.get("errors", []))
 
@@ -1260,8 +1400,11 @@ Request:
 Execution mode:
 {state.get('task_mode', 'standard')} ({worker_count} worker(s) in final generation)
 
-Implementation iterations:
+Repair rounds:
 {state.get('implementation_iteration', 1)}/{state.get('max_implementation_iterations', 1)}
+
+Reasoning reconciliations used:
+{state.get('reasoning_reconciliations_used', 0)}
 
 Execution profile:
 {state.get('runtime_settings', {})}
