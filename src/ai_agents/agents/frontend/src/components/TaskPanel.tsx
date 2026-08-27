@@ -7,6 +7,7 @@ import type {
   CodingAgentImplementationUnit,
   CodingAgentTaskMode,
 } from "../lib/codingAgentSocket";
+import MarkdownRenderer from "./MarkdownRenderer";
 
 interface TaskPanelProps {
   messages: AgentMessage[];
@@ -523,22 +524,24 @@ export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-
         <div className="space-y-4">
           
 
           {messages.map((message) => (
             <div key={message.id} className="space-y-3">
-              <article className={message.role === "user" ? "message-user" : "message-agent"}>
-                <div className="mb-1.5 flex items-center gap-2 text-[9px] font-semibold uppercase tracking-wider text-faint">
-                  <span>{message.role === "user" ? "You" : "Agent"}</span>
-                  <span>·</span>
-                  <time>{message.time}</time>
-                </div>
-                <p className="whitespace-pre-wrap wrap-break-word text-xs leading-5 text-ink-soft">
-                  {message.body}
-                </p>
-              </article>
+              <div className={message.role === "user" ? "rounded-lg bg-surface border border-line p-3 mb-2" : "rounded-lg bg-gray-900 text-white p-3 mb-2"}>
+                <article>
+                  <div className="mb-1.5 flex items-center gap-2 text-[9px] font-semibold uppercase tracking-wider text-faint">
+                    <span>{message.role === "user" ? "You" : "Agent"}</span>
+                    <span>·</span>
+                    <time>{message.time}</time>
+                  </div>
+                  {/* Render message body with markdown support via MarkdownRenderer component */}
+                  <div className="text-xs leading-5 text-ink-soft">
+                    <MarkdownRenderer>{message.body}</MarkdownRenderer>
+                  </div>
+                </article>
+              </div>
 
               {message.run ? <PlanCard run={message.run} /> : null}
             </div>
@@ -614,23 +617,24 @@ export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl
           <div className="rounded-lg border border-line-strong bg-surface p-2.5 focus-within:border-accent/70 focus-within:ring-1 focus-within:ring-accent/20">
             
             <label htmlFor="agent-prompt" className="sr-only">Message the coding agent</label>
-            <textarea
-              id="agent-prompt"
-              rows={3}
-              value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault();
-                  const form = event.currentTarget.closest('form');
-                  if (form) form.requestSubmit();
-                }
-              }}
-              onPaste={handlePaste}
-              placeholder="Describe the coding task and attach relevant files…"
-              className="w-full resize-none bg-transparent text-xs leading-5 text-ink outline-none placeholder:text-faint"
-              disabled={isVoiceLoading || isRunning}
-            />
+            <div className="overflow-y-auto max-h-[50vh]">
+              <textarea
+                id="agent-prompt"
+                value={prompt}
+                onChange={(event) => setPrompt(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    const form = event.currentTarget.closest('form');
+                    if (form) form.requestSubmit();
+                  }
+                }}
+                onPaste={handlePaste}
+                placeholder="Describe the coding task and attach relevant files…"
+                className="w-full resize-y min-h-12 max-h-[50vh] border border-transparent rounded bg-transparent text-xs leading-5 text-ink outline-none placeholder:text-faint"
+                disabled={isVoiceLoading || isRunning}
+              />
+            </div>
 
             {attachedFiles.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-1">

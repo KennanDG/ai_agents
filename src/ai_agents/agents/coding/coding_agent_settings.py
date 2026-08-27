@@ -25,6 +25,16 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
 def _env_csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     value = os.getenv(name)
     if not value:
@@ -255,6 +265,95 @@ class CodingAgentSettings:
     memory_index_fields: tuple[str, ...] = _env_csv(
         "CODING_AGENT_MEMORY_INDEX_FIELDS",
         ("text", "request", "summary"),
+    )
+
+    # Memory lifecycle management. Maintenance runs opportunistically when the
+    # persistence context opens, so the desktop app does not need a background
+    # daemon and memory cleanup cannot outlive SQLite connections.
+    memory_maintenance_enabled: bool = _env_bool(
+        "CODING_AGENT_MEMORY_MAINTENANCE_ENABLED",
+        True,
+    )
+    memory_maintenance_interval_hours: int = _env_int(
+        "CODING_AGENT_MEMORY_MAINTENANCE_INTERVAL_HOURS",
+        24,
+    )
+    memory_maintenance_state_path: Path = Path(
+        os.getenv(
+            "CODING_AGENT_MEMORY_MAINTENANCE_STATE",
+            str(_MEMORY_DIR / "maintenance.json"),
+        )
+    ).expanduser()
+
+    # Checkpoints are resumability/debug state, not long-term knowledge. Prune
+    # whole inactive threads through LangGraph's delete_thread API.
+    memory_checkpoint_retention_days: int = _env_int(
+        "CODING_AGENT_MEMORY_CHECKPOINT_RETENTION_DAYS",
+        30,
+    )
+    memory_checkpoint_max_threads: int = _env_int(
+        "CODING_AGENT_MEMORY_CHECKPOINT_MAX_THREADS",
+        100,
+    )
+
+    # Durable outcomes are compact and more valuable than checkpoints, so retain
+    # them longer while bounding each repository namespace. The minimum keep count
+    # prevents a dormant repository from losing all useful memory solely due to age.
+    memory_store_retention_days: int = _env_int(
+        "CODING_AGENT_MEMORY_STORE_RETENTION_DAYS",
+        365,
+    )
+    memory_store_max_items_per_namespace: int = _env_int(
+        "CODING_AGENT_MEMORY_STORE_MAX_ITEMS_PER_NAMESPACE",
+        300,
+    )
+    memory_store_min_items_per_namespace: int = _env_int(
+        "CODING_AGENT_MEMORY_STORE_MIN_ITEMS_PER_NAMESPACE",
+        25,
+    )
+    memory_store_scan_limit: int = _env_int(
+        "CODING_AGENT_MEMORY_STORE_SCAN_LIMIT",
+        5_000,
+    )
+
+    # New outcomes first exact-dedupe by normalized task key, then conservatively
+    # consolidate near-duplicates only when semantic similarity is high and either
+    # request wording or touched files materially overlap.
+    memory_consolidation_enabled: bool = _env_bool(
+        "CODING_AGENT_MEMORY_CONSOLIDATION_ENABLED",
+        True,
+    )
+    memory_consolidation_similarity_threshold: float = _env_float(
+        "CODING_AGENT_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD",
+        0.90,
+    )
+    memory_consolidation_min_request_overlap: float = _env_float(
+        "CODING_AGENT_MEMORY_CONSOLIDATION_MIN_REQUEST_OVERLAP",
+        0.55,
+    )
+    memory_consolidation_min_file_overlap: float = _env_float(
+        "CODING_AGENT_MEMORY_CONSOLIDATION_MIN_FILE_OVERLAP",
+        0.50,
+    )
+    memory_consolidation_candidate_limit: int = _env_int(
+        "CODING_AGENT_MEMORY_CONSOLIDATION_CANDIDATE_LIMIT",
+        5,
+    )
+
+    # SQLite reuses free pages but does not shrink database files automatically.
+    # A periodic offline VACUUM plus WAL checkpoint keeps the on-disk footprint
+    # bounded after pruning without adding work to every coding run.
+    memory_vacuum_enabled: bool = _env_bool(
+        "CODING_AGENT_MEMORY_VACUUM_ENABLED",
+        True,
+    )
+    memory_vacuum_interval_days: int = _env_int(
+        "CODING_AGENT_MEMORY_VACUUM_INTERVAL_DAYS",
+        7,
+    )
+    memory_vacuum_min_db_bytes: int = _env_int(
+        "CODING_AGENT_MEMORY_VACUUM_MIN_DB_BYTES",
+        10_000_000,
     )
 
 
