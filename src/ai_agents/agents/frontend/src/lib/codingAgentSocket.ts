@@ -1,3 +1,7 @@
+/**
+ * CodingAgentAttachedFile represents a file attached to a coding agent run request.
+ * Mirrors: api/api_schemas.py::CodingAgentAttachedFile
+ */
 export type CodingAgentAttachedFile = {
   name: string;
   content?: string | null;
@@ -9,7 +13,17 @@ export type CodingAgentAttachedFile = {
   truncated?: boolean | null;
 };
 
+/**
+ * CodingAgentTaskMode represents the execution mode selected by the agent.
+ * Mirrors: api/api_schemas.py::CodingAgentRunResult.task_mode
+ */
 export type CodingAgentTaskMode = "simple" | "standard" | "parallel";
+
+/**
+ * ApprovalStatus represents the state of file approval in a coding agent run.
+ * Mirrors: api/api_schemas.py::CodingAgentRunResult.approval_status
+ */
+export type ApprovalStatus = "not_required" | "pending" | "applied" | "rejected";
 
 export type CodingAgentImplementationUnit = Record<string, unknown> & {
   id?: string;
@@ -61,6 +75,15 @@ export type CodingAgentRunRequest = {
   attached_files?: CodingAgentAttachedFile[];
 };
 
+/**
+ * CodingAgentRunResult represents the complete result/state of a coding agent run.
+ * Mirrors: api/api_schemas.py::CodingAgentRunResult
+ *
+ * Socket event payload types:
+ * - run.completed: CodingAgentRunResult (in payload field)
+ * - run.started: partial fields (repo_root, workspace_root, allow_write, etc.)
+ * - node.completed: arbitrary node output (Record<string, unknown>)
+ */
 export type CodingAgentRunResult = {
   thread_id: string;
   status: string;
@@ -96,7 +119,7 @@ export type CodingAgentRunResult = {
   validation_results: Record<string, unknown>[];
 
   approval_required: boolean;
-  approval_status: "not_required" | "pending" | "applied" | "rejected";
+  approval_status: ApprovalStatus;
   blocking_validation_failed: boolean;
   advisory_validation_failed: boolean;
   applied_files: string[];
@@ -109,6 +132,21 @@ export type CodingAgentRunResult = {
   raw: Record<string, unknown>;
 };
 
+/**
+ * CodingAgentServerEvent is a discriminated union of all possible WebSocket events.
+ * Mirrors: api/api_schemas.py::CodingAgentServerEvent
+ *
+ * Event types and payloads:
+ * - session.ready: Initial handshake with protocol version.
+ * - run.started: Run initialization with configuration.
+ * - node.completed: Arbitrary node execution result (generic payload).
+ * - run.completed: Final result with full CodingAgentRunResult.
+ * - run.failed: Error event (optional run_id/thread_id for connection errors).
+ * - run.approval_required: Files pending user approval.
+ * - run.applied: Files successfully applied after approval.
+ * - run.rejected: Run rejected by user.
+ * - pong: Heartbeat response to ping.
+ */
 export type CodingAgentServerEvent =
   | {
       type: "session.ready";
@@ -126,7 +164,7 @@ export type CodingAgentServerEvent =
         workspace_root: string | null;
         allow_write: boolean;
         subtask_worker_count?: number;
-        /** Legacy alias. */
+        /** Legacy alias retained for compatibility. */
         subagent_count?: number;
         max_implementation_iterations?: number;
         token_budgets?: Record<string, number>;
@@ -191,6 +229,10 @@ export type CodingAgentServerEvent =
       type: "pong";
     };
 
+/**
+ * CodingAgentSocketOptions configuration for WebSocket connection.
+ * All event payloads are typed according to CodingAgentServerEvent union.
+ */
 type CodingAgentSocketOptions = {
   apiBaseUrl: string;
   apiKey: string;
