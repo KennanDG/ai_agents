@@ -37,10 +37,6 @@ import {
   type GitHubRepositorySummary,
 } from "./lib/repositoryApi";
 import { selectVoiceContextAttachments, submitVoiceTurn } from "./lib/voiceAgentApi";
-import {
-  fetchAgentConfiguration,
-  type AgentConfiguration,
-} from "./lib/adminApi";
 import type { AgentMessage, AgentRunState, ChangeStatus, FileChange, RepositoryFile, RepositoryTreeEntry } from "./types";
 
 const apiBaseUrl = import.meta.env.VITE_AI_AGENTS_API_BASE ?? "http://0.0.0.0:8000";
@@ -442,7 +438,6 @@ const runReducer = (state: AgentRunState, event: RunAction): DivideConquerRunSta
 const App = () => {
   const [activeView, setActiveView] = useState<ActivityView>("explorer");
   const [agentSettingsOpen, setAgentSettingsOpen] = useState(false);
-  const [agentConfiguration, setAgentConfiguration] = useState<AgentConfiguration | null>(null);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [activeFile, setActiveFile] = useState<RepositoryFile | null>(null);
   const [allowWrite, setAllowWrite] = useState(true);
@@ -885,9 +880,6 @@ const App = () => {
       if (resolvedRoot) setLocalRepoRoot(resolvedRoot);
     });
     void refreshGitHubRepositories();
-    void fetchAgentConfiguration({ apiBaseUrl, apiKey })
-      .then(setAgentConfiguration)
-      .catch((error) => console.error("Failed to load agent execution settings.", error));
   }, [loadRepository, refreshGitHubRepositories]);
 
   useEffect(() => {
@@ -987,11 +979,14 @@ const App = () => {
           newThreadForNextRunRef.current = false;
         }
 
-        if (event.type === "run.completed" && event.payload.report) {
-          setMessages((current) => [
-            ...current,
-            { id: crypto.randomUUID(), role: "agent", body: event.payload.markdown_response ?? "Run completed.", time: nowLabel() },
-          ]);
+        if (event.type === "run.completed") {
+          const response = event.payload.markdown_response ?? event.payload.report;
+          if (response) {
+            setMessages((current) => [
+              ...current,
+              { id: crypto.randomUUID(), role: "agent", body: response, time: nowLabel() },
+            ]);
+          }
         }
 
         if (event.type === "run.failed") {
@@ -1005,7 +1000,13 @@ const App = () => {
         console.log("Coding agent socket connected.");
       },
       onClose: () => {
-        dispatchRun({ type: "run.failed", payload: { error: "Coding agent socket closed." } });
+        dispatchRun({
+          type: "run.failed",
+          run_id: null,
+          thread_id: null,
+          node: null,
+          payload: { error: "Coding agent socket closed." },
+        });
       },
       onError: (event) => {
         console.error("Coding agent socket error.", event);
@@ -1166,18 +1167,6 @@ const App = () => {
       allow_write: allowWrite,
       memory_enabled: memoryEnabled,
       attached_files: attachedFiles,
-      // New divide-and-conquer names are primary; legacy aliases keep rolling
-      // upgrades compatible with an older backend.
-      max_implementation_iterations: 3,
-      max_iterations: 3,
-      subtask_worker_count: agentConfiguration?.coding_subagent_count,
-      subagent_count: agentConfiguration?.coding_subagent_count,
-      route_max_tokens: agentConfiguration?.coding_route_max_tokens,
-      planner_max_tokens: agentConfiguration?.coding_planner_max_tokens,
-      repo_navigation_max_tokens: agentConfiguration?.coding_repo_navigation_max_tokens,
-      simple_patch_max_tokens: agentConfiguration?.coding_simple_patch_max_tokens,
-      patch_max_tokens: agentConfiguration?.coding_patch_max_tokens,
-      progress_max_tokens: agentConfiguration?.coding_progress_max_tokens,
     };
     clearChanges();
     socketRef.current?.run(runRequest);
@@ -1368,7 +1357,6 @@ const App = () => {
         apiBaseUrl={apiBaseUrl}
         apiKey={apiKey}
         onClose={() => setAgentSettingsOpen(false)}
-        onSaved={setAgentConfiguration}
       />
     </main>
   );
