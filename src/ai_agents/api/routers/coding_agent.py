@@ -651,11 +651,9 @@ def _public_result(state: dict[str, Any], thread_id: str) -> CodingAgentRunResul
     raw_report = state.get("report")
     report_value = raw_report.strip() if isinstance(raw_report, str) else None
     markdown_response = format_agent_markdown(report_value)
-
-    if markdown_response is None and report_value:
-        # The raw report cleaned down to nothing (all logs/tool-call/JSON/debug
-        # artifacts). Surface no report instead of leaking internals to the frontend.
-        report_value = None
+    # Keep the legacy `report` field for older clients, but make it identical to the
+    # sanitized markdown response so no presentation/debug artifacts cross the API.
+    report_value = markdown_response
 
     return CodingAgentRunResult(
         thread_id=thread_id,
@@ -733,24 +731,26 @@ def _stream_coding_agent_worker(
     
     thread_id = request.thread_id or _new_thread_id()
 
-    # Prefer divide-and-conquer names, while accepting the pre-migration aliases.
     resolved_subtask_worker_count = (
         request.subtask_worker_count
         or request.subagent_count
-        or config_settings.coding_subagent_count
+        or config_settings.coding_max_subtask_workers
     )
     resolved_max_implementation_iterations = (
         request.max_implementation_iterations
         or request.max_iterations
-        or 3
+        or config_settings.coding_max_implementation_iterations
     )
 
     try:
         cfg = replace(
             default_coding_settings,
-            # The settings dataclass still exposes this as max_context_workers;
-            # semantically these are now implementation-unit subtask workers.
+            max_subtask_workers=resolved_subtask_worker_count,
+            # Keep the legacy field synchronized for old checkpoints/helpers.
             max_context_workers=resolved_subtask_worker_count,
+            max_implementation_units=config_settings.coding_max_implementation_units,
+            max_patch_retries_per_unit=config_settings.coding_max_patch_retries_per_unit,
+            max_implementation_iterations=resolved_max_implementation_iterations,
             route_max_tokens=(
                 request.route_max_tokens or config_settings.coding_route_max_tokens
             ),
@@ -765,11 +765,38 @@ def _stream_coding_agent_worker(
                 request.simple_patch_max_tokens
                 or config_settings.coding_simple_patch_max_tokens
             ),
+            # Legacy per-run aliases remain accepted, but current implementation
+            # workers use simple_patch_max_tokens and the reconciler uses its own budget.
             patch_max_tokens=(
                 request.patch_max_tokens or config_settings.coding_patch_max_tokens
             ),
             progress_max_tokens=(
                 request.progress_max_tokens or config_settings.coding_progress_max_tokens
+            ),
+            reconciliation_max_tokens=config_settings.coding_reconciliation_max_tokens,
+            reconciliation_context_max_tokens=(
+                config_settings.coding_reconciliation_context_max_tokens
+            ),
+            max_reasoning_reconciliations=(
+                config_settings.coding_max_reasoning_reconciliations
+            ),
+            context_prompt_base_tokens=config_settings.coding_context_prompt_base_tokens,
+            max_context_prompt_tokens=config_settings.coding_max_context_prompt_tokens,
+            context_prompt_reserve_tokens=(
+                config_settings.coding_context_prompt_reserve_tokens
+            ),
+            context_window_safety_tokens=(
+                config_settings.coding_context_window_safety_tokens
+            ),
+            coding_model_context_window_tokens=(
+                config_settings.coding_model_context_window_tokens
+            ),
+            reasoning_model_context_window_tokens=(
+                config_settings.reasoning_model_context_window_tokens
+            ),
+            coding_model_max_output_tokens=config_settings.coding_model_max_output_tokens,
+            reasoning_model_max_output_tokens=(
+                config_settings.reasoning_model_max_output_tokens
             ),
         )
 
@@ -816,22 +843,26 @@ def _stream_coding_agent_worker(
                     "repo_root": repo_root,
                     "workspace_root": workspace_root,
                     "allow_write": request.allow_write,
-                    "subtask_worker_count": cfg.max_context_workers,
+                    "subtask_worker_count": cfg.max_subtask_workers,
                     # Compatibility alias for older frontends.
-                    "subagent_count": cfg.max_context_workers,
+                    "subagent_count": cfg.max_subtask_workers,
                     "max_implementation_iterations": resolved_max_implementation_iterations,
                     "token_budgets": {
                         "route": cfg.route_max_tokens,
                         "planner": cfg.planner_max_tokens,
                         "repo_navigation": cfg.repo_navigation_max_tokens,
-                        "simple_patch": cfg.simple_patch_max_tokens,
-                        "patch": cfg.patch_max_tokens,
-                        "progress": cfg.progress_max_tokens,
+                        "patch_worker": cfg.simple_patch_max_tokens,
+                        "reconciliation": cfg.reconciliation_max_tokens,
+                        "reconciliation_context": cfg.reconciliation_context_max_tokens,
                     },
                     "runtime_settings": {
-                        "max_subtask_workers": cfg.max_context_workers,
+                        "max_subtask_workers": cfg.max_subtask_workers,
                         "max_context_workers": cfg.max_context_workers,
+                        "max_implementation_units": cfg.max_implementation_units,
+                        "max_patch_retries_per_unit": cfg.max_patch_retries_per_unit,
                         "max_implementation_iterations": resolved_max_implementation_iterations,
+                        "context_prompt_base_tokens": cfg.context_prompt_base_tokens,
+                        "max_context_prompt_tokens": cfg.max_context_prompt_tokens,
                     },
                 },
             ),
@@ -855,15 +886,28 @@ def _stream_coding_agent_worker(
             "sandbox_enabled": True,
             "allow_write": request.allow_write,
             "runtime_settings": {
-                "max_subtask_workers": cfg.max_context_workers,
+                "max_subtask_workers": cfg.max_subtask_workers,
                 "max_context_workers": cfg.max_context_workers,
                 "max_implementation_iterations": resolved_max_implementation_iterations,
+                "max_implementation_units": cfg.max_implementation_units,
+                "max_patch_retries_per_unit": cfg.max_patch_retries_per_unit,
                 "route_max_tokens": cfg.route_max_tokens,
                 "planner_max_tokens": cfg.planner_max_tokens,
                 "repo_navigation_max_tokens": cfg.repo_navigation_max_tokens,
                 "simple_patch_max_tokens": cfg.simple_patch_max_tokens,
                 "patch_max_tokens": cfg.patch_max_tokens,
+                "reconciliation_max_tokens": cfg.reconciliation_max_tokens,
+                "reconciliation_context_max_tokens": cfg.reconciliation_context_max_tokens,
+                "max_reasoning_reconciliations": cfg.max_reasoning_reconciliations,
                 "progress_max_tokens": cfg.progress_max_tokens,
+                "context_prompt_base_tokens": cfg.context_prompt_base_tokens,
+                "max_context_prompt_tokens": cfg.max_context_prompt_tokens,
+                "context_prompt_reserve_tokens": cfg.context_prompt_reserve_tokens,
+                "context_window_safety_tokens": cfg.context_window_safety_tokens,
+                "coding_model_context_window_tokens": cfg.coding_model_context_window_tokens,
+                "reasoning_model_context_window_tokens": cfg.reasoning_model_context_window_tokens,
+                "coding_model_max_output_tokens": cfg.coding_model_max_output_tokens,
+                "reasoning_model_max_output_tokens": cfg.reasoning_model_max_output_tokens,
             },
             "attached_files": attached_files,
             "attached_files_used": [],

@@ -182,7 +182,7 @@ class CodingAgentRunRequest(BaseModel):
     # Divide-and-conquer implementation loop. ``max_iterations`` remains as a
     # compatibility alias for older frontend/backend builds.
     max_implementation_iterations: int | None = Field(default=None, ge=1, le=8)
-    max_iterations: int | None = Field(default=3, ge=1, le=8)
+    max_iterations: int | None = Field(default=None, ge=1, le=8)
 
     # Optional per-run overrides. Defaults come from the saved admin profile.
     # ``subagent_count`` is retained as a compatibility alias while the UI and
@@ -516,15 +516,28 @@ class AgentConfigurationUpdate(BaseModel):
     voice_tts_voice: str = Field(min_length=1, max_length=100)
     voice_tts_enabled: bool = True
 
-    coding_subagent_count: int | None = Field(default=None, ge=1, le=6)
+    coding_max_subtask_workers: int | None = Field(default=None, ge=1, le=6)
+    coding_max_implementation_units: int | None = Field(default=None, ge=1, le=12)
+    coding_max_patch_retries_per_unit: int | None = Field(default=None, ge=0, le=4)
+    coding_max_implementation_iterations: int | None = Field(default=None, ge=1, le=8)
     coding_route_max_tokens: int | None = Field(default=None, ge=256, le=2_000)
     coding_planner_max_tokens: int | None = Field(default=None, ge=512, le=6_000)
     coding_repo_navigation_max_tokens: int | None = Field(default=None, ge=512, le=4_000)
     coding_simple_patch_max_tokens: int | None = Field(default=None, ge=2_000, le=16_000)
-    coding_patch_max_tokens: int | None = Field(default=None, ge=4_000, le=32_000)
-    coding_progress_max_tokens: int | None = Field(default=None, ge=512, le=4_000)
+    coding_reconciliation_max_tokens: int | None = Field(default=None, ge=2_000, le=32_000)
+    coding_reconciliation_context_max_tokens: int | None = Field(default=None, ge=4_000, le=64_000)
+    coding_max_reasoning_reconciliations: int | None = Field(default=None, ge=0, le=3)
+    coding_context_prompt_base_tokens: int | None = Field(default=None, ge=4_000, le=64_000)
+    coding_max_context_prompt_tokens: int | None = Field(default=None, ge=8_000, le=128_000)
+    coding_context_prompt_reserve_tokens: int | None = Field(default=None, ge=2_000, le=64_000)
+    coding_context_window_safety_tokens: int | None = Field(default=None, ge=1_000, le=32_000)
+    coding_model_context_window_tokens: int | None = Field(default=None, ge=16_000, le=2_000_000)
+    reasoning_model_context_window_tokens: int | None = Field(default=None, ge=16_000, le=2_000_000)
+    coding_model_max_output_tokens: int | None = Field(default=None, ge=2_000, le=128_000)
+    reasoning_model_max_output_tokens: int | None = Field(default=None, ge=2_000, le=128_000)
 
     secrets: dict[ChatProvider, str] = Field(default_factory=dict)
+    github_token: str | None = Field(default=None, max_length=4_096)
 
     @field_validator(
         "coding_model",
@@ -534,9 +547,12 @@ class AgentConfigurationUpdate(BaseModel):
         "voice_stt_model",
         "voice_tts_model",
         "voice_tts_voice",
+        "github_token",
     )
     @classmethod
-    def normalize_text(cls, value: str) -> str:
+    def normalize_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         return value.strip()
 
 

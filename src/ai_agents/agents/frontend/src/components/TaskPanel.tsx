@@ -1,4 +1,4 @@
-import { ArrowUp, Check, Circle, Mic, Paperclip, ShieldCheck, Sparkles, Square } from "lucide-react";
+import { ArrowUp, Check, Circle, Mic, Paperclip, RefreshCw, ShieldCheck, Sparkles, Square } from "lucide-react";
 import { type ChangeEvent, type ClipboardEvent, type DragEvent, type PointerEvent, type SubmitEvent, useRef, useState } from "react";
 import type { AgentMessage, AgentRunState, RepositoryFile } from "../types";
 import type {
@@ -17,6 +17,7 @@ interface TaskPanelProps {
   voiceReplyUrl?: string | null;
   onApproveAll: () => void;
   onRejectChanges: () => void;
+  onResetSession: () => void;
   allowWrite: boolean;
   activePath?: string | null;
   activeFile?: RepositoryFile | null;
@@ -211,7 +212,7 @@ const readAsDataUrl = (file: File) =>
 /*
    =============  Component  =============
 */
-export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl, onApproveAll, onRejectChanges, allowWrite, activePath, activeFile }: TaskPanelProps) => {
+export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl, onApproveAll, onRejectChanges, allowWrite, activePath, activeFile, onResetSession }: TaskPanelProps) => {
   const [prompt, setPrompt] = useState("");
   const [promptHeight, setPromptHeight] = useState(MIN_PROMPT_HEIGHT);
   const [attachedFiles, setAttachedFiles] = useState<CodingAgentAttachedFile[]>([]);
@@ -551,6 +552,16 @@ export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-4">
         <Sparkles size={15} className="text-accent-light" />
         <h1 className="text-xs font-semibold text-ink">Agent session</h1>
+        <button
+          type="button"
+          className="icon-button"
+          aria-label="Start a new session"
+          title="Start a new session and clear messages from previous runs"
+          disabled={isRunning}
+          onClick={onResetSession}
+        >
+          <RefreshCw size={13} />
+        </button>
         <span className={`ml-auto rounded-full border px-2 py-0.5 text-[9px] font-medium uppercase ${statusClass[run.status]}`}>{run.status}</span>
       </div>
 
@@ -743,7 +754,7 @@ export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl
                 title="Attach open repository file"
                 onClick={attachActiveRepoFile}
               >
-                Attach open file
+                Attach File
               </button>
 
               <span className="ml-1 text-[9px] text-faint">{isRunning ? "Agent running" : allowWrite ? "Write mode" : "Read mode"}</span>

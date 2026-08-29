@@ -1358,94 +1358,108 @@ def validate_node(
 
 
 def report_node(state: CodingAgentState) -> CodingAgentState:
+    """Return a concise user-facing Markdown summary.
+
+    Detailed execution diagnostics already travel in structured result fields (plan,
+    completion_ledger, runtime_settings, validation_results, etc.). The chat response
+    should explain the outcome without dumping those internals back at the user.
+    """
+
+    file_changes = [
+        item for item in state.get("file_changes", []) if str(item.get("path", "")).strip()
+    ]
+    patch_summary = str(state.get("patch_summary", "")).strip()
     validation_results = state.get("validation_results", [])
-    validation_lines = [
-        f"- `{item.get('command', 'unknown')}` -> exit code "
-        f"{item.get('returncode', 'unknown')}"
-        for item in validation_results
-    ]
-    all_errors = [*state.get("errors", []), *state.get("memory_errors", [])]
-    changed = [
-        str(item.get("path", "")) + " - " + str(item.get("write_result", ""))
-        for item in state.get("file_changes", [])
-    ]
-    current_run_id = str(state.get("implementation_run_id", ""))
-    current_generation = int(state.get("implementation_generation", 0))
-    worker_count = sum(
-        1
-        for item in state.get("subtask_worker_results", [])
-        if str(item.get("run_id", "")) == current_run_id
-        and int(item.get("generation", -1)) == current_generation
+    all_errors = dedupe(
+        [
+            str(item).strip()
+            for item in [*state.get("errors", []), *state.get("memory_errors", [])]
+            if str(item).strip()
+        ]
     )
-    ledger_lines = []
+
+    successful_statuses = {
+        "complete",
+        "completed",
+        "done",
+        "success",
+        "succeeded",
+        "applied",
+        "no_change_needed",
+    }
+    incomplete_units: list[tuple[str, str, str]] = []
+    
     for unit_id, entry in (state.get("completion_ledger") or {}).items():
-        model = str(entry.get("last_model", "")).strip()
-        context_usage = ""
-        if entry.get("last_context_budget_tokens"):
-            context_usage = (
-                f"; context={entry.get('last_context_tokens', 0)}/"
-                f"{entry.get('last_context_budget_tokens', 0)} tokens"
-            )
-        ledger_lines.append(
-            f"- {unit_id}: {entry.get('status', 'unknown')}; "
-            f"implementation_attempts={entry.get('implementation_attempts', 0)}; "
-            f"patch_retries={entry.get('patch_retries', 0)}"
-            + (f"; model={model}" if model else "")
-            + context_usage
-            + (
-                f"; last_error={entry.get('last_error')}"
-                if entry.get("last_error")
-                else ""
+        status = str(entry.get("status", "unknown")).strip().lower() or "unknown"
+        if status in successful_statuses:
+            continue
+        incomplete_units.append(
+            (
+                str(unit_id),
+                status,
+                str(entry.get("last_error", "")).strip(),
             )
         )
 
-    report = f"""Coding agent run summary
+    if patch_summary:
+        summary = patch_summary
+    elif file_changes:
+        summary = (
+            f"Prepared {len(file_changes)} file change"
+            f"{'s' if len(file_changes) != 1 else ''} for review."
+        )
+    elif incomplete_units:
+        summary = "The run finished without a complete patch for every implementation unit."
+    else:
+        summary = "The run completed without proposing repository changes."
 
-Request:
-{state.get('user_request', '')}
+    lines = ["## Summary", "", summary]
 
-Execution mode:
-{state.get('task_mode', 'standard')} ({worker_count} worker(s) in final generation)
+    if file_changes:
+        lines.extend(["", "## Changes", ""])
+        for item in file_changes:
+            path = str(item.get("path", "")).strip()
+            detail = (
+                str(item.get("reason", "")).strip()
+                or str(item.get("write_result", "")).strip()
+                or "Updated"
+            )
+            lines.append(f"- `{path}` — {detail}")
 
-Repair rounds:
-{state.get('implementation_iteration', 1)}/{state.get('max_implementation_iterations', 1)}
+    lines.extend(["", "## Validation", ""])
+    if validation_results:
+        for item in validation_results:
+            command = str(item.get("command", "unknown")).strip() or "unknown"
+            returncode = item.get("returncode")
+            failure_kind = str(item.get("failure_kind", "")).strip().lower()
+            if returncode == 0:
+                outcome = "Passed"
+            elif failure_kind == "infrastructure":
+                outcome = "Warning: validation infrastructure unavailable"
+            else:
+                outcome = f"Failed (exit code {returncode if returncode is not None else 'unknown'})"
+            lines.append(f"- **{outcome}:** `{command}`")
+    else:
+        lines.append("- No validation commands were run.")
 
-Reasoning reconciliations used:
-{state.get('reasoning_reconciliations_used', 0)}
+    notes: list[str] = []
+    for unit_id, status, last_error in incomplete_units:
+        note = f"`{unit_id}` ended with status **{status}**"
+        if last_error:
+            note += f": {last_error}"
+        notes.append(note)
 
-Execution profile:
-{state.get('runtime_settings', {})}
+    # Keep errors visible, but dedupe them and avoid turning successful runs into a
+    # wall of internal diagnostics. The structured result still retains every error.
+    notes.extend(all_errors[:6])
+    if file_changes and not state.get("blocking_validation_failed", False):
+        notes.append("The proposed changes are ready for human review and approval.")
 
-Selected skills:
-{bullets(state.get('selected_skills') or [state.get('selected_skill', 'none')])}
+    if notes:
+        lines.extend(["", "## Notes", ""])
+        lines.extend(f"- {note}" for note in dedupe(notes))
 
-Plan:
-{bullets(state.get('plan', []))}
-
-Completion ledger:
-{chr(10).join(ledger_lines) if ledger_lines else 'No implementation ledger was produced.'}
-
-Approved custom tools used:
-{bullets([
-    item.get('tool_name', '') + (' (ok)' if item.get('success') else ' (failed)')
-    for item in state.get('custom_tool_results', [])
-]) if state.get('custom_tool_results') else 'None'}
-
-Files inspected:
-{bullets(state.get('files_inspected', []))}
-
-Files changed/proposed:
-{bullets(changed)}
-
-Patch reconciliation:
-{state.get('patch_summary', 'No patch summary generated.')}
-
-Validation:
-{chr(10).join(validation_lines) if validation_lines else 'No validation commands were run.'}
-
-Errors:
-{bullets(all_errors) if all_errors else 'None'}
-""".strip()
+    report = "\n".join(lines).strip()
     return {"report": report, "status": "reported"}
 
 

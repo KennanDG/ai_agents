@@ -1192,8 +1192,7 @@ const App = () => {
     const messageId = crypto.randomUUID();
 
     activeRunMessageIdRef.current = messageId;
-    setMessages((current) => [
-      ...current,
+    setMessages([
       {
         id: messageId,
         role: "user",
@@ -1299,6 +1298,7 @@ const App = () => {
               activeFile={activeFile}
               onApproveAll={approveAllChanges}
               onRejectChanges={rejectChanges}
+              onResetSession={resetAgentWorkspace}
             />
           </div>
 

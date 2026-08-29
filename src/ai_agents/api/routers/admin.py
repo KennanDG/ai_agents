@@ -94,6 +94,12 @@ def _load_coding_runtime_configuration() -> None:
         return
     if not isinstance(raw, dict):
         return
+
+    if "coding_max_subtask_workers" not in raw:
+        legacy_workers = raw.get("coding_subagent_count")
+        if isinstance(legacy_workers, int):
+            raw["coding_max_subtask_workers"] = legacy_workers
+
     for field in CODING_RUNTIME_FIELDS:
         value = raw.get(field)
         minimum, maximum = CODING_RUNTIME_BOUNDS[field]
@@ -108,6 +114,17 @@ def _save_coding_runtime_configuration(values: dict[str, int]) -> None:
         _coding_runtime_path(),
         json.dumps(_coding_runtime_snapshot(), indent=2, sort_keys=True) + "\n",
     )
+
+
+def _github_configuration_snapshot() -> dict[str, Any]:
+    # Never return the token itself. Environment / Secrets Manager credentials count
+    # as configured, and a token entered in the modal is held only by this process.
+    return {
+        "github_token_configured": bool(
+            config_settings.github_token or config_settings.github_secret_arn
+        ),
+        "github_token_persistence": "session_only",
+    }
 
 
 _load_coding_runtime_configuration()
@@ -618,6 +635,7 @@ def get_agent_configuration() -> dict[str, Any]:
     return {
         **runtime_agent_configuration.public_snapshot(),
         **_coding_runtime_snapshot(),
+        **_github_configuration_snapshot(),
     }
 
 
@@ -632,7 +650,7 @@ def list_available_models(
 
 @router.put("/agent-configuration")
 def update_agent_configuration(request: AgentConfigurationUpdate) -> dict[str, Any]:
-    values = request.model_dump(exclude={"secrets"})
+    values = request.model_dump(exclude={"secrets", "github_token"})
     model_values = {field: values[field] for field in MODEL_CONFIGURATION_FIELDS}
     coding_values = {
         field: int(values[field])
@@ -646,6 +664,13 @@ def update_agent_configuration(request: AgentConfigurationUpdate) -> dict[str, A
             secrets=request.secrets,
         )
         _save_coding_runtime_configuration(coding_values)
+
+        # A token entered in the renderer is intentionally session-only. Existing
+        # environment/Secrets Manager configuration is preserved when the field is blank.
+        github_token = (request.github_token or "").strip()
+        
+        if github_token:
+            config_settings.github_token = github_token
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -658,7 +683,11 @@ def update_agent_configuration(request: AgentConfigurationUpdate) -> dict[str, A
     except (ImportError, AttributeError):
         pass
 
-    return {**snapshot, **_coding_runtime_snapshot()}
+    return {
+        **snapshot,
+        **_coding_runtime_snapshot(),
+        **_github_configuration_snapshot(),
+    }
 
 
 @router.get("/skills", response_model=list[SkillSummary])
