@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import replace
+from difflib import SequenceMatcher
 from pathlib import Path
 import re
 from typing import Any, Iterable
@@ -61,6 +62,9 @@ from ai_agents.config.settings import settings as app_settings
 
 
 _TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
+
+_PATCH_ANCHOR_SIMILARITY_THRESHOLD = 0.97
+_PATCH_ANCHOR_SIMILARITY_MARGIN = 0.04
 
 _RUNTIME_SETTING_FIELDS = {
     "max_subtask_workers",
@@ -288,6 +292,30 @@ def _resolve_candidate_paths(
         if path:
             resolved.append(path)
             continue
+
+        # Be tolerant of a stale or over-qualified path when the repository contains
+        # one obvious file with the same basename. This is especially useful for
+        # handoffs where another model guessed one extra directory segment.
+        basename = Path(candidate).name
+        basename_matches = [
+            repo_path for repo_path in repo_files if Path(repo_path).name == basename
+        ]
+        if basename_matches:
+            needles = [term.casefold() for term in terms]
+
+            def basename_score(path_value: str) -> tuple[int, int, str]:
+                lowered = path_value.casefold()
+                hits = sum(1 for term in needles if term in lowered)
+                depth = path_value.count("/")
+                return (-hits, depth, path_value)
+
+            ranked = sorted(basename_matches, key=basename_score)
+            if len(ranked) == 1 or (
+                len(ranked) > 1
+                and basename_score(ranked[0]) < basename_score(ranked[1])
+            ):
+                resolved.append(ranked[0])
+                continue
 
         # A planner may reasonably name a directory. Expand it deterministically
         # using filename/term relevance instead of passing the directory to read_file.
@@ -618,6 +646,33 @@ def subtask_worker_node(
             terms=terms,
             max_files=cfg.max_worker_files,
         )
+
+        # Do not let one bad candidate path suppress normal repository discovery. If
+        # any requested/candidate path is unresolved, use the unit's structured
+        # searches as a fallback and merge the highest-ranked real files into context.
+        if unresolved and search_requests:
+            try:
+                fallback_results = search_repository(
+                    repo_root,
+                    search_requests,
+                    max_results=max(8, cfg.max_worker_files * 3),
+                )
+                fallback_paths = paths_from_ranked_results(
+                    [item.to_dict() for item in fallback_results]
+                )
+                resolved_fallback, _ = _resolve_candidate_paths(
+                    repo_root=repo_root,
+                    candidates=fallback_paths,
+                    repo_files=repo_files,
+                    terms=terms,
+                    max_files=cfg.max_worker_files,
+                )
+                paths = dedupe([*paths, *resolved_fallback])[: cfg.max_worker_files]
+            except Exception as exc:
+                errors.append(
+                    f"Unit {unit_id} fallback repository search failed: {exc}"
+                )
+
         for path in unresolved:
             if path in requested_paths:
                 errors.append(
@@ -672,6 +727,16 @@ def subtask_worker_node(
         loop_focus = str(state.get("loop_context_focus", "")).strip()
         if loop_focus:
             priority_blocks.append("# Current retry focus\n" + loop_focus)
+
+        if model_attempt == max_model_attempts:
+            priority_blocks.append(
+                "# Best-effort patching policy\n"
+                "This is the final patch-model attempt for the unit. If at least one direct "
+                "target file or a strong repository implementation pattern is visible, prefer "
+                "a conservative reviewable patch with clearly stated assumptions over another "
+                "request for merely helpful context. Request more context only for a material "
+                "contract/security/correctness blocker."
+            )
 
         tool_blocks = [
             (
@@ -919,6 +984,161 @@ def _intended_edit_paths(
     return dedupe(paths)
 
 
+
+def _normalize_anchor_line(value: str) -> str:
+    """Normalize only formatting noise for conservative patch-anchor matching."""
+
+    return re.sub(r"\s+", " ", value.strip())
+
+
+def _normalize_anchor_block(value: str) -> str:
+    lines = [_normalize_anchor_line(line) for line in value.replace("\r\n", "\n").split("\n")]
+    # Leading/trailing blank lines are common model formatting drift and are not
+    # semantically meaningful for an edit anchor.
+    while lines and not lines[0]:
+        lines.pop(0)
+    while lines and not lines[-1]:
+        lines.pop()
+    return "\n".join(lines)
+
+
+def _find_rebased_anchor(
+    current: str,
+    old: str,
+    *,
+    threshold: float,
+    margin: float,
+) -> tuple[str, float] | None:
+    """Find one uniquely strong current-source match for a stale patch anchor.
+
+    This intentionally tolerates only small formatting/source drift. It is not a
+    general fuzzy patcher: ambiguous matches are rejected and sent back through the
+    normal repair loop.
+    """
+
+    normalized_old = _normalize_anchor_block(old)
+    if not normalized_old:
+        return None
+
+    current_lines = current.splitlines(keepends=True)
+    old_lines = old.splitlines(keepends=True)
+    old_normalized_lines = [_normalize_anchor_line(line) for line in old_lines]
+    significant = [index for index, line in enumerate(old_normalized_lines) if line]
+    if not significant:
+        return None
+
+    first_sig = significant[0]
+    first_line = old_normalized_lines[first_sig]
+    current_normalized_lines = [_normalize_anchor_line(line) for line in current_lines]
+
+    # Start with exact normalized-line matches. If source drift touched that line,
+    # allow a small bounded fuzzy shortlist rather than scanning every possible block.
+    start_positions = [
+        index for index, line in enumerate(current_normalized_lines) if line == first_line
+    ]
+    if not start_positions and len(first_line) >= 24:
+        fuzzy_starts: list[tuple[float, int]] = []
+        for index, line in enumerate(current_normalized_lines):
+            if not line:
+                continue
+            score = SequenceMatcher(None, first_line, line).ratio()
+            if score >= 0.92:
+                fuzzy_starts.append((score, index))
+        start_positions = [index for _, index in sorted(fuzzy_starts, reverse=True)[:24]]
+
+    if not start_positions:
+        return None
+
+    old_line_count = max(1, len(old_lines))
+    candidates: list[tuple[float, int, int, str]] = []
+    seen_ranges: set[tuple[int, int]] = set()
+
+    for position in start_positions[:48]:
+        estimated_start = max(0, position - first_sig)
+        for start_delta in (-2, -1, 0, 1, 2):
+            start = estimated_start + start_delta
+            if start < 0 or start >= len(current_lines):
+                continue
+            for line_delta in (-2, -1, 0, 1, 2):
+                length = max(1, old_line_count + line_delta)
+                end = min(len(current_lines), start + length)
+                if end <= start or (start, end) in seen_ranges:
+                    continue
+                seen_ranges.add((start, end))
+                candidate = "".join(current_lines[start:end])
+                normalized_candidate = _normalize_anchor_block(candidate)
+                if not normalized_candidate:
+                    continue
+                score = SequenceMatcher(
+                    None,
+                    normalized_old,
+                    normalized_candidate,
+                ).ratio()
+                candidates.append((score, start, end, candidate))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    best_score, best_start, best_end, best_text = candidates[0]
+
+    # Several candidate windows can describe the same source neighborhood because we
+    # intentionally vary start/length by a couple of lines. Treat those as one match
+    # and compare the best score only against materially different locations.
+    neighborhood = max(2, old_line_count // 2)
+    competing_scores = [
+        score
+        for score, start, end, _ in candidates[1:]
+        if abs(start - best_start) >= neighborhood
+        and (end <= best_start or start >= best_end)
+    ]
+    second_score = max(competing_scores, default=0.0)
+
+    # Short anchors are easy to match accidentally, so only permit normalized-exact
+    # rebasing for them. Longer blocks may tolerate a tiny amount of source drift.
+    effective_threshold = 1.0 if len(normalized_old) < 80 else max(0.0, min(1.0, threshold))
+    effective_margin = max(0.0, min(1.0, margin))
+    if best_score < effective_threshold:
+        return None
+    if competing_scores and (best_score - second_score) < effective_margin:
+        return None
+
+    return best_text, best_score
+
+
+def _resolve_patch_anchor(
+    current: str,
+    old: str,
+    *,
+    path: str,
+    cfg: CodingAgentSettings,
+) -> tuple[str, bool, float]:
+    if not old:
+        raise ValueError(f"Patch operation for {path} requires a non-empty anchor.")
+
+    exact_count = current.count(old)
+    if exact_count == 1:
+        return old, False, 1.0
+    if exact_count > 1:
+        raise ValueError(
+            f"Patch anchor occurs {exact_count} times in {path}; refusing ambiguous edit."
+        )
+
+    rebased = _find_rebased_anchor(
+        current,
+        old,
+        threshold=_PATCH_ANCHOR_SIMILARITY_THRESHOLD,
+        margin=_PATCH_ANCHOR_SIMILARITY_MARGIN,
+    )
+    if rebased is None:
+        raise ValueError(
+            f"Could not find exact old text or a unique high-confidence rebase in {path}"
+        )
+
+    matched, score = rebased
+    return matched, True, score
+
+
 def _stage_unit_edits(
     *,
     repo_root: Path,
@@ -988,6 +1208,9 @@ def _stage_unit_edits(
         effective_operation = edit.operation
         path_exists = path in known_exists
 
+        anchor_rebased = False
+        anchor_score = 1.0
+
         if edit.operation == "create":
             if edit.old.strip():
                 raise ValueError(
@@ -1009,13 +1232,17 @@ def _stage_unit_edits(
         elif edit.operation == "replace":
             if not path_exists:
                 raise FileNotFoundError(path)
-            if not edit.old:
-                raise ValueError(
-                    f"Replace operation for {path} requires non-empty old text."
-                )
-            after = apply_exact_replace(before, edit.old, edit.new, path=path)
+            anchor, anchor_rebased, anchor_score = _resolve_patch_anchor(
+                before,
+                edit.old,
+                path=path,
+                cfg=cfg,
+            )
+            after = apply_exact_replace(before, anchor, edit.new, path=path)
 
         elif edit.operation == "full_file_replace":
+            anchor_rebased = False
+            anchor_score = 1.0
             if not path_exists:
                 raise FileNotFoundError(path)
             after = edit.new
@@ -1023,18 +1250,22 @@ def _stage_unit_edits(
         elif edit.operation in {"insert_after", "insert_before"}:
             if not path_exists:
                 raise FileNotFoundError(path)
-            if not edit.old:
-                raise ValueError(
-                    f"{edit.operation} for {path} requires a non-empty anchor."
-                )
-            replacement = (
-                edit.old + edit.new
-                if edit.operation == "insert_after"
-                else edit.new + edit.old
+            anchor, anchor_rebased, anchor_score = _resolve_patch_anchor(
+                before,
+                edit.old,
+                path=path,
+                cfg=cfg,
             )
-            after = apply_exact_replace(before, edit.old, replacement, path=path)
+            replacement = (
+                anchor + edit.new
+                if edit.operation == "insert_after"
+                else edit.new + anchor
+            )
+            after = apply_exact_replace(before, anchor, replacement, path=path)
 
         elif edit.operation == "append":
+            anchor_rebased = False
+            anchor_score = 1.0
             if not path_exists:
                 raise FileNotFoundError(path)
             after = before + edit.new
@@ -1049,6 +1280,8 @@ def _stage_unit_edits(
             "operation": effective_operation,
             "requested_operation": edit.operation,
             "reason": edit.reason,
+            "anchor_rebased": "true" if anchor_rebased else "false",
+            "anchor_similarity": f"{anchor_score:.4f}",
         }
 
     return originals, original_exists, staged, metadata, dedupe(intended_paths)
@@ -1494,6 +1727,8 @@ def reconcile_subtask_patches_node(
                         "path": path,
                         "operation": meta["operation"],
                         "requested_operation": meta["requested_operation"],
+                        "anchor_rebased": meta.get("anchor_rebased") == "true",
+                        "anchor_similarity": float(meta.get("anchor_similarity", "1.0")),
                         "status": "modified" if original_exists.get(path, False) else "added",
                         "reason": meta["reason"],
                         "write_result": result_text,

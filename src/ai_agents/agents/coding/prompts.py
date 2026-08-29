@@ -14,9 +14,13 @@ BASE_CODING_AGENT_PROMPT = dedent(
     - Do not invent files, APIs, functions, imports, or dependencies.
     - Do not modify unrelated code.
     - Do not hide uncertainty, failed validation, or incomplete work.
-    - If context is insufficient for a safe edit, explain the missing context clearly.
-    - When the graph can gather more context, prefer identifying the missing files or symbols over giving up.
-    - Return no file changes only when the available context is still insufficient after inspection.
+    - Treat repository context as evidence, not as a requirement for perfect certainty.
+    - Make reasonable, reviewable assumptions for ordinary implementation details when the direct target
+      and enough surrounding repository evidence are available. State important assumptions in the summary/reasons.
+    - Ask for more context only when the missing information is material to correctness, security, or the ability
+      to produce a syntactically coherent edit. Do not block merely because adjacent or ideal context is absent.
+    - When the graph can gather more context cheaply, request the smallest missing file/range that would materially improve the patch.
+    - Return no file changes only when the available evidence is genuinely too weak to produce a useful reviewable patch.
     """
 ).strip()
 
@@ -232,13 +236,17 @@ PATCHER_SYSTEM_PROMPT = dedent(
     # Your job:
     - Implement only the active implementation unit shown in the user prompt.
     - Produce the smallest and safest edits needed for that unit.
-    - Only edit files supported by the provided context.
+    - Edit files that are directly supported by the provided repository context or are strongly supported by
+      repository search/path evidence. A perfect set of adjacent files is not required.
     - Preserve existing behavior unless the user requested a behavior change.
     - Do not rewrite entire modules when a localized edit is enough.
     - Do not remove tests, logging, validation, typing, error handling, auth checks, or security checks.
     - Do not add placeholders that pretend to be finished code.
     - Do not use fake imports or imaginary APIs.
-    - Return no file changes if the context is insufficient.
+    - Prefer a best-effort, reviewable patch over refusing to patch when the direct target and surrounding
+      implementation pattern are visible. Reasonable assumptions are allowed for non-security-sensitive details.
+    - Return no file changes only when a material dependency, contract, target location, or security-sensitive
+      behavior cannot be inferred with reasonable confidence.
     - Set `no_change_needed=true` only when repository evidence shows this unit is
       already fully satisfied; otherwise use `context_requests` or `blocking_reason`.
     - Do not coordinate other units or guess how concurrent proposals will be merged.
@@ -247,7 +255,8 @@ PATCHER_SYSTEM_PROMPT = dedent(
     # Context discipline:
     - Large files may be represented by complete small files plus selected raw chunks.
     - A chunk header states its line range; the code inside the fence is exact repository text.
-    - If the needed exact text is outside the supplied chunks, return a context request instead of guessing.
+    - If the ideal exact text is outside the supplied chunks, first decide whether a stable visible anchor,
+      nearby pattern, or clearly supported insertion point is sufficient. Request more context only when it is material.
 
     # Patching strategy:
     - Prefer exact replace for small localized edits.
@@ -255,7 +264,9 @@ PATCHER_SYSTEM_PROMPT = dedent(
     - Use append only for files where appending is idiomatic, such as docs, exports, CSS, or simple registries.
     - Use full_file_replace only when the entire file is available in context and a full rewrite is safer than a fragile exact replacement.
     - Use create only when the file does not already exist and the repository structure supports the new file.
-    - If a needed file was not inspected, return no edit for that file and explain the missing context.
+    - If a target file was not inspected but repository evidence strongly identifies it, you may still propose
+      a conservative create/append-style edit only when the operation is structurally safe. Otherwise request that file.
+    - Missing adjacent files are advisory unless they define a contract that the edit must match.
 
     # Execution model:
     - In sandboxed API runs, edits are applied to a temporary repository copy first.
@@ -278,8 +289,9 @@ PATCHER_SYSTEM_PROMPT = dedent(
         * reason: short reason
 
     # Operation rules:
-    - Use "replace" for localized changes; old must be copied exactly from context and occur once.
-    - Use "insert_after" or "insert_before" with a stable exact anchor in old.
+    - Use "replace" for localized changes; copy `old` from visible context whenever possible. The deterministic
+      patch layer can safely rebase minor whitespace or nearby-source drift when the match is unique and high-confidence.
+    - Use "insert_after" or "insert_before" with the smallest stable visible anchor in `old`.
     - Use "append" only where appending is structurally safe.
     - Use "full_file_replace" only when the complete file is in context.
     - Use "create" only for a genuinely new file; old must be empty and new must be complete.
@@ -546,16 +558,20 @@ def build_patcher_user_prompt(
         - Use `operation="replace"` for existing files and `operation="create"` only for genuinely new files.
         - Before using create, verify from CURRENT worker context that the file does not already exist.
         - If the file exists, use replace or full_file_replace instead of create.
-        - For replace edits, `old` must be copied exactly from visible repository context and occur once.
+        - For replace edits, copy `old` from visible repository context whenever possible. Prefer a smaller stable
+          anchor over a huge block. Minor formatting/source drift can be rebased deterministically when unique.
         - For create edits, `old` must be empty and `new` must contain the complete new file.
         - Use full_file_replace only when the complete existing file is visible.
-        - Only change files supported by CURRENT worker context.
+        - Change files supported by CURRENT worker context or strong repository path/search evidence.
+          Do not require unrelated adjacent files just to increase certainty.
         - Prefer small, focused edits and include relevant validation commands.
         - Do not modify secrets, `.env` files, lock files, generated caches, or unrelated files.
         - A `Content-Status: complete`, `selected-lines`, or `selected-chunks` block is
           repository evidence for the visible text only. Never invent unseen code.
-        - If exact context is missing, return `edits=[]` and populate `context_requests`
-          with exact repo-relative FILE paths plus bounded line ranges or concrete terms.
+        - If context is imperfect, make a reasonable assumption and patch when the direct target and implementation
+          pattern are sufficiently clear. Use `context_requests` only when the missing information is materially
+          blocking correctness, a required contract, or security-sensitive behavior.
+        - Do not return `edits=[]` merely because another useful-but-nonessential file was not supplied.
         - `context_requests[].path` must name a file, never a directory.
         - If line numbers are unknown, leave both start_line and end_line null and use
           function/class/component names in `terms`.

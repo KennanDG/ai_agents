@@ -669,9 +669,16 @@ def _is_non_implementation_unit(unit: dict[str, Any]) -> bool:
     unit_id = str(unit.get("id", "")).strip().lower().replace("-", "_")
     objective = str(unit.get("objective", "")).strip().lower()
 
-    if unit_id.startswith(("inspect_", "inspection_", "discover_", "understand_")):
+    if unit_id.startswith((
+        "inspect_", "inspection_", "discover_", "understand_", "explore_",
+        "context_", "gather_context", "repo_context", "repository_context",
+    )):
         return True
-    if objective.startswith(("inspect and understand ", "inspect the current ", "discover the current ")):
+    if objective.startswith((
+        "inspect and understand ", "inspect the current ", "inspect attached ",
+        "discover the current ", "explore the repository ", "gather context ",
+        "understand the current ",
+    )):
         return True
 
     validation_meta_markers = (

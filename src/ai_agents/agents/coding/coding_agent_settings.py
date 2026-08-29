@@ -140,7 +140,7 @@ class CodingAgentSettings:
     # max_subtask_workers.
     max_subtask_workers: int = _env_int("CODING_AGENT_MAX_SUBTASK_WORKERS", 3)
     max_context_workers: int = _env_int("CODING_AGENT_MAX_CONTEXT_WORKERS", 3)
-    max_worker_files: int = _env_int("CODING_AGENT_MAX_WORKER_FILES", 4)
+    max_worker_files: int = _env_int("CODING_AGENT_MAX_WORKER_FILES", 6)
     max_implementation_units: int = _env_int(
         "CODING_AGENT_MAX_IMPLEMENTATION_UNITS", 12
     )
