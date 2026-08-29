@@ -5,6 +5,7 @@ export type VoiceAgentTurnResponse = {
     session_id: string;
     transcript: string;
     reply_text: string;
+    markdown_response: string;
     status: "clarifying" | "ready" | "error";
     coding_request?: string | null;
     audio_mime_type?: string | null;

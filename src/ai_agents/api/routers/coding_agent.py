@@ -33,6 +33,7 @@ from ai_agents.api.api_schemas import (
     RepositoryFileResponse,
     RepositoryTreeEntry,
     RepositoryTreeResponse,
+    format_agent_markdown,
 )
 from ai_agents.agents.coding.sandbox import (
     CodingSandbox,
@@ -647,10 +648,20 @@ def _public_result(state: dict[str, Any], thread_id: str) -> CodingAgentRunResul
         or 0
     )
 
+    raw_report = state.get("report")
+    report_value = raw_report.strip() if isinstance(raw_report, str) else None
+    markdown_response = format_agent_markdown(report_value)
+
+    if markdown_response is None and report_value:
+        # The raw report cleaned down to nothing (all logs/tool-call/JSON/debug
+        # artifacts). Surface no report instead of leaking internals to the frontend.
+        report_value = None
+
     return CodingAgentRunResult(
         thread_id=thread_id,
         status=str(state.get("status", "unknown")),
-        report=state.get("report"),
+        report=report_value,
+        markdown_response=markdown_response,
         selected_skill=selected_skill,
         selected_skills=selected_skills,
         task_mode=state.get("task_mode"),
@@ -693,7 +704,10 @@ def _public_result(state: dict[str, Any], thread_id: str) -> CodingAgentRunResul
         blocking_validation_failed=bool(state.get("blocking_validation_failed", False)),
         advisory_validation_failed=bool(state.get("advisory_validation_failed", False)),
         applied_files=list(state.get("applied_files") or []),
-        raw=state,
+        # Do not forward the raw graph state: it contains internal log lines,
+        # tool-call traces, and debug artifacts. Structured execution details are
+        # available through the dedicated fields above.
+        raw={},
     )
 
 

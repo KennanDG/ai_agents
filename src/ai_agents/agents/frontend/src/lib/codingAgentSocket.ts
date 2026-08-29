@@ -89,6 +89,7 @@ export type CodingAgentRunResult = {
   status: string;
 
   report?: string | null;
+  markdown_response?: string | null;
   selected_skill?: string | null;
   selected_skills: string[];
   task_mode?: CodingAgentTaskMode | null;

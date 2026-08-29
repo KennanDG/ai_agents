@@ -13,6 +13,132 @@ from ai_agents.config.constants import (
 )
 
 
+# Response-boundary markdown formatting.
+#
+# Agent runtimes produce rich graph state that includes progress logs, tool-call
+# traces, and debug artifacts. The final answer is formatted here at the
+# HTTP/WebSocket boundary into a clean, concise markdown string so runtime nodes
+# never need to know about frontend presentation rules.
+
+_MARKDOWN_DEBUG_LINE_RES = (
+    # Decorative separators commonly used to delimit internal log sections.
+    re.compile(r"^\s*[=*_\-]{3,}\s*$"),
+    # Stdlib/uvicorn/agent log-level headers (INFO/DEBUG/TRACE and friends).
+    re.compile(r"^\s*(?:info|debug|trace)\b\s*:", re.IGNORECASE),
+    # Timestamped log lines.
+    re.compile(r"^\s*\[?\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?", re.IGNORECASE),
+    # Tool-call invocation traces emitted by the agent runtime.
+    re.compile(
+        r"^\s*(?:tool[_ ]call|call[_ ]id|calling tool|invoking tool)\b",
+        re.IGNORECASE,
+    ),
+    # Standalone single-line JSON tool-call blobs (also tolerate a trailing
+    # comma/semicolon left behind by streamed log fragments).
+    re.compile(r"^\s*\{.*\}[,;]?\s*$"),
+    re.compile(r"^\s*\[.*\][,;]?\s*$"),
+)
+
+_DEBUG_CONFIG_FENCE_LANGUAGES = {"json", "yaml", "toml", "xml"}
+
+_MARKDOWN_MAX_RESPONSE_CHARS = 30_000
+
+
+def _is_markdown_debug_artifact_line(stripped_line: str) -> bool:
+    """Return True when a line looks like a log/tool-call/debug artifact."""
+    return any(pattern.match(stripped_line) for pattern in _MARKDOWN_DEBUG_LINE_RES)
+
+
+def format_agent_markdown(
+    raw_output: str | None,
+    *,
+    max_chars: int = _MARKDOWN_MAX_RESPONSE_CHARS,
+) -> str | None:
+    """Convert raw agent output into a clean, concise markdown string.
+
+    Applied at the HTTP/WebSocket response boundary and deliberately
+    conservative:
+
+    - Fenced JSON/YAML/TOML/XML dumps (typical tool-call payloads) are dropped.
+    - Lines that look like log headers, timestamps, or tool-call traces are removed.
+    - Content inside real code fences (Python, diffs, etc.) is preserved.
+    - Runs of blank lines are collapsed so the result stays concise.
+
+    Returns ``None`` when there is nothing meaningful to render.
+    """
+    if not isinstance(raw_output, str) or not raw_output.strip():
+        return None
+
+    output_lines: list[str] = []
+    in_code_fence = False
+    skipping_debug_fence = False
+    consecutive_blank_lines = 0
+    json_block_depth = 0
+
+    for raw_line in raw_output.splitlines():
+        stripped_line = raw_line.strip()
+
+        if stripped_line.startswith("```"):
+            if not in_code_fence:
+                in_code_fence = True
+                fence_language = stripped_line[3:].strip().lower()
+                skipping_debug_fence = fence_language in _DEBUG_CONFIG_FENCE_LANGUAGES
+                if skipping_debug_fence:
+                    continue
+                output_lines.append(raw_line)
+            else:
+                was_skipping_debug_fence = skipping_debug_fence
+                in_code_fence = False
+                skipping_debug_fence = False
+                if not was_skipping_debug_fence:
+                    output_lines.append(raw_line)
+            consecutive_blank_lines = 0
+            continue
+
+        if in_code_fence:
+            if not skipping_debug_fence:
+                output_lines.append(raw_line)
+            consecutive_blank_lines = 0
+            continue
+
+        # Skip multi-line JSON object blobs (typical tool-call payloads) that are
+        # not wrapped in a code fence.
+        if json_block_depth > 0:
+            json_block_depth += stripped_line.count("{") - stripped_line.count("}")
+            if json_block_depth <= 0:
+                json_block_depth = 0
+            continue
+
+        if stripped_line.startswith("{"):
+            json_block_depth = stripped_line.count("{") - stripped_line.count("}")
+            if json_block_depth > 0:
+                continue
+
+        if _is_markdown_debug_artifact_line(stripped_line):
+            continue
+
+        if not stripped_line:
+            consecutive_blank_lines += 1
+            if consecutive_blank_lines > 1:
+                continue
+        else:
+            consecutive_blank_lines = 0
+
+        output_lines.append(raw_line)
+
+    if in_code_fence and not skipping_debug_fence:
+        # Keep the markdown well-formed when the agent leaves a fence open.
+        output_lines.append("```")
+
+    formatted = "\n".join(output_lines).strip()
+    if not formatted:
+        return None
+
+    if len(formatted) > max_chars:
+        formatted = f"{formatted[:max_chars].rstrip()}\n\n…(truncated)"
+
+    return formatted
+
+
 
 class HealthResponse(BaseModel):
     status: str = "ok"
@@ -78,6 +204,11 @@ class CodingAgentRunResult(BaseModel):
     status: str = "unknown"
 
     report: str | None = None
+
+    # Clean, concise markdown string derived from the agent's final output at the
+    # response boundary. ``report`` remains populated for legacy consumers.
+    markdown_response: str | None = None
+
     selected_skill: str | None = None
     selected_skills: list[str] = Field(default_factory=list)
     task_mode: Literal["simple", "standard", "parallel"] | None = None
@@ -180,6 +311,11 @@ class VoiceAgentTurnResponse(BaseModel):
     session_id: str
     transcript: str
     reply_text: str
+
+    # Clean, concise markdown version of the assistant reply, formatted at the
+    # HTTP response boundary. ``reply_text`` remains populated for legacy consumers.
+    markdown_response: str | None = None
+
     status: Literal["clarifying", "ready", "error"] = "clarifying"
 
     # When ready, frontend should hand this to the existing coding agent.

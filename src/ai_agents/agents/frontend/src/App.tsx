@@ -283,6 +283,7 @@ const mergeResult = (state: AgentRunState, result: CodingAgentRunResult): Divide
     advisoryValidationFailed: Boolean(result.advisory_validation_failed),
     appliedFiles: result.applied_files ?? state.appliedFiles,
     report: result.report,
+    markdown_response: result.markdown_response,
     errors: result.errors ?? state.errors,
   };
 }
@@ -369,6 +370,7 @@ const runReducer = (state: AgentRunState, event: RunAction): DivideConquerRunSta
         routeReason: typeof payload.route_reason === "string" ? payload.route_reason : state.routeReason,
         patchSummary: typeof payload.patch_summary === "string" ? payload.patch_summary : state.patchSummary,
         report: typeof payload.report === "string" ? payload.report : state.report,
+        markdown_response: typeof payload.markdown_response === "string" ? payload.markdown_response : state.markdown_response,
         completedNodes: [...state.completedNodes, event.node],
         logs: [...state.logs, `[node] completed ${event.node}`],
       };
@@ -988,7 +990,7 @@ const App = () => {
         if (event.type === "run.completed" && event.payload.report) {
           setMessages((current) => [
             ...current,
-            { id: crypto.randomUUID(), role: "agent", body: event.payload.report ?? "Run completed.", time: nowLabel() },
+            { id: crypto.randomUUID(), role: "agent", body: event.payload.markdown_response ?? "Run completed.", time: nowLabel() },
           ]);
         }
 

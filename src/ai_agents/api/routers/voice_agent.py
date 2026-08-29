@@ -8,7 +8,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from ai_agents.agents.coding.skill_registry import SkillRegistry
 from ai_agents.agents.voice.service import VoiceAgentService
-from ai_agents.api.api_schemas import VoiceAgentTurnResponse
+from ai_agents.api.api_schemas import VoiceAgentTurnResponse, format_agent_markdown
 from ai_agents.config.constants import (
     MAX_VOICE_ATTACHMENTS,
     MAX_VOICE_ATTACHMENT_CONTENT_CHARS,
@@ -209,6 +209,20 @@ async def voice_turn(
             active_path=active_path,
             allow_write=allow_write,
         )
+
+        # Format the agent's final reply into clean, concise markdown at the HTTP
+        # response boundary. Raw log/JSON/debug artifacts are never forwarded.
+        raw_reply = result.get("reply_text")
+        reply_value = raw_reply.strip() if isinstance(raw_reply, str) else ""
+        markdown_response = format_agent_markdown(reply_value)
+
+        if markdown_response is not None:
+            result["reply_text"] = markdown_response
+        else:
+            # Nothing readable survived cleanup (e.g., the reply was a raw
+            # JSON/tool-call blob or empty). Do not forward raw artifacts.
+            result["reply_text"] = ""
+        result["markdown_response"] = markdown_response
 
         return VoiceAgentTurnResponse(**result)
 
