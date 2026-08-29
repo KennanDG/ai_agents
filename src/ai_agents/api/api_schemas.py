@@ -13,6 +13,132 @@ from ai_agents.config.constants import (
 )
 
 
+# Response-boundary markdown formatting.
+#
+# Agent runtimes produce rich graph state that includes progress logs, tool-call
+# traces, and debug artifacts. The final answer is formatted here at the
+# HTTP/WebSocket boundary into a clean, concise markdown string so runtime nodes
+# never need to know about frontend presentation rules.
+
+_MARKDOWN_DEBUG_LINE_RES = (
+    # Decorative separators commonly used to delimit internal log sections.
+    re.compile(r"^\s*[=*_\-]{3,}\s*$"),
+    # Stdlib/uvicorn/agent log-level headers (INFO/DEBUG/TRACE and friends).
+    re.compile(r"^\s*(?:info|debug|trace)\b\s*:", re.IGNORECASE),
+    # Timestamped log lines.
+    re.compile(r"^\s*\[?\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?", re.IGNORECASE),
+    # Tool-call invocation traces emitted by the agent runtime.
+    re.compile(
+        r"^\s*(?:tool[_ ]call|call[_ ]id|calling tool|invoking tool)\b",
+        re.IGNORECASE,
+    ),
+    # Standalone single-line JSON tool-call blobs (also tolerate a trailing
+    # comma/semicolon left behind by streamed log fragments).
+    re.compile(r"^\s*\{.*\}[,;]?\s*$"),
+    re.compile(r"^\s*\[.*\][,;]?\s*$"),
+)
+
+_DEBUG_CONFIG_FENCE_LANGUAGES = {"json", "yaml", "toml", "xml"}
+
+_MARKDOWN_MAX_RESPONSE_CHARS = 30_000
+
+
+def _is_markdown_debug_artifact_line(stripped_line: str) -> bool:
+    """Return True when a line looks like a log/tool-call/debug artifact."""
+    return any(pattern.match(stripped_line) for pattern in _MARKDOWN_DEBUG_LINE_RES)
+
+
+def format_agent_markdown(
+    raw_output: str | None,
+    *,
+    max_chars: int = _MARKDOWN_MAX_RESPONSE_CHARS,
+) -> str | None:
+    """Convert raw agent output into a clean, concise markdown string.
+
+    Applied at the HTTP/WebSocket response boundary and deliberately
+    conservative:
+
+    - Fenced JSON/YAML/TOML/XML dumps (typical tool-call payloads) are dropped.
+    - Lines that look like log headers, timestamps, or tool-call traces are removed.
+    - Content inside real code fences (Python, diffs, etc.) is preserved.
+    - Runs of blank lines are collapsed so the result stays concise.
+
+    Returns ``None`` when there is nothing meaningful to render.
+    """
+    if not isinstance(raw_output, str) or not raw_output.strip():
+        return None
+
+    output_lines: list[str] = []
+    in_code_fence = False
+    skipping_debug_fence = False
+    consecutive_blank_lines = 0
+    json_block_depth = 0
+
+    for raw_line in raw_output.splitlines():
+        stripped_line = raw_line.strip()
+
+        if stripped_line.startswith("```"):
+            if not in_code_fence:
+                in_code_fence = True
+                fence_language = stripped_line[3:].strip().lower()
+                skipping_debug_fence = fence_language in _DEBUG_CONFIG_FENCE_LANGUAGES
+                if skipping_debug_fence:
+                    continue
+                output_lines.append(raw_line)
+            else:
+                was_skipping_debug_fence = skipping_debug_fence
+                in_code_fence = False
+                skipping_debug_fence = False
+                if not was_skipping_debug_fence:
+                    output_lines.append(raw_line)
+            consecutive_blank_lines = 0
+            continue
+
+        if in_code_fence:
+            if not skipping_debug_fence:
+                output_lines.append(raw_line)
+            consecutive_blank_lines = 0
+            continue
+
+        # Skip multi-line JSON object blobs (typical tool-call payloads) that are
+        # not wrapped in a code fence.
+        if json_block_depth > 0:
+            json_block_depth += stripped_line.count("{") - stripped_line.count("}")
+            if json_block_depth <= 0:
+                json_block_depth = 0
+            continue
+
+        if stripped_line.startswith("{"):
+            json_block_depth = stripped_line.count("{") - stripped_line.count("}")
+            if json_block_depth > 0:
+                continue
+
+        if _is_markdown_debug_artifact_line(stripped_line):
+            continue
+
+        if not stripped_line:
+            consecutive_blank_lines += 1
+            if consecutive_blank_lines > 1:
+                continue
+        else:
+            consecutive_blank_lines = 0
+
+        output_lines.append(raw_line)
+
+    if in_code_fence and not skipping_debug_fence:
+        # Keep the markdown well-formed when the agent leaves a fence open.
+        output_lines.append("```")
+
+    formatted = "\n".join(output_lines).strip()
+    if not formatted:
+        return None
+
+    if len(formatted) > max_chars:
+        formatted = f"{formatted[:max_chars].rstrip()}\n\n…(truncated)"
+
+    return formatted
+
+
 
 class HealthResponse(BaseModel):
     status: str = "ok"
@@ -52,9 +178,16 @@ class CodingAgentRunRequest(BaseModel):
     )
     memory_enabled: bool | None = None
     setup_memory: bool | None = None
-    max_iterations: int | None = Field(default=3, ge=1, le=8)
+
+    # Divide-and-conquer implementation loop. ``max_iterations`` remains as a
+    # compatibility alias for older frontend/backend builds.
+    max_implementation_iterations: int | None = Field(default=None, ge=1, le=8)
+    max_iterations: int | None = Field(default=None, ge=1, le=8)
 
     # Optional per-run overrides. Defaults come from the saved admin profile.
+    # ``subagent_count`` is retained as a compatibility alias while the UI and
+    # runtime migrate to the more accurate subtask-worker terminology.
+    subtask_worker_count: int | None = Field(default=None, ge=1, le=6)
     subagent_count: int | None = Field(default=None, ge=1, le=6)
     route_max_tokens: int | None = Field(default=None, ge=256, le=2_000)
     planner_max_tokens: int | None = Field(default=None, ge=512, le=6_000)
@@ -71,11 +204,31 @@ class CodingAgentRunResult(BaseModel):
     status: str = "unknown"
 
     report: str | None = None
+
+    # Clean, concise markdown string derived from the agent's final output at the
+    # response boundary. ``report`` remains populated for legacy consumers.
+    markdown_response: str | None = None
+
     selected_skill: str | None = None
     selected_skills: list[str] = Field(default_factory=list)
     task_mode: Literal["simple", "standard", "parallel"] | None = None
+
+    # Legacy planning/context aliases retained for compatibility.
     subtasks: List[Dict[str, Any]] = Field(default_factory=list)
     context_worker_count: int = 0
+
+    # Divide-and-conquer execution state. These fields make implementation-unit
+    # progress deterministic and observable without forcing clients to inspect
+    # the untyped ``raw`` graph state.
+    implementation_units: List[Dict[str, Any]] = Field(default_factory=list)
+    completion_ledger: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    implementation_generation: int = 0
+    implementation_iteration: int = 0
+    max_implementation_iterations: int = 0
+    subtask_worker_count: int = 0
+    subtask_worker_results: List[Dict[str, Any]] = Field(default_factory=list)
+    runtime_settings: Dict[str, Any] = Field(default_factory=dict)
+
     route_confidence: float | None = None
     route_reason: str | None = None
 
@@ -89,7 +242,7 @@ class CodingAgentRunResult(BaseModel):
     validation_results: List[Dict[str, Any]] = Field(default_factory=list)
 
     approval_required: bool = False
-    approval_status: str = "not_required"
+    approval_status: Literal["not_required", "pending", "applied", "rejected"] = "not_required"
     blocking_validation_failed: bool = False
     advisory_validation_failed: bool = False
     applied_files: list[str] = Field(default_factory=list)
@@ -158,6 +311,11 @@ class VoiceAgentTurnResponse(BaseModel):
     session_id: str
     transcript: str
     reply_text: str
+
+    # Clean, concise markdown version of the assistant reply, formatted at the
+    # HTTP response boundary. ``reply_text`` remains populated for legacy consumers.
+    markdown_response: str | None = None
+
     status: Literal["clarifying", "ready", "error"] = "clarifying"
 
     # When ready, frontend should hand this to the existing coding agent.
@@ -358,15 +516,28 @@ class AgentConfigurationUpdate(BaseModel):
     voice_tts_voice: str = Field(min_length=1, max_length=100)
     voice_tts_enabled: bool = True
 
-    coding_subagent_count: int | None = Field(default=None, ge=1, le=6)
+    coding_max_subtask_workers: int | None = Field(default=None, ge=1, le=6)
+    coding_max_implementation_units: int | None = Field(default=None, ge=1, le=12)
+    coding_max_patch_retries_per_unit: int | None = Field(default=None, ge=0, le=4)
+    coding_max_implementation_iterations: int | None = Field(default=None, ge=1, le=8)
     coding_route_max_tokens: int | None = Field(default=None, ge=256, le=2_000)
     coding_planner_max_tokens: int | None = Field(default=None, ge=512, le=6_000)
     coding_repo_navigation_max_tokens: int | None = Field(default=None, ge=512, le=4_000)
     coding_simple_patch_max_tokens: int | None = Field(default=None, ge=2_000, le=16_000)
-    coding_patch_max_tokens: int | None = Field(default=None, ge=4_000, le=32_000)
-    coding_progress_max_tokens: int | None = Field(default=None, ge=512, le=4_000)
+    coding_reconciliation_max_tokens: int | None = Field(default=None, ge=2_000, le=32_000)
+    coding_reconciliation_context_max_tokens: int | None = Field(default=None, ge=4_000, le=64_000)
+    coding_max_reasoning_reconciliations: int | None = Field(default=None, ge=0, le=3)
+    coding_context_prompt_base_tokens: int | None = Field(default=None, ge=4_000, le=64_000)
+    coding_max_context_prompt_tokens: int | None = Field(default=None, ge=8_000, le=128_000)
+    coding_context_prompt_reserve_tokens: int | None = Field(default=None, ge=2_000, le=64_000)
+    coding_context_window_safety_tokens: int | None = Field(default=None, ge=1_000, le=32_000)
+    coding_model_context_window_tokens: int | None = Field(default=None, ge=16_000, le=2_000_000)
+    reasoning_model_context_window_tokens: int | None = Field(default=None, ge=16_000, le=2_000_000)
+    coding_model_max_output_tokens: int | None = Field(default=None, ge=2_000, le=128_000)
+    reasoning_model_max_output_tokens: int | None = Field(default=None, ge=2_000, le=128_000)
 
     secrets: dict[ChatProvider, str] = Field(default_factory=dict)
+    github_token: str | None = Field(default=None, max_length=4_096)
 
     @field_validator(
         "coding_model",
@@ -376,9 +547,12 @@ class AgentConfigurationUpdate(BaseModel):
         "voice_stt_model",
         "voice_tts_model",
         "voice_tts_voice",
+        "github_token",
     )
     @classmethod
-    def normalize_text(cls, value: str) -> str:
+    def normalize_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         return value.strip()
 
 

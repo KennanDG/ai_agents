@@ -46,23 +46,44 @@ export type AgentConfiguration = {
   voice_tts_model: string;
   voice_tts_voice: string;
   voice_tts_enabled: boolean;
-  coding_subagent_count: number;
+
+  coding_max_subtask_workers: number;
+  coding_max_implementation_units: number;
+  coding_max_patch_retries_per_unit: number;
+  coding_max_implementation_iterations: number;
   coding_route_max_tokens: number;
   coding_planner_max_tokens: number;
   coding_repo_navigation_max_tokens: number;
   coding_simple_patch_max_tokens: number;
-  coding_patch_max_tokens: number;
-  coding_progress_max_tokens: number;
+  coding_reconciliation_max_tokens: number;
+  coding_reconciliation_context_max_tokens: number;
+  coding_max_reasoning_reconciliations: number;
+  coding_context_prompt_base_tokens: number;
+  coding_max_context_prompt_tokens: number;
+  coding_context_prompt_reserve_tokens: number;
+  coding_context_window_safety_tokens: number;
+  coding_model_context_window_tokens: number;
+  reasoning_model_context_window_tokens: number;
+  coding_model_max_output_tokens: number;
+  reasoning_model_max_output_tokens: number;
+
   secrets_configured: Record<ChatProvider, boolean>;
   secrets_persistence: "session_only";
+  github_token_configured: boolean;
+  github_token_persistence: "session_only";
 };
 
 export type UpdateAgentConfiguration = Omit<
   AgentConfiguration,
-  "secrets_configured" | "secrets_persistence"
+  | "secrets_configured"
+  | "secrets_persistence"
+  | "github_token_configured"
+  | "github_token_persistence"
 > & {
   secrets?: Partial<Record<ChatProvider, string>>;
+  github_token?: string;
 };
+
 
 export type ModelCatalogResponse = {
   provider: ChatProvider;

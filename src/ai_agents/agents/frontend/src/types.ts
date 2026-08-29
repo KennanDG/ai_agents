@@ -63,6 +63,7 @@ export interface AgentRunState {
   advisoryValidationFailed: boolean;
   appliedFiles: string[];
   report?: string | null;
+  markdown_response?: string | null;
   errors: string[];
   logs: string[];
 }

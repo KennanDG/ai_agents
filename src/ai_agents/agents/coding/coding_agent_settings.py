@@ -25,6 +25,16 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
 def _env_csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     value = os.getenv(name)
     if not value:
@@ -78,20 +88,68 @@ class CodingAgentSettings:
     context_chunk_overlap_chars: int = _env_int(
         "CODING_AGENT_CONTEXT_CHUNK_OVERLAP_CHARS", 1_500
     )
-    # Patch-context budgeting is adaptive. Most runs stay near the 120k baseline,
-    # while broad multi-file runs can expand up to the hard ceiling. Keeping the
-    # ceiling separate prevents a single large task from creating an unbounded prompt.
-    context_prompt_base_chars: int = _env_int(
-        "CODING_AGENT_CONTEXT_PROMPT_BASE_CHARS", 120_000
+    # LLM prompt budgets are expressed in tokens. Character limits above remain
+    # storage/read safeguards only. Each worker clamps this configured budget to the
+    # selected model slot's context window after reserving output and safety tokens.
+    context_prompt_base_tokens: int = _env_int(
+        "CODING_AGENT_CONTEXT_PROMPT_BASE_TOKENS", 16_000
     )
-    max_context_prompt_chars: int = _env_int(
-        "CODING_AGENT_MAX_CONTEXT_PROMPT_CHARS", 220_000
+    max_context_prompt_tokens: int = _env_int(
+        "CODING_AGENT_MAX_CONTEXT_PROMPT_TOKENS", 32_000
     )
-    context_prompt_reserve_chars: int = _env_int(
-        "CODING_AGENT_CONTEXT_PROMPT_RESERVE_CHARS", 32_000
+    context_prompt_reserve_tokens: int = _env_int(
+        "CODING_AGENT_CONTEXT_PROMPT_RESERVE_TOKENS", 10_000
     )
-    max_context_workers: int = _env_int("CODING_AGENT_MAX_CONTEXT_WORKERS", 4)
+    context_window_safety_tokens: int = _env_int(
+        "CODING_AGENT_CONTEXT_WINDOW_SAFETY_TOKENS", 6_000
+    )
+
+    # Context-window fallbacks are slot-specific because the coding and reasoning
+    # models may use different providers/models. Override these when the selected
+    # provider advertises a different window.
+    coding_model_context_window_tokens: int = _env_int(
+        "CODING_AGENT_CODING_CONTEXT_WINDOW_TOKENS", 131_072
+    )
+    reasoning_model_context_window_tokens: int = _env_int(
+        "CODING_AGENT_REASONING_CONTEXT_WINDOW_TOKENS", 131_072
+    )
+
+    coding_model_max_output_tokens: int = _env_int(
+        "CODING_AGENT_CODING_MAX_OUTPUT_TOKENS", 32_000
+    )
+    reasoning_model_max_output_tokens: int = _env_int(
+        "CODING_AGENT_REASONING_MAX_OUTPUT_TOKENS", 32_000
+    )
+
+    # Optional exact provider/model overrides, e.g.
+    # {"groq:openai/gpt-oss-120b": 131072, "deepseek:deepseek-v4-pro": 163840}
+    # This lets the desktop runtime stay model-aware without hardcoding a provider
+    # catalog that can become stale.
+    model_context_window_overrides_json: str = os.getenv(
+        "CODING_AGENT_MODEL_CONTEXT_WINDOW_OVERRIDES_JSON", "{}"
+    )
+    model_max_output_overrides_json: str = os.getenv(
+        "CODING_AGENT_MODEL_MAX_OUTPUT_OVERRIDES_JSON", "{}"
+    )
+
+    # Worker count controls concurrency, not total work decomposition. A plan may
+    # contain more implementation units than active workers; unfinished units are
+    # scheduled in later deterministic batches.
+    # Dedicated implementation-worker concurrency. Keep the legacy context-worker
+    # setting for compatibility with older API payloads/checkpoints, but new code uses
+    # max_subtask_workers.
+    max_subtask_workers: int = _env_int("CODING_AGENT_MAX_SUBTASK_WORKERS", 3)
+    max_context_workers: int = _env_int("CODING_AGENT_MAX_CONTEXT_WORKERS", 3)
     max_worker_files: int = _env_int("CODING_AGENT_MAX_WORKER_FILES", 6)
+    max_implementation_units: int = _env_int(
+        "CODING_AGENT_MAX_IMPLEMENTATION_UNITS", 12
+    )
+    max_patch_retries_per_unit: int = _env_int(
+        "CODING_AGENT_MAX_PATCH_RETRIES_PER_UNIT", 1
+    )
+    max_implementation_iterations: int = _env_int(
+        "CODING_AGENT_MAX_IMPLEMENTATION_ITERATIONS", 2
+    )
     max_attached_files: int = _env_int("CODING_AGENT_MAX_ATTACHED_FILES", 20)
     max_attachment_storage_chars: int = _env_int(
         "CODING_AGENT_MAX_ATTACHMENT_STORAGE_CHARS", 1_000_000
@@ -101,7 +159,9 @@ class CodingAgentSettings:
     )
 
     # Latency controls. Deterministic routing/navigation remove unnecessary LLM
-    # calls; the reasoning model is reserved for the final patch and repair loops.
+    # calls. Implementation workers always use the coding model; the reasoning model
+    # is reserved for one conditional reconciliation/escalation pass when concurrent
+    # proposals conflict.
     fast_path_enabled: bool = _env_bool("CODING_AGENT_FAST_PATH_ENABLED", True)
     llm_skill_routing_enabled: bool = _env_bool(
         "CODING_AGENT_LLM_SKILL_ROUTING_ENABLED", False
@@ -129,7 +189,18 @@ class CodingAgentSettings:
     simple_patch_max_tokens: int = _env_int(
         "CODING_AGENT_SIMPLE_PATCH_MAX_TOKENS", 8_000
     )
+    # Legacy patch_max_tokens remains available for older callers. Worker patches use
+    # simple_patch_max_tokens regardless of task mode.
     patch_max_tokens: int = _env_int("CODING_AGENT_PATCH_MAX_TOKENS", 20_000)
+    reconciliation_max_tokens: int = _env_int(
+        "CODING_AGENT_RECONCILIATION_MAX_TOKENS", 10_000
+    )
+    reconciliation_context_max_tokens: int = _env_int(
+        "CODING_AGENT_RECONCILIATION_CONTEXT_MAX_TOKENS", 24_000
+    )
+    max_reasoning_reconciliations: int = _env_int(
+        "CODING_AGENT_MAX_REASONING_RECONCILIATIONS", 1
+    )
     progress_max_tokens: int = _env_int("CODING_AGENT_PROGRESS_MAX_TOKENS", 1_200)
 
     dry_run: bool = True
@@ -167,7 +238,7 @@ class CodingAgentSettings:
 
     memory_search_limit: int = _env_int(
         "CODING_AGENT_MEMORY_SEARCH_LIMIT",
-        5,
+        3,
     )
 
     # Semantic memory is fully local.
@@ -194,6 +265,95 @@ class CodingAgentSettings:
     memory_index_fields: tuple[str, ...] = _env_csv(
         "CODING_AGENT_MEMORY_INDEX_FIELDS",
         ("text", "request", "summary"),
+    )
+
+    # Memory lifecycle management. Maintenance runs opportunistically when the
+    # persistence context opens, so the desktop app does not need a background
+    # daemon and memory cleanup cannot outlive SQLite connections.
+    memory_maintenance_enabled: bool = _env_bool(
+        "CODING_AGENT_MEMORY_MAINTENANCE_ENABLED",
+        True,
+    )
+    memory_maintenance_interval_hours: int = _env_int(
+        "CODING_AGENT_MEMORY_MAINTENANCE_INTERVAL_HOURS",
+        24,
+    )
+    memory_maintenance_state_path: Path = Path(
+        os.getenv(
+            "CODING_AGENT_MEMORY_MAINTENANCE_STATE",
+            str(_MEMORY_DIR / "maintenance.json"),
+        )
+    ).expanduser()
+
+    # Checkpoints are resumability/debug state, not long-term knowledge. Prune
+    # whole inactive threads through LangGraph's delete_thread API.
+    memory_checkpoint_retention_days: int = _env_int(
+        "CODING_AGENT_MEMORY_CHECKPOINT_RETENTION_DAYS",
+        30,
+    )
+    memory_checkpoint_max_threads: int = _env_int(
+        "CODING_AGENT_MEMORY_CHECKPOINT_MAX_THREADS",
+        100,
+    )
+
+    # Durable outcomes are compact and more valuable than checkpoints, so retain
+    # them longer while bounding each repository namespace. The minimum keep count
+    # prevents a dormant repository from losing all useful memory solely due to age.
+    memory_store_retention_days: int = _env_int(
+        "CODING_AGENT_MEMORY_STORE_RETENTION_DAYS",
+        365,
+    )
+    memory_store_max_items_per_namespace: int = _env_int(
+        "CODING_AGENT_MEMORY_STORE_MAX_ITEMS_PER_NAMESPACE",
+        300,
+    )
+    memory_store_min_items_per_namespace: int = _env_int(
+        "CODING_AGENT_MEMORY_STORE_MIN_ITEMS_PER_NAMESPACE",
+        25,
+    )
+    memory_store_scan_limit: int = _env_int(
+        "CODING_AGENT_MEMORY_STORE_SCAN_LIMIT",
+        5_000,
+    )
+
+    # New outcomes first exact-dedupe by normalized task key, then conservatively
+    # consolidate near-duplicates only when semantic similarity is high and either
+    # request wording or touched files materially overlap.
+    memory_consolidation_enabled: bool = _env_bool(
+        "CODING_AGENT_MEMORY_CONSOLIDATION_ENABLED",
+        True,
+    )
+    memory_consolidation_similarity_threshold: float = _env_float(
+        "CODING_AGENT_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD",
+        0.90,
+    )
+    memory_consolidation_min_request_overlap: float = _env_float(
+        "CODING_AGENT_MEMORY_CONSOLIDATION_MIN_REQUEST_OVERLAP",
+        0.55,
+    )
+    memory_consolidation_min_file_overlap: float = _env_float(
+        "CODING_AGENT_MEMORY_CONSOLIDATION_MIN_FILE_OVERLAP",
+        0.50,
+    )
+    memory_consolidation_candidate_limit: int = _env_int(
+        "CODING_AGENT_MEMORY_CONSOLIDATION_CANDIDATE_LIMIT",
+        5,
+    )
+
+    # SQLite reuses free pages but does not shrink database files automatically.
+    # A periodic offline VACUUM plus WAL checkpoint keeps the on-disk footprint
+    # bounded after pruning without adding work to every coding run.
+    memory_vacuum_enabled: bool = _env_bool(
+        "CODING_AGENT_MEMORY_VACUUM_ENABLED",
+        True,
+    )
+    memory_vacuum_interval_days: int = _env_int(
+        "CODING_AGENT_MEMORY_VACUUM_INTERVAL_DAYS",
+        7,
+    )
+    memory_vacuum_min_db_bytes: int = _env_int(
+        "CODING_AGENT_MEMORY_VACUUM_MIN_DB_BYTES",
+        10_000_000,
     )
 
 

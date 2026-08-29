@@ -1,7 +1,13 @@
-import { ArrowUp, Check, Circle, Mic, Paperclip, ShieldCheck, Sparkles, Square } from "lucide-react";
-import { type ChangeEvent, type ClipboardEvent, type DragEvent, type SubmitEvent, useRef, useState } from "react";
+import { ArrowUp, Check, Circle, Mic, Paperclip, RefreshCw, ShieldCheck, Sparkles, Square } from "lucide-react";
+import { type ChangeEvent, type ClipboardEvent, type DragEvent, type PointerEvent, type SubmitEvent, useRef, useState } from "react";
 import type { AgentMessage, AgentRunState, RepositoryFile } from "../types";
-import type { CodingAgentAttachedFile } from "../lib/codingAgentSocket";
+import type {
+  CodingAgentAttachedFile,
+  CodingAgentCompletionLedger,
+  CodingAgentImplementationUnit,
+  CodingAgentTaskMode,
+} from "../lib/codingAgentSocket";
+import MarkdownRenderer from "./MarkdownRenderer";
 
 interface TaskPanelProps {
   messages: AgentMessage[];
@@ -11,6 +17,7 @@ interface TaskPanelProps {
   voiceReplyUrl?: string | null;
   onApproveAll: () => void;
   onRejectChanges: () => void;
+  onResetSession: () => void;
   allowWrite: boolean;
   activePath?: string | null;
   activeFile?: RepositoryFile | null;
@@ -36,8 +43,41 @@ const statusClass = {
 };
 
 
+type DivideConquerRunView = AgentRunState & {
+  taskMode?: CodingAgentTaskMode | null;
+  implementationUnits?: CodingAgentImplementationUnit[];
+  completionLedger?: CodingAgentCompletionLedger;
+  implementationIteration?: number;
+  maxImplementationIterations?: number;
+  subtaskWorkerCount?: number;
+};
+
+const COMPLETE_UNIT_STATUSES = new Set(["complete", "completed", "done", "success", "succeeded", "applied"]);
+const FAILED_UNIT_STATUSES = new Set(["blocked", "failed", "patch_failed"]);
+
+const implementationUnitId = (unit: CodingAgentImplementationUnit, index: number) => {
+  const candidate = unit.id ?? unit.unit_id;
+  return typeof candidate === "string" && candidate.trim() ? candidate : `unit-${index + 1}`;
+};
+
+const implementationUnitLabel = (unit: CodingAgentImplementationUnit, index: number) => {
+  for (const value of [unit.title, unit.objective, unit.id, unit.unit_id]) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return `Implementation unit ${index + 1}`;
+};
+
 const PlanCard = ({ run }: { run: AgentRunState }) => {
-  const allStepsDone = run.status === "completed" || run.status === "approval_pending" || run.status === "applied";
+  const divideRun = run as DivideConquerRunView;
+  const implementationUnits = divideRun.implementationUnits ?? [];
+  const completionLedger = divideRun.completionLedger ?? {};
+  const allUnitsDone = implementationUnits.length > 0 && implementationUnits.every((unit, index) => {
+    const unitId = implementationUnitId(unit, index);
+    const status = String(completionLedger[unitId]?.status ?? "").toLowerCase();
+    return COMPLETE_UNIT_STATUSES.has(status);
+  });
+  const terminalRun = run.status === "completed" || run.status === "approval_pending" || run.status === "applied";
+  const allStepsDone = terminalRun && (implementationUnits.length === 0 || allUnitsDone);
 
   return (
     <div className="rounded-lg border border-line bg-surface p-3">
@@ -73,6 +113,52 @@ const PlanCard = ({ run }: { run: AgentRunState }) => {
         </p>
       )}
 
+      {implementationUnits.length > 0 ? (
+        <div className="mt-3 border-t border-line pt-3">
+          <div className="mb-2 flex items-center gap-2 text-[9px] font-semibold uppercase tracking-wider text-faint">
+            <span>Implementation units</span>
+            {divideRun.maxImplementationIterations ? (
+              <span className="ml-auto font-mono font-normal normal-case text-muted">
+                iteration {divideRun.implementationIteration ?? 0}/{divideRun.maxImplementationIterations}
+              </span>
+            ) : null}
+          </div>
+
+          <ol className="space-y-2">
+            {implementationUnits.map((unit, index) => {
+              const unitId = implementationUnitId(unit, index);
+              const ledgerEntry = completionLedger[unitId];
+              const unitStatus = String(ledgerEntry?.status ?? "pending").toLowerCase();
+              const complete = COMPLETE_UNIT_STATUSES.has(unitStatus);
+              const failed = FAILED_UNIT_STATUSES.has(unitStatus);
+              const retries = typeof ledgerEntry?.patch_retries === "number" ? ledgerEntry.patch_retries : null;
+
+              return (
+                <li key={unitId} className="flex items-start gap-2 text-[10px] leading-4 text-muted">
+                  {complete ? (
+                    <Check size={11} className="mt-0.5 shrink-0 text-emerald-300" />
+                  ) : (
+                    <Circle size={9} className={`mt-1 shrink-0 ${failed ? "text-rose-300" : "text-accent-light"}`} />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="wrap-break-word text-ink-soft">{implementationUnitLabel(unit, index)}</p>
+                    <p className="font-mono text-[9px] text-faint">
+                      {unitStatus}
+                      {retries != null ? ` · patch retries ${retries}` : ""}
+                    </p>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+
+          <p className="mt-2 text-[9px] text-faint">
+            Mode: <span className="font-mono text-muted">{divideRun.taskMode ?? "standard"}</span>
+            {divideRun.subtaskWorkerCount ? <span> · workers {divideRun.subtaskWorkerCount}</span> : null}
+          </p>
+        </div>
+      ) : null}
+
       {run.selectedSkill ? (
         <p className="mt-3 border-t border-line pt-3 text-[10px] leading-5 text-faint">
           Skill: <span className="font-mono text-muted">{run.selectedSkill}</span>
@@ -86,6 +172,9 @@ const PlanCard = ({ run }: { run: AgentRunState }) => {
 
 const MAX_TEXT_ATTACHMENT_BYTES = 1_000_000;
 const MAX_IMAGE_ATTACHMENT_BYTES = 5_000_000;
+const MIN_PROMPT_HEIGHT = 48;
+
+const maxPromptHeight = () => Math.max(MIN_PROMPT_HEIGHT, Math.floor(window.innerHeight * 0.5));
 
 const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 const TEXT_FILE_EXTENSIONS = /\.(c|cpp|cc|cxx|c\+\+|h|hpp|hh|hxx|css|csv|html|java|js|jsx|json|md|py|rs|sql|toml|ts|tsx|txt|xml|ya?ml)$/i;
@@ -123,8 +212,9 @@ const readAsDataUrl = (file: File) =>
 /*
    =============  Component  =============
 */
-export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl, onApproveAll, onRejectChanges, allowWrite, activePath, activeFile }: TaskPanelProps) => {
+export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl, onApproveAll, onRejectChanges, allowWrite, activePath, activeFile, onResetSession }: TaskPanelProps) => {
   const [prompt, setPrompt] = useState("");
+  const [promptHeight, setPromptHeight] = useState(MIN_PROMPT_HEIGHT);
   const [attachedFiles, setAttachedFiles] = useState<CodingAgentAttachedFile[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
@@ -140,6 +230,7 @@ export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl
   const audioChunksRef = useRef<Blob[]>([]);
   const promptRef = useRef(prompt);
   const attachedFilesRef = useRef(attachedFiles);
+  const promptResizeRef = useRef<{ pointerId: number; startY: number; startHeight: number } | null>(null);
 
   promptRef.current = prompt;
   attachedFilesRef.current = attachedFiles;
@@ -320,6 +411,32 @@ export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl
     }
   };
 
+  const handlePromptResizeStart = (event: PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    promptResizeRef.current = {
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      startHeight: promptHeight,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handlePromptResizeMove = (event: PointerEvent<HTMLDivElement>) => {
+    const resize = promptResizeRef.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+
+    setPromptHeight(Math.min(maxPromptHeight(), Math.max(MIN_PROMPT_HEIGHT, resize.startHeight + resize.startY - event.clientY)));
+  };
+
+  const handlePromptResizeEnd = (event: PointerEvent<HTMLDivElement>) => {
+    if (promptResizeRef.current?.pointerId !== event.pointerId) return;
+
+    promptResizeRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
   const handlePaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
     const items = e.clipboardData?.items;
     if (!items || items.length === 0) return;
@@ -435,26 +552,38 @@ export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-4">
         <Sparkles size={15} className="text-accent-light" />
         <h1 className="text-xs font-semibold text-ink">Agent session</h1>
+        <button
+          type="button"
+          className="icon-button"
+          aria-label="Start a new session"
+          title="Start a new session and clear messages from previous runs"
+          disabled={isRunning}
+          onClick={onResetSession}
+        >
+          <RefreshCw size={13} />
+        </button>
         <span className={`ml-auto rounded-full border px-2 py-0.5 text-[9px] font-medium uppercase ${statusClass[run.status]}`}>{run.status}</span>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-
         <div className="space-y-4">
           
 
           {messages.map((message) => (
             <div key={message.id} className="space-y-3">
-              <article className={message.role === "user" ? "message-user" : "message-agent"}>
-                <div className="mb-1.5 flex items-center gap-2 text-[9px] font-semibold uppercase tracking-wider text-faint">
-                  <span>{message.role === "user" ? "You" : "Agent"}</span>
-                  <span>·</span>
-                  <time>{message.time}</time>
-                </div>
-                <p className="whitespace-pre-wrap wrap-break-word text-xs leading-5 text-ink-soft">
-                  {message.body}
-                </p>
-              </article>
+              <div className={message.role === "user" ? "rounded-lg bg-surface border border-line p-3 mb-2" : "rounded-lg bg-gray-900 text-white p-3 mb-2"}>
+                <article>
+                  <div className="mb-1.5 flex items-center gap-2 text-[9px] font-semibold uppercase tracking-wider text-faint">
+                    <span>{message.role === "user" ? "You" : "Agent"}</span>
+                    <span>·</span>
+                    <time>{message.time}</time>
+                  </div>
+                  {/* Render message body with markdown support via MarkdownRenderer component */}
+                  <div className="text-xs leading-5 text-ink-soft">
+                    <MarkdownRenderer>{message.body}</MarkdownRenderer>
+                  </div>
+                </article>
+              </div>
 
               {message.run ? <PlanCard run={message.run} /> : null}
             </div>
@@ -530,23 +659,48 @@ export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl
           <div className="rounded-lg border border-line-strong bg-surface p-2.5 focus-within:border-accent/70 focus-within:ring-1 focus-within:ring-accent/20">
             
             <label htmlFor="agent-prompt" className="sr-only">Message the coding agent</label>
-            <textarea
-              id="agent-prompt"
-              rows={3}
-              value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
+            <div
+              role="separator"
+              tabIndex={0}
+              aria-controls="agent-prompt"
+              aria-label="Resize message area"
+              aria-orientation="horizontal"
+              aria-valuemin={MIN_PROMPT_HEIGHT}
+              aria-valuemax={maxPromptHeight()}
+              aria-valuenow={promptHeight}
+              className="-mt-1 mb-1 flex h-3 cursor-ns-resize touch-none select-none items-center justify-center rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+              onPointerDown={handlePromptResizeStart}
+              onPointerMove={handlePromptResizeMove}
+              onPointerUp={handlePromptResizeEnd}
+              onPointerCancel={handlePromptResizeEnd}
               onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault();
-                  const form = event.currentTarget.closest('form');
-                  if (form) form.requestSubmit();
-                }
+                if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+
+                event.preventDefault();
+                const change = event.key === "ArrowUp" ? 16 : -16;
+                setPromptHeight((height) => Math.min(maxPromptHeight(), Math.max(MIN_PROMPT_HEIGHT, height + change)));
               }}
-              onPaste={handlePaste}
-              placeholder="Describe the coding task and attach relevant files…"
-              className="w-full resize-none bg-transparent text-xs leading-5 text-ink outline-none placeholder:text-faint"
-              disabled={isVoiceLoading || isRunning}
-            />
+            >
+              <span className="w-8 border-t border-line-strong" aria-hidden="true" />
+            </div>
+            <div className="max-h-[50vh] overflow-y-auto" style={{ height: `${promptHeight}px` }}>
+              <textarea
+                id="agent-prompt"
+                value={prompt}
+                onChange={(event) => setPrompt(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    const form = event.currentTarget.closest('form');
+                    if (form) form.requestSubmit();
+                  }
+                }}
+                onPaste={handlePaste}
+                placeholder="Describe the coding task and attach relevant files…"
+                className="block h-full w-full resize-none rounded border border-transparent bg-transparent text-xs leading-5 text-ink outline-none placeholder:text-faint"
+                disabled={isVoiceLoading || isRunning}
+              />
+            </div>
 
             {attachedFiles.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-1">
@@ -600,7 +754,7 @@ export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl
                 title="Attach open repository file"
                 onClick={attachActiveRepoFile}
               >
-                Attach open file
+                Attach File
               </button>
 
               <span className="ml-1 text-[9px] text-faint">{isRunning ? "Agent running" : allowWrite ? "Write mode" : "Read mode"}</span>

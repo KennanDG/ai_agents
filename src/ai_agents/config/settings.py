@@ -264,32 +264,92 @@ class Settings(BaseSettings):
         alias="AI_AGENTS_RUNTIME_CONFIG_PATH",
     )
 
-    # Coding-agent execution profile. These defaults can be changed through the
-    # admin UI and are applied to new runs. Hard request bounds remain server-side.
-    coding_subagent_count: int = Field(
-        default=3, ge=1, le=6, alias="CODING_AGENT_MAX_CONTEXT_WORKERS"
+    # Coding-agent execution profile. These defaults mirror CodingAgentSettings
+    # and can be changed through the admin UI for subsequent runs. The legacy
+    # coding_subagent_count / patch / progress fields remain for compatibility, but
+    # the current divide-and-conquer runtime uses the fields prefixed below.
+    coding_max_subtask_workers: int = Field(
+        default=3, ge=1, le=6, alias="CODING_AGENT_MAX_SUBTASK_WORKERS"
     )
+    coding_max_implementation_units: int = Field(
+        default=12, ge=1, le=12, alias="CODING_AGENT_MAX_IMPLEMENTATION_UNITS"
+    )
+    coding_max_patch_retries_per_unit: int = Field(
+        default=1, ge=0, le=4, alias="CODING_AGENT_MAX_PATCH_RETRIES_PER_UNIT"
+    )
+    coding_max_implementation_iterations: int = Field(
+        default=2, ge=1, le=8, alias="CODING_AGENT_MAX_IMPLEMENTATION_ITERATIONS"
+    )
+
     coding_route_max_tokens: int = Field(
-        default=700, ge=256, le=2_000, alias="CODING_AGENT_ROUTE_MAX_TOKENS"
+        default=900, ge=256, le=2_000, alias="CODING_AGENT_ROUTE_MAX_TOKENS"
     )
     coding_planner_max_tokens: int = Field(
-        default=2_400, ge=512, le=6_000, alias="CODING_AGENT_PLANNER_MAX_TOKENS"
+        default=3_000, ge=512, le=6_000, alias="CODING_AGENT_PLANNER_MAX_TOKENS"
     )
     coding_repo_navigation_max_tokens: int = Field(
         default=1_600, ge=512, le=4_000,
         alias="CODING_AGENT_REPO_NAVIGATION_MAX_TOKENS",
     )
     coding_simple_patch_max_tokens: int = Field(
-        default=6_000, ge=2_000, le=16_000,
+        default=8_000, ge=2_000, le=16_000,
         alias="CODING_AGENT_SIMPLE_PATCH_MAX_TOKENS",
     )
+    coding_reconciliation_max_tokens: int = Field(
+        default=10_000, ge=2_000, le=32_000,
+        alias="CODING_AGENT_RECONCILIATION_MAX_TOKENS",
+    )
+    coding_reconciliation_context_max_tokens: int = Field(
+        default=24_000, ge=4_000, le=64_000,
+        alias="CODING_AGENT_RECONCILIATION_CONTEXT_MAX_TOKENS",
+    )
+    coding_max_reasoning_reconciliations: int = Field(
+        default=1, ge=0, le=3, alias="CODING_AGENT_MAX_REASONING_RECONCILIATIONS"
+    )
+
+    coding_context_prompt_base_tokens: int = Field(
+        default=16_000, ge=4_000, le=64_000,
+        alias="CODING_AGENT_CONTEXT_PROMPT_BASE_TOKENS",
+    )
+    coding_max_context_prompt_tokens: int = Field(
+        default=32_000, ge=8_000, le=128_000,
+        alias="CODING_AGENT_MAX_CONTEXT_PROMPT_TOKENS",
+    )
+    coding_context_prompt_reserve_tokens: int = Field(
+        default=10_000, ge=2_000, le=64_000,
+        alias="CODING_AGENT_CONTEXT_PROMPT_RESERVE_TOKENS",
+    )
+    coding_context_window_safety_tokens: int = Field(
+        default=6_000, ge=1_000, le=32_000,
+        alias="CODING_AGENT_CONTEXT_WINDOW_SAFETY_TOKENS",
+    )
+    coding_model_context_window_tokens: int = Field(
+        default=131_072, ge=16_000, le=2_000_000,
+        alias="CODING_AGENT_CODING_CONTEXT_WINDOW_TOKENS",
+    )
+    reasoning_model_context_window_tokens: int = Field(
+        default=131_072, ge=16_000, le=2_000_000,
+        alias="CODING_AGENT_REASONING_CONTEXT_WINDOW_TOKENS",
+    )
+    coding_model_max_output_tokens: int = Field(
+        default=32_000, ge=2_000, le=128_000,
+        alias="CODING_AGENT_CODING_MAX_OUTPUT_TOKENS",
+    )
+    reasoning_model_max_output_tokens: int = Field(
+        default=32_000, ge=2_000, le=128_000,
+        alias="CODING_AGENT_REASONING_MAX_OUTPUT_TOKENS",
+    )
+
+    # Legacy configuration aliases retained for rolling upgrades / old callers.
+    coding_subagent_count: int = Field(
+        default=3, ge=1, le=6, alias="CODING_AGENT_MAX_CONTEXT_WORKERS"
+    )
     coding_patch_max_tokens: int = Field(
-        default=12_000, ge=4_000, le=32_000, alias="CODING_AGENT_PATCH_MAX_TOKENS"
+        default=20_000, ge=4_000, le=32_000, alias="CODING_AGENT_PATCH_MAX_TOKENS"
     )
     coding_progress_max_tokens: int = Field(
         default=1_200, ge=512, le=4_000, alias="CODING_AGENT_PROGRESS_MAX_TOKENS"
     )
-    
 
     # Qdrant
     qdrant_url: str = Field(default="http://localhost:6333", alias="QDRANT_URL")

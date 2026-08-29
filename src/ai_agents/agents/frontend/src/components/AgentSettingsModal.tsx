@@ -225,7 +225,7 @@ const ModelSelect = ({
           ? "Loading models…"
           : catalog?.source === "live"
             ? "Live provider catalog"
-            : catalog?.error ?? "Using the backend fallback catalog"}
+            : catalog?.error ?? "Using the Default catalog"}
       </span>
     </label>
   );
@@ -240,6 +240,7 @@ export const AgentSettingsModal = ({
 }: AgentSettingsModalProps) => {
   const [configuration, setConfiguration] = useState<AgentConfiguration | null>(null);
   const [secrets, setSecrets] = useState(emptySecrets);
+  const [githubToken, setGitHubToken] = useState("");
   const [catalogs, setCatalogs] = useState<Record<string, ModelCatalogResponse>>({});
   const [catalogLoading, setCatalogLoading] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(false);
@@ -291,6 +292,7 @@ export const AgentSettingsModal = ({
     setLoading(true);
     setError(null);
     setMessage(null);
+    setGitHubToken("");
 
     fetchAgentConfiguration({ apiBaseUrl, apiKey })
       .then(async (result) => {
@@ -405,19 +407,33 @@ export const AgentSettingsModal = ({
           voice_tts_model: configuration.voice_tts_model,
           voice_tts_voice: configuration.voice_tts_voice,
           voice_tts_enabled: configuration.voice_tts_enabled,
-          coding_subagent_count: configuration.coding_subagent_count,
+          coding_max_subtask_workers: configuration.coding_max_subtask_workers,
+          coding_max_implementation_units: configuration.coding_max_implementation_units,
+          coding_max_patch_retries_per_unit: configuration.coding_max_patch_retries_per_unit,
+          coding_max_implementation_iterations: configuration.coding_max_implementation_iterations,
           coding_route_max_tokens: configuration.coding_route_max_tokens,
           coding_planner_max_tokens: configuration.coding_planner_max_tokens,
           coding_repo_navigation_max_tokens: configuration.coding_repo_navigation_max_tokens,
           coding_simple_patch_max_tokens: configuration.coding_simple_patch_max_tokens,
-          coding_patch_max_tokens: configuration.coding_patch_max_tokens,
-          coding_progress_max_tokens: configuration.coding_progress_max_tokens,
+          coding_reconciliation_max_tokens: configuration.coding_reconciliation_max_tokens,
+          coding_reconciliation_context_max_tokens: configuration.coding_reconciliation_context_max_tokens,
+          coding_max_reasoning_reconciliations: configuration.coding_max_reasoning_reconciliations,
+          coding_context_prompt_base_tokens: configuration.coding_context_prompt_base_tokens,
+          coding_max_context_prompt_tokens: configuration.coding_max_context_prompt_tokens,
+          coding_context_prompt_reserve_tokens: configuration.coding_context_prompt_reserve_tokens,
+          coding_context_window_safety_tokens: configuration.coding_context_window_safety_tokens,
+          coding_model_context_window_tokens: configuration.coding_model_context_window_tokens,
+          reasoning_model_context_window_tokens: configuration.reasoning_model_context_window_tokens,
+          coding_model_max_output_tokens: configuration.coding_model_max_output_tokens,
+          reasoning_model_max_output_tokens: configuration.reasoning_model_max_output_tokens,
           secrets: changedSecrets,
+          github_token: githubToken.trim() || undefined,
         },
       });
       setConfiguration(updated);
       onSaved?.(updated);
       setSecrets(emptySecrets());
+      setGitHubToken("");
       setCatalogs({});
       await loadConfigurationCatalogs(updated);
       setMessage("Saved. New coding, vision, and voice runs will use this configuration.");
@@ -442,7 +458,7 @@ export const AgentSettingsModal = ({
               Agent configuration
             </h2>
             <p className="text-[10px] text-muted">
-              Capability-aware model routing and backend-only provider credentials
+              Capability-aware model routing, runtime budgets, and backend-only credentials
             </p>
           </div>
           <button type="button" className="icon-button" aria-label="Close" onClick={onClose}>
@@ -536,24 +552,48 @@ export const AgentSettingsModal = ({
               <section className="rounded-lg border border-line bg-panel p-4">
                 <h3 className="text-xs font-semibold text-ink">Coding agent execution</h3>
                 <p className="mt-1 text-[10px] leading-4 text-muted">
-                  These limits apply to new runs. Context workers are read-only; increasing them
-                  helps only when the task can be split into independent repository concerns.
+                  Worker count controls concurrency, implementation units and repair rounds control
+                  how much total work a run can complete.
                 </p>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   <NumberInput
-                    label="Max sub-agent count"
-                    value={configuration.coding_subagent_count}
+                    label="Subtask workers"
+                    value={configuration.coding_max_subtask_workers}
                     min={1}
                     max={6}
-                    help="Recommended: 3. Use 4 for broad frontend/backend tasks."
-                    onChange={(value) => update("coding_subagent_count", value)}
+                    help="Recommended: 3-4"
+                    onChange={(value) => update("coding_max_subtask_workers", value)}
+                  />
+                  <NumberInput
+                    label="Max implementation units"
+                    value={configuration.coding_max_implementation_units}
+                    min={1}
+                    max={12}
+                    help="Maximum independently implementable units in one plan."
+                    onChange={(value) => update("coding_max_implementation_units", value)}
+                  />
+                  <NumberInput
+                    label="Patch retries per unit"
+                    value={configuration.coding_max_patch_retries_per_unit}
+                    min={0}
+                    max={4}
+                    help="Default: 1 retry for a failed unit patch."
+                    onChange={(value) => update("coding_max_patch_retries_per_unit", value)}
+                  />
+                  <NumberInput
+                    label="Implementation repair rounds"
+                    value={configuration.coding_max_implementation_iterations}
+                    min={1}
+                    max={8}
+                    help="Default: 2 total implementation/repair iterations."
+                    onChange={(value) => update("coding_max_implementation_iterations", value)}
                   />
                   <NumberInput
                     label="Router max tokens"
                     value={configuration.coding_route_max_tokens}
                     min={256}
                     max={2000}
-                    help="Recommended: 700. Used only when LLM routing is enabled."
+                    help="Default: 900. Used only when LLM routing is enabled."
                     onChange={(value) => update("coding_route_max_tokens", value)}
                   />
                   <NumberInput
@@ -561,7 +601,7 @@ export const AgentSettingsModal = ({
                     value={configuration.coding_planner_max_tokens}
                     min={512}
                     max={6000}
-                    help="Recommended: 2,400 for structured plans and subtasks."
+                    help="Default: 3,000 for structured planning."
                     onChange={(value) => update("coding_planner_max_tokens", value)}
                   />
                   <NumberInput
@@ -569,32 +609,114 @@ export const AgentSettingsModal = ({
                     value={configuration.coding_repo_navigation_max_tokens}
                     min={512}
                     max={4000}
-                    help="Recommended: 1,600. Used only when LLM navigation is enabled."
+                    help="Default: 1,600. Used only when LLM navigation is enabled."
                     onChange={(value) => update("coding_repo_navigation_max_tokens", value)}
                   />
                   <NumberInput
-                    label="Simple patch max tokens"
+                    label="Patch worker max tokens"
                     value={configuration.coding_simple_patch_max_tokens}
                     min={2000}
                     max={16000}
-                    help="Recommended: 6,000 for one-file fast-path edits."
+                    help="Default: 8,000 per implementation-unit worker."
                     onChange={(value) => update("coding_simple_patch_max_tokens", value)}
                   />
                   <NumberInput
-                    label="Standard patch max tokens"
-                    value={configuration.coding_patch_max_tokens}
-                    min={4000}
+                    label="Reconciler max tokens"
+                    value={configuration.coding_reconciliation_max_tokens}
+                    min={2000}
                     max={32000}
-                    help="Recommended: 12,000 for multi-file structured patches."
-                    onChange={(value) => update("coding_patch_max_tokens", value)}
+                    help="Default: 10,000 for conflict reconciliation."
+                    onChange={(value) => update("coding_reconciliation_max_tokens", value)}
                   />
                   <NumberInput
-                    label="Progress max tokens"
-                    value={configuration.coding_progress_max_tokens}
-                    min={512}
-                    max={4000}
-                    help="Recommended: 1,200; this node should make a compact decision."
-                    onChange={(value) => update("coding_progress_max_tokens", value)}
+                    label="Reconciler context max tokens"
+                    value={configuration.coding_reconciliation_context_max_tokens}
+                    min={4000}
+                    max={64000}
+                    help="Default: 24,000 context tokens for reconciliation."
+                    onChange={(value) => update("coding_reconciliation_context_max_tokens", value)}
+                  />
+                  <NumberInput
+                    label="Max reasoning reconciliations"
+                    value={configuration.coding_max_reasoning_reconciliations}
+                    min={0}
+                    max={3}
+                    help="Default: 1 reasoning-model reconciliation pass."
+                    onChange={(value) => update("coding_max_reasoning_reconciliations", value)}
+                  />
+                </div>
+              </section>
+
+              <section className="rounded-lg border border-line bg-panel p-4">
+                <h3 className="text-xs font-semibold text-ink">Coding context and model budgets</h3>
+                <p className="mt-1 text-[10px] leading-4 text-muted">
+                  Prompt budgets are token-based. Context-window and output values are Default
+                  limits used when a provider does not advertise a more specific model profile.
+                </p>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  <NumberInput
+                    label="Base context prompt tokens"
+                    value={configuration.coding_context_prompt_base_tokens}
+                    min={4000}
+                    max={64000}
+                    help="Default: 16,000."
+                    onChange={(value) => update("coding_context_prompt_base_tokens", value)}
+                  />
+                  <NumberInput
+                    label="Max context prompt tokens"
+                    value={configuration.coding_max_context_prompt_tokens}
+                    min={8000}
+                    max={128000}
+                    help="Default: 32,000."
+                    onChange={(value) => update("coding_max_context_prompt_tokens", value)}
+                  />
+                  <NumberInput
+                    label="Context output reserve"
+                    value={configuration.coding_context_prompt_reserve_tokens}
+                    min={2000}
+                    max={64000}
+                    help="Default: 10,000 tokens reserved for model output."
+                    onChange={(value) => update("coding_context_prompt_reserve_tokens", value)}
+                  />
+                  <NumberInput
+                    label="Context safety reserve"
+                    value={configuration.coding_context_window_safety_tokens}
+                    min={1000}
+                    max={32000}
+                    help="Default: 6,000 safety tokens below the context window."
+                    onChange={(value) => update("coding_context_window_safety_tokens", value)}
+                  />
+                  <NumberInput
+                    label="Coding model context window"
+                    value={configuration.coding_model_context_window_tokens}
+                    min={16000}
+                    max={2000000}
+                    help="Default: 131,072 tokens."
+                    onChange={(value) => update("coding_model_context_window_tokens", value)}
+                  />
+                  <NumberInput
+                    label="Reasoning model context window"
+                    value={configuration.reasoning_model_context_window_tokens}
+                    min={16000}
+                    max={2000000}
+                    help="Default: 131,072 tokens."
+                    onChange={(value) => update("reasoning_model_context_window_tokens", value)}
+                  />
+                  <NumberInput
+                    label="Coding model max output"
+                    value={configuration.coding_model_max_output_tokens}
+                    min={2000}
+                    max={128000}
+                    help="Default: 32,000 tokens."
+                    onChange={(value) => update("coding_model_max_output_tokens", value)}
+                  />
+                  <NumberInput
+                    label="Reasoning model max output"
+                    value={configuration.reasoning_model_max_output_tokens}
+                    min={2000}
+                    max={128000}
+                    help="Default: 32,000 tokens."
+                    onChange={(value) => update("reasoning_model_max_output_tokens", value)}
                   />
                 </div>
               </section>
@@ -702,11 +824,35 @@ export const AgentSettingsModal = ({
                     <h3 className="text-xs font-semibold text-ink">Provider secrets</h3>
                     <p className="mt-1 text-[10px] leading-4 text-muted">
                       Live model discovery is account-aware when a key is configured. Without one,
-                      the API returns a safe fallback catalog. Secret values are never returned to
+                      the API returns a safe Default catalog. Secret values are never returned to
                       the renderer and remain session-only unless you configure environment variables
                       or Secrets Manager.
                     </p>
                   </div>
+                </div>
+                <div className="mt-3 rounded-md border border-line bg-surface/40 p-3">
+                  <label className="text-[10px] font-medium text-muted">
+                    GitHub token
+                    <span
+                      className={`ml-2 text-[9px] ${
+                        configuration.github_token_configured ? "text-emerald-300" : "text-faint"
+                      }`}
+                    >
+                      {configuration.github_token_configured ? "configured" : "not configured"}
+                    </span>
+                    <input
+                      type="password"
+                      autoComplete="new-password"
+                      value={githubToken}
+                      onChange={(event) => setGitHubToken(event.target.value)}
+                      placeholder="Leave blank to keep current token"
+                      className="mt-1 w-full rounded-md border border-line bg-surface px-3 py-2 text-xs text-ink outline-none focus:border-accent/70"
+                    />
+                  </label>
+                  <p className="mt-1 text-[9px] leading-4 text-faint">
+                    Used by repository import, status, push, and pull-request operations. The token
+                    is never returned to the renderer and a value entered here is session-only.
+                  </p>
                 </div>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                   {PROVIDERS.map((provider) => (

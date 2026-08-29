@@ -2,34 +2,22 @@ from __future__ import annotations
 
 
 from dataclasses import replace
+import math
 from pathlib import Path
+from uuid import uuid4
 import re
 from typing import Any, Iterable, Literal
-from textwrap import dedent
-
-from langgraph.types import Send
-
-
 from ai_agents.agents.coding.utils.constants import (
-    MAX_PATCH_ATTEMPTS,
     MAX_REPO_NAVIGATION_FILES,
     VALIDATION_PROFILE_NAME,
 )
 
 from ai_agents.agents.coding.llm import invoke_parsed_decision
 from ai_agents.agents.coding.memory import recall_coding_memories, remember_coding_run
-from ai_agents.agents.coding.utils.patch import (
-    apply_exact_replace,
-    build_patch_context,
-    is_forbidden_write_path,
-)
-
 from ai_agents.agents.coding.prompts import (
-    PATCHER_SYSTEM_PROMPT,
     PLANNER_SYSTEM_PROMPT,
     REPO_NAVIGATOR_SYSTEM_PROMPT,
     SKILL_ROUTER_SYSTEM_PROMPT,
-    build_patcher_user_prompt,
     build_planner_user_prompt,
     build_repo_navigator_user_prompt,
     build_skill_router_user_prompt,
@@ -43,13 +31,9 @@ from ai_agents.agents.coding.tool_registry import (
     MAX_CUSTOM_TOOL_CALLS,
 )
 from ai_agents.config.settings import settings as app_settings
-from ai_agents.agents.coding.routing import patch_attempts_remaining
-from ai_agents.agents.coding.runtime import allow_write as resolve_allow_write
 from ai_agents.agents.coding.runtime import repo_root as resolve_repo_root
 from ai_agents.agents.coding.coding_agent_schemas import (
-    PatchDecision,
     PlanDecision,
-    ProgressDecision,
     RepoNavigationDecision,
     SkillRouteDecision,
 )
@@ -64,8 +48,7 @@ from ai_agents.agents.coding.utils.skills import skill_instructions_for_llm
 from ai_agents.agents.coding.state import CodingAgentState
 from ai_agents.agents.coding.tests.runner import run_validation_suite
 from ai_agents.agents.coding.utils.text import bullets, dedupe
-from ai_agents.agents.coding.tools.filesystem import list_files, read_file, write_file
-from ai_agents.agents.coding.tools.patch import unified_diff
+from ai_agents.agents.coding.tools.filesystem import list_files, read_file
 from ai_agents.agents.coding.tools.web_search import web_search
 from ai_agents.agents.coding.tools.search import search_repository
 
@@ -73,7 +56,6 @@ from ai_agents.agents.coding.utils.validation import (
     advisory_validation_failures,
     blocking_validation_failures,
     default_validation_commands,
-    validation_failed_results,
 )
 
 
@@ -82,17 +64,15 @@ from ai_agents.agents.coding.utils.helpers import(
     _planned_search_requests,
     _search_requests_from_state, 
     _format_search_result_dicts,
-    _route_with_fallback,
     _repo_attachment_paths,
     _attached_file_summary,
     _resolve_existing_repo_path,
     _format_loop_context_focus,
-    _derive_loop_search_requests,
-    _same_file_content,
 )
 
 
 _RUNTIME_SETTING_FIELDS = {
+    "max_subtask_workers",
     "max_context_workers",
     "route_max_tokens",
     "planner_max_tokens",
@@ -100,6 +80,20 @@ _RUNTIME_SETTING_FIELDS = {
     "simple_patch_max_tokens",
     "patch_max_tokens",
     "progress_max_tokens",
+    "max_implementation_units",
+    "max_patch_retries_per_unit",
+    "max_implementation_iterations",
+    "context_prompt_base_tokens",
+    "max_context_prompt_tokens",
+    "context_prompt_reserve_tokens",
+    "context_window_safety_tokens",
+    "coding_model_context_window_tokens",
+    "reasoning_model_context_window_tokens",
+    "coding_model_max_output_tokens",
+    "reasoning_model_max_output_tokens",
+    "reconciliation_max_tokens",
+    "reconciliation_context_max_tokens",
+    "max_reasoning_reconciliations",
 }
 
 
@@ -648,18 +642,207 @@ def route_node(
 
 
 
-def _fallback_subtasks(
+def _fallback_implementation_units(
     state: CodingAgentState,
     search_requests: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     return [
         {
             "id": "primary",
-            "objective": state.get("user_request", "Gather the implementation context."),
+            "objective": state.get("user_request", "Implement the requested repository change."),
+            "acceptance_criteria": ["The requested behavior is implemented without unrelated changes."],
             "search_requests": search_requests,
             "candidate_paths": _explicit_request_paths(state),
+            "depends_on": [],
+            "validation_commands": list(state.get("validation_commands") or []),
         }
     ]
+
+
+def _is_non_implementation_unit(unit: dict[str, Any]) -> bool:
+    """Filter planner work that belongs to navigation or final validation instead.
+
+    Be conservative here: a product feature can legitimately be called "validate input".
+    We only remove clearly meta-level inspection/integration-validation units.
+    """
+
+    unit_id = str(unit.get("id", "")).strip().lower().replace("-", "_")
+    objective = str(unit.get("objective", "")).strip().lower()
+
+    if unit_id.startswith((
+        "inspect_", "inspection_", "discover_", "understand_", "explore_",
+        "context_", "gather_context", "repo_context", "repository_context",
+    )):
+        return True
+    if objective.startswith((
+        "inspect and understand ", "inspect the current ", "inspect attached ",
+        "discover the current ", "explore the repository ", "gather context ",
+        "understand the current ",
+    )):
+        return True
+
+    validation_meta_markers = (
+        "integration", "all changes", "work together", "no regressions", "build",
+        "typecheck", "type-check", "run tests", "visual test", "responsive on",
+    )
+    looks_like_validation_unit = (
+        unit_id.startswith(("validate_", "validation_", "verify_integration"))
+        or objective.startswith(("validate integration", "validate that all", "verify integration"))
+    )
+    return looks_like_validation_unit and any(
+        marker in objective or marker in unit_id
+        for marker in validation_meta_markers
+    )
+
+
+def _merge_unit_into(target: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(target)
+    objectives = [
+        str(value).strip()
+        for value in (target.get("objective", ""), incoming.get("objective", ""))
+        if str(value).strip()
+    ]
+    merged["objective"] = " / ".join(dict.fromkeys(objectives))
+    merged["acceptance_criteria"] = dedupe(
+        [
+            *[str(value) for value in target.get("acceptance_criteria", [])],
+            *[str(value) for value in incoming.get("acceptance_criteria", [])],
+        ]
+    )[:8]
+    merged["search_requests"] = [
+        *list(target.get("search_requests") or []),
+        *list(incoming.get("search_requests") or []),
+    ]
+    merged["candidate_paths"] = dedupe(
+        [
+            *[str(path) for path in target.get("candidate_paths", [])],
+            *[str(path) for path in incoming.get("candidate_paths", [])],
+        ]
+    )
+    merged["depends_on"] = dedupe(
+        [
+            *[str(dep) for dep in target.get("depends_on", [])],
+            *[str(dep) for dep in incoming.get("depends_on", [])],
+        ]
+    )
+    merged["validation_commands"] = dedupe(
+        [
+            *[str(command) for command in target.get("validation_commands", [])],
+            *[str(command) for command in incoming.get("validation_commands", [])],
+        ]
+    )
+    return merged
+
+
+def _normalize_implementation_units(
+    raw_units: list[dict[str, Any]],
+    *,
+    state: CodingAgentState,
+    search_requests: list[dict[str, Any]],
+    cfg: CodingAgentSettings,
+) -> list[dict[str, Any]]:
+    """Normalize, remove non-implementation work, and coalesce shared-file units."""
+
+    units = [
+        dict(item)
+        for item in raw_units[: max(1, cfg.max_implementation_units)]
+        if not _is_non_implementation_unit(dict(item))
+    ]
+    if not units:
+        units = _fallback_implementation_units(state, search_requests)
+
+    normalized: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    alias: dict[str, str] = {}
+
+    for index, raw in enumerate(units, start=1):
+        item = dict(raw)
+        raw_id = re.sub(r"[^A-Za-z0-9_-]+", "-", str(item.get("id", "")).strip()).strip("-")
+        unit_id = raw_id or f"unit-{index}"
+        if unit_id in seen_ids:
+            unit_id = f"{unit_id}-{index}"
+
+        candidate_paths = dedupe(
+            filter_context_paths(
+                [
+                    str(path).strip()
+                    for path in item.get("candidate_paths", [])
+                    if str(path).strip()
+                ]
+            )
+        )
+        item.update(
+            {
+                "id": unit_id,
+                "objective": str(item.get("objective", "")).strip()
+                or state.get("user_request", "Implement the requested change."),
+                "acceptance_criteria": [
+                    str(value).strip()
+                    for value in item.get("acceptance_criteria", [])
+                    if str(value).strip()
+                ][:8],
+                "search_requests": list(item.get("search_requests") or search_requests),
+                "candidate_paths": candidate_paths,
+                "depends_on": [str(dep).strip() for dep in item.get("depends_on", []) if str(dep).strip()],
+                "validation_commands": [
+                    str(command).strip()
+                    for command in item.get("validation_commands", [])
+                    if str(command).strip()
+                ],
+            }
+        )
+
+        # File ownership is exclusive. Merge units that advertise any common target
+        # file rather than allowing parallel workers to generate stale overlapping edits.
+        overlap_index = next(
+            (
+                existing_index
+                for existing_index, existing in enumerate(normalized)
+                if candidate_paths
+                and set(candidate_paths) & set(existing.get("candidate_paths", []))
+            ),
+            None,
+        )
+        if overlap_index is not None:
+            owner_id = str(normalized[overlap_index]["id"])
+            alias[unit_id] = owner_id
+            normalized[overlap_index] = _merge_unit_into(normalized[overlap_index], item)
+            continue
+
+        normalized.append(item)
+        seen_ids.add(unit_id)
+        alias[unit_id] = unit_id
+
+    valid_ids: set[str] = set()
+    for item in normalized:
+        remapped: list[str] = []
+        for dep in item.get("depends_on", []):
+            resolved = alias.get(str(dep), str(dep))
+            if resolved in valid_ids and resolved != item["id"]:
+                remapped.append(resolved)
+        item["depends_on"] = dedupe(remapped)
+        valid_ids.add(str(item["id"]))
+
+    return normalized
+
+
+def _initial_completion_ledger(units: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {
+        str(unit["id"]): {
+            "status": "pending",
+            "implementation_attempts": 0,
+            "patch_retries": 0,
+            "files_inspected": [],
+            "files_changed": [],
+            "last_error": "",
+            "last_generation": 0,
+            "last_model": "",
+            "last_provider": "",
+            "last_context_tokens": 0,
+            "last_context_budget_tokens": 0,
+        }
+        for unit in units
+    }
 
 
 def plan_node(
@@ -676,129 +859,140 @@ def plan_node(
         approved_custom_tool_registry.has(name) for name in selected_tool_names
     )
 
-    # The simple fast path skips the planner. Promote the run to standard when a
-    # selected skill exposes an approved custom tool so the planner gets a chance
-    # to decide whether and how to call it.
     if task_mode == "simple" and has_selected_custom_tools:
         task_mode = "standard"
 
-    if task_mode == "simple":
-        return {
-            "task_mode": "simple",
-            "plan": [
-                "Load the named or attached implementation file and only the nearest required context.",
-                "Produce the smallest exact patch.",
-                "Run targeted validation when write mode is enabled.",
-            ],
-            "search_requests": deterministic_search,
-            "search_queries": [],
-            "subtasks": _fallback_subtasks(state, deterministic_search),
-            "custom_tool_calls": [],
-            "validation_commands": state.get("validation_commands", []),
-            "status": "planned",
+    decision: PlanDecision | None = None
+    planning_errors = list(state.get("errors", []))
+
+    if task_mode != "simple":
+        planner_prompt = build_planner_user_prompt(request)
+        selected_skills = list(state.get("selected_skills") or [])
+        if not selected_skills and state.get("selected_skill"):
+            selected_skills = [str(state.get("selected_skill"))]
+
+        if selected_skills:
+            planner_prompt += (
+                "\n\nSelected skills in priority order:\n"
+                f"{bullets(selected_skills)}\n\n"
+                "Combined skill guidance for planning:\n"
+                f"{skill_instructions_for_llm(state.get('skill_instructions', ''))}"
+            )
+
+        approved_custom_tool_names = {
+            name
+            for name in selected_tool_names
+            if approved_custom_tool_registry.has(name)
         }
-
-    planner_prompt = build_planner_user_prompt(request)
-    selected_skills = list(state.get("selected_skills") or [])
-
-    if not selected_skills and state.get("selected_skill"):
-        selected_skills = [str(state.get("selected_skill"))]
-
-    if selected_skills:
-        planner_prompt += (
-            "\n\nSelected skills in priority order:\n"
-            f"{bullets(selected_skills)}\n\n"
-            "Combined skill guidance for planning:\n"
-            f"{skill_instructions_for_llm(state.get('skill_instructions', ''))}"
+        approved_custom_tool_catalog = approved_custom_tool_registry.prompt_catalog(
+            selected_tool_names
         )
+        if approved_custom_tool_catalog:
+            planner_prompt += (
+                "\n\nApproved custom tools available for this run:\n"
+                f"{approved_custom_tool_catalog}\n\n"
+                "Use custom_tool_calls only when one of these tools materially improves "
+                "repository inspection. Tool arguments must be JSON-compatible and must "
+                "not include repo_root."
+            )
 
-    approved_custom_tool_names = {
-        name
-        for name in selected_tool_names
-        if approved_custom_tool_registry.has(name)
-    }
+        memories = state.get("long_term_memories", [])
+        if memories:
+            planner_prompt += (
+                "\n\nRelevant durable coding outcomes:\n" + bullets(memories[:3])
+            )
 
-    approved_custom_tool_catalog = approved_custom_tool_registry.prompt_catalog(
-        selected_tool_names
-    )
-    if approved_custom_tool_catalog:
-        planner_prompt += (
-            "\n\nApproved custom tools available for this run:\n"
-            f"{approved_custom_tool_catalog}\n\n"
-            "Use custom_tool_calls only when one of these tools materially improves "
-            "repository inspection. Tool arguments must be JSON-compatible and must "
-            "not include repo_root."
-        )
+        attachment_summary = _attached_file_summary(state)
+        if attachment_summary:
+            planner_prompt += (
+                "\n\nUser-attached files available as read-only context:\n"
+                f"{attachment_summary}"
+            )
 
-    memories = state.get("long_term_memories", [])
-    if memories:
-        planner_prompt += (
-            "\n\nRelevant long-term coding memories:\n" + bullets(memories[:5])
-        )
-    attachment_summary = _attached_file_summary(state)
-    if attachment_summary:
-        planner_prompt += (
-            "\n\nUser-attached files available as read-only context:\n"
-            f"{attachment_summary}"
-        )
+        try:
+            decision = invoke_parsed_decision(
+                model=_coding_node_model(cfg.planner_max_tokens, cache_namespace="plan"),
+                schema=PlanDecision,
+                node_name="plan",
+                state=state,
+                system_prompt=PLANNER_SYSTEM_PROMPT,
+                user_prompt=planner_prompt,
+                max_attempts=1,
+            )
+        except Exception as exc:
+            planning_errors.append(
+                f"LLM planning failed; used deterministic implementation unit: {exc}"
+            )
 
-    try:
-        decision: PlanDecision = invoke_parsed_decision(
-            model=_coding_node_model(cfg.planner_max_tokens, cache_namespace="plan"),
-            schema=PlanDecision,
-            node_name="plan",
-            state=state,
-            system_prompt=PLANNER_SYSTEM_PROMPT,
-            user_prompt=planner_prompt,
-            max_attempts=1,
-        )
-        search_requests = _planned_search_requests(decision, request) or deterministic_search
-        subtasks = [item.model_dump() for item in decision.subtasks[: cfg.max_context_workers]]
-        if not subtasks:
-            subtasks = _fallback_subtasks(state, search_requests)
-
+    if decision is None:
+        search_requests = deterministic_search
+        raw_units = _fallback_implementation_units(state, search_requests)
+        plan = [
+            "Inspect the smallest repository surface needed for the request.",
+            "Implement each unit independently and reconcile patch proposals deterministically.",
+            "Run targeted validation after all units are reconciled.",
+        ]
+        search_queries: list[str] = []
+        validation_commands = list(state.get("validation_commands") or [])
+        web_search_query = ""
+        custom_tool_calls: list[dict[str, Any]] = []
         effective_mode = task_mode
-        if task_mode != "parallel" and decision.task_mode == "parallel" and len(subtasks) > 1:
-            effective_mode = "parallel"
-
-        return {
-            "task_mode": effective_mode,
-            "plan": decision.plan,
-            "search_requests": search_requests,
-            "search_queries": decision.search_queries,
-            "subtasks": subtasks,
-            "custom_tool_calls": [
-                {
-                    **item.model_dump(),
-                    "tool_name": item.tool_name.strip(),
-                }
-                for item in decision.custom_tool_calls[:MAX_CUSTOM_TOOL_CALLS]
-                if item.tool_name.strip() in approved_custom_tool_names
-            ],
-            "validation_commands": decision.validation_commands,
-            "web_search_query": decision.web_search_query or "",
-            "status": "planned",
+    else:
+        search_requests = _planned_search_requests(decision, request) or deterministic_search
+        raw_units = [item.model_dump() for item in decision.implementation_units]
+        plan = decision.plan
+        search_queries = decision.search_queries
+        validation_commands = decision.validation_commands
+        web_search_query = decision.web_search_query or ""
+        approved_names = {
+            name
+            for name in selected_tool_names
+            if approved_custom_tool_registry.has(name)
         }
-    except Exception as exc:
-        return {
-            "task_mode": task_mode,
-            "plan": [
-                "Search only the files and symbols directly related to the request.",
-                "Gather bounded exact context with parallel read-only workers when useful.",
-                "Create a minimal patch and run targeted validation.",
-            ],
-            "search_requests": deterministic_search,
-            "search_queries": [],
-            "subtasks": _fallback_subtasks(state, deterministic_search),
-            "custom_tool_calls": [],
-            "web_search_query": "",
-            "errors": [
-                *state.get("errors", []),
-                f"LLM planning failed; used deterministic fallback plan: {exc}",
-            ],
-            "status": "planned",
-        }
+        custom_tool_calls = [
+            {**item.model_dump(), "tool_name": item.tool_name.strip()}
+            for item in decision.custom_tool_calls[:MAX_CUSTOM_TOOL_CALLS]
+            if item.tool_name.strip() in approved_names
+        ]
+        effective_mode = decision.task_mode if len(raw_units) > 1 else task_mode
 
+    units = _normalize_implementation_units(
+        raw_units,
+        state=state,
+        search_requests=search_requests,
+        cfg=cfg,
+    )
+    if len(units) > 1:
+        effective_mode = "parallel"
+
+    # This is a repair-round ceiling, not a scheduling-batch ceiling. Fresh pending
+    # units may run in later generations without consuming another repair iteration.
+    max_iterations = max(
+        1,
+        int(state.get("max_implementation_iterations", 0) or cfg.max_implementation_iterations),
+    )
+
+    implementation_run_id = str(state.get("run_id", "")).strip() or uuid4().hex
+
+    return {
+        "task_mode": effective_mode,
+        "plan": plan,
+        "implementation_run_id": implementation_run_id,
+        "search_requests": search_requests,
+        "search_queries": search_queries,
+        "implementation_units": units,
+        "completion_ledger": _initial_completion_ledger(units),
+        "implementation_generation": 0,
+        "implementation_iteration": 1,
+        "max_implementation_iterations": max_iterations,
+        "subtask_worker_results": [],
+        "reasoning_reconciliations_used": 0,
+        "custom_tool_calls": custom_tool_calls,
+        "validation_commands": validation_commands,
+        "web_search_query": web_search_query,
+        "errors": planning_errors,
+        "status": "planned",
+    }
 
 
 def custom_tools_node(
@@ -884,7 +1078,7 @@ def repo_navigator_node(
     state: CodingAgentState,
     cfg: CodingAgentSettings = default_settings,
 ) -> CodingAgentState:
-    """Select canonical repository files before any context worker reads them."""
+    """Select shared canonical repository hints before implementation workers run."""
 
     cfg = _settings_for_state(state, cfg)
     repo_root = resolve_repo_root(state, cfg)
@@ -914,11 +1108,21 @@ def repo_navigator_node(
             errors.append(f"Repo navigation search failed: {exc}")
 
     ranked_paths = paths_from_ranked_results(search_result_dicts)
-    # Patcher context requests are highest priority on retry. Canonical repo
-    # attachments come before any path text synthesized in the user/voice handoff.
+    ledger = state.get("completion_ledger") or {}
+    unit_candidate_paths = [
+        str(path).strip()
+        for unit in state.get("implementation_units", [])
+        if str((ledger.get(str(unit.get("id", ""))) or {}).get("status", "pending"))
+        in {"pending", "retryable"}
+        for path in unit.get("candidate_paths", [])
+        if str(path).strip()
+    ]
+    # Direct request paths and candidate paths from unfinished implementation units
+    # are higher priority than general ranked search results.
     raw_candidates = [
         *requested_paths,
         *explicit_paths,
+        *unit_candidate_paths,
         *ranked_paths,
     ]
     resolved_paths, unresolved_paths = _resolve_context_paths(
@@ -1007,7 +1211,15 @@ def repo_navigator_node(
         repo_files=repo_files,
     )
 
-    high_priority = set(requested_resolved + explicit_resolved)
+    unit_candidate_resolved, _ = _resolve_context_paths(
+        repo_root=repo_root,
+        candidate_paths=unit_candidate_paths,
+        repo_files=repo_files,
+    )
+
+    high_priority = set(
+        requested_resolved + explicit_resolved + unit_candidate_resolved
+    )
 
     navigation_files = [
         {
@@ -1022,7 +1234,9 @@ def repo_navigator_node(
     ]
 
     return {
-        "context_generation": int(state.get("context_generation", 0)) + 1,
+        "implementation_generation": int(
+            state.get("implementation_generation", 0)
+        ) + 1,
         "search_requests": search_requests,
         "search_results": search_result_dicts,
         "repo_navigation_summary": navigation_summary,
@@ -1036,991 +1250,31 @@ def repo_navigator_node(
     }
 
 
-def assign_context_workers(state: CodingAgentState) -> list[Send]:
-    """Fan out isolated read-only context workers with the LangGraph Send API."""
-
-    subtasks = list(state.get("subtasks") or [])
-    if not subtasks:
-        subtasks = _fallback_subtasks(
-            state,
-            list(state.get("search_requests") or _deterministic_search_requests(state)),
-        )
-
-    cfg = _settings_for_state(state)
-    max_workers = max(1, cfg.max_context_workers)
-    subtasks = subtasks[:max_workers]
-    nav_paths = [
-        str(item.get("path", "")).strip()
-        for item in state.get("repo_navigation_files", [])
-        if str(item.get("path", "")).strip()
-    ]
-
-    requested_context = [
-        dict(item)
-        for item in state.get("requested_context", [])
-        if isinstance(item, dict)
-    ]
-
-    worker_payloads: list[Send] = []
-    for index, raw_subtask in enumerate(subtasks):
-        subtask = dict(raw_subtask)
-        assigned = [
-            path for path_index, path in enumerate(nav_paths)
-            if path_index % len(subtasks) == index
-        ]
-        requested_for_worker = [
-            item
-            for request_index, item in enumerate(requested_context)
-            if request_index % len(subtasks) == index
-        ]
-
-        requested_paths = [
-            str(item.get("path", "")).strip()
-            for item in requested_for_worker
-            if str(item.get("path", "")).strip()
-        ]
-
-        # Retry context used to be sent entirely to worker 0. With a per-worker
-        # file cap that could evict that worker's own direct implementation files.
-        # Spread retry requests across workers and retain the subtask candidates.
-        subtask["candidate_paths"] = dedupe(
-            [
-                *requested_paths,
-                *subtask.get("candidate_paths", []),
-                *assigned,
-            ]
-        )
-        worker_payloads.append(
-            Send(
-                "context_worker",
-                {
-                    "repo_root": state.get("repo_root", ""),
-                    "user_request": state.get("user_request", ""),
-                    "task_mode": state.get("task_mode", "standard"),
-                    "runtime_settings": state.get("runtime_settings", {}),
-                    "active_subtask": subtask,
-                    "search_requests": state.get("search_requests", []),
-                    "requested_context": requested_for_worker,
-                    "context_generation": state.get("context_generation", 0),
-                },
-            )
-        )
-
-    return worker_payloads
-
-
-def _search_terms_from_worker_state(state: dict[str, Any]) -> list[str]:
-    subtask = state.get("active_subtask") or {}
-    values = [str(subtask.get("objective", "")), str(state.get("user_request", ""))]
-    for request in subtask.get("search_requests", []) or state.get("search_requests", []):
-        if isinstance(request, dict):
-            values.extend(str(term) for term in request.get("terms", []))
-    terms: list[str] = []
-    for value in values:
-        for token in _TOKEN_RE.findall(value):
-            if len(token) < 3 or token.lower() in {"the", "and", "with", "from", "this"}:
-                continue
-            if token.lower() not in {item.lower() for item in terms}:
-                terms.append(token)
-            if len(terms) >= 12:
-                return terms
-    return terms
-
-
-def _line_offsets(lines: list[str]) -> list[int]:
-    offsets = [0]
-    for line in lines:
-        offsets.append(offsets[-1] + len(line))
-    return offsets
-
-
-def _chunk_ranges_for_text(
-    text: str,
-    *,
-    terms: Iterable[str],
-    requested_ranges: list[tuple[int, int]],
-    cfg: CodingAgentSettings,
-) -> list[tuple[int, int, int, int]]:
-    lines = text.splitlines(keepends=True)
-    if not lines:
-        return []
-    offsets = _line_offsets(lines)
-    ranges: list[tuple[int, int]] = []
-
-    for start_line, end_line in requested_ranges:
-        start = max(1, start_line)
-        end = min(len(lines), max(start, end_line))
-        ranges.append((offsets[start - 1], offsets[end]))
-
-    lowered = text.lower()
-    for term in terms:
-        needle = term.strip().lower()
-        if len(needle) < 3:
-            continue
-        start_at = 0
-        while len(ranges) < 8:
-            hit = lowered.find(needle, start_at)
-            if hit < 0:
-                break
-            half = cfg.context_chunk_chars // 2
-            ranges.append((max(0, hit - half), min(len(text), hit + half)))
-            start_at = hit + len(needle)
-
-    if not ranges:
-        head = min(len(text), cfg.context_chunk_chars)
-        ranges.append((0, head))
-
-    # Expand to line boundaries, merge overlap, and keep the most useful first windows.
-    normalized: list[tuple[int, int]] = []
-    for start, end in sorted(ranges):
-        start = max(0, start - cfg.context_chunk_overlap_chars)
-        end = min(len(text), end + cfg.context_chunk_overlap_chars)
-        while start > 0 and text[start - 1] != "\n":
-            start -= 1
-        while end < len(text) and text[end - 1 : end] != "\n":
-            end += 1
-        if normalized and start <= normalized[-1][1]:
-            normalized[-1] = (normalized[-1][0], max(normalized[-1][1], end))
-        else:
-            normalized.append((start, end))
-
-    output: list[tuple[int, int, int, int]] = []
-    used = 0
-    per_file_budget = max(cfg.max_full_file_chars, cfg.context_chunk_chars)
-    for start, end in normalized:
-        if used >= per_file_budget:
-            break
-        end = min(end, start + (per_file_budget - used))
-        start_line = text.count("\n", 0, start) + 1
-        end_line = text.count("\n", 0, end) + 1
-        output.append((start, end, start_line, end_line))
-        used += end - start
-    return output
-
-
-def _requested_context_for_path(
-    requested_context: list[dict[str, Any]],
-    path: str,
-) -> tuple[list[tuple[int, int]], list[str], bool]:
-    ranges: list[tuple[int, int]] = []
-    terms: list[str] = []
-    matched = False
-    canonical = path.strip().replace("\\", "/")
-
-    for item in requested_context:
-        requested = _clean_repo_path_reference(str(item.get("path", ""))).lstrip("/")
-        if not requested or requested != canonical:
-            continue
-
-        matched = True
-        start = item.get("start_line")
-        end = item.get("end_line")
-
-        # A bounded range is meaningful only when both ends are explicit. If the
-        # model knows only one end, use terms/chunking instead of silently turning
-        # "1-?" into the first 121 lines and calling that sufficient context.
-        if isinstance(start, int) and isinstance(end, int):
-            ranges.append((start, end))
-
-        terms.extend(
-            str(term).strip()
-            for term in item.get("terms", [])
-            if str(term).strip()
-        )
-
-    return ranges, dedupe(terms), matched
-
-
-def _format_file_context(
-    *,
-    path: str,
-    text: str,
-    terms: list[str],
-    requested_context: list[dict[str, Any]],
-    cfg: CodingAgentSettings,
-) -> str:
-    requested_ranges, requested_terms, explicitly_requested = _requested_context_for_path(
-        requested_context,
-        path,
-    )
-
-    if len(text) <= cfg.max_full_file_chars and not requested_ranges:
-        return (
-            f"File: {path}\nContent-Status: complete\n"
-            f"```\n{text}\n```"
-        )
-
-    effective_terms = requested_terms or terms
-
-    # An explicit retry request with no bounded range/terms means "I need this file
-    # generally", not "give me lines 1-121". Allow a complete representation when
-    # it can consume at most one third of the total patch-context budget.
-    retry_full_file_limit = min(
-        cfg.max_file_chars,
-        max(cfg.max_full_file_chars, cfg.max_context_prompt_chars // 3),
-    )
-    if (
-        explicitly_requested
-        and not requested_ranges
-        and not requested_terms
-        and len(text) <= retry_full_file_limit
-    ):
-        return (
-            f"File: {path}\nContent-Status: complete\n"
-            f"```\n{text}\n```"
-        )
-
-    if explicitly_requested and not requested_ranges and not requested_terms:
-        effective_terms = [Path(path).stem, *terms]
-
-    ranges = _chunk_ranges_for_text(
-        text,
-        terms=[] if requested_ranges else effective_terms,
-        requested_ranges=requested_ranges,
-        cfg=cfg,
-    )
-    blocks = [
-        f"File: {path}\nContent-Status: selected-chunks ({len(text)} total characters)"
-    ]
-    for start, end, start_line, end_line in ranges:
-        blocks.append(
-            f"Chunk-Lines: {start_line}-{end_line}\n```\n{text[start:end]}\n```"
-        )
-    return "\n".join(blocks)
-
-
-def context_worker_node(
-    state: CodingAgentState,
-    cfg: CodingAgentSettings = default_settings,
-) -> CodingAgentState:
-    """Search and read one focused context slice. Workers never call an LLM or edit."""
-
-    cfg = _settings_for_state(state, cfg)
-    repo_root = resolve_repo_root(state, cfg)
-    subtask = dict(state.get("active_subtask") or {})
-    worker_id = str(subtask.get("id") or "context")
-    search_requests = subtask.get("search_requests") or state.get("search_requests", [])
-    errors: list[str] = []
-    candidate_paths = filter_context_paths(list(subtask.get("candidate_paths") or []))
-
-    should_search = not (state.get("task_mode") == "simple" and bool(candidate_paths))
-    if search_requests and should_search:
-        try:
-            results = search_repository(
-                repo_root,
-                search_requests,
-                max_results=max(10, cfg.max_worker_files * 4),
-            )
-            candidate_paths.extend(
-                paths_from_ranked_results([item.to_dict() for item in results])
-            )
-
-        except Exception as exc:
-            errors.append(f"Worker {worker_id} search failed: {exc}")
-
-    # Patcher-requested files go first on retries.
-    requested_paths = [
-        str(item.get("path", "")).strip()
-        for item in state.get("requested_context", [])
-        if str(item.get("path", "")).strip()
-    ]
-
-    candidate_paths = [*requested_paths, *candidate_paths]
-
-    paths, unresolved = _resolve_context_paths(
-        repo_root=repo_root,
-        candidate_paths=dedupe(filter_context_paths(candidate_paths)),
-    )
-
-    paths = paths[: cfg.max_worker_files]
-
-    # The navigator reports unresolved explicit paths once. Workers only report
-    # unresolved retry requests, avoiding the same stale alias error per worker.
-    requested_set = set(requested_paths)
-    for path in unresolved:
-        if path in requested_set:
-            errors.append(f"Worker {worker_id} could not resolve requested context path {path}.")
-
-    terms = _search_terms_from_worker_state(state)
-    context_blocks: list[str] = []
-    inspected: list[str] = []
-
-    for path in paths:
-        try:
-            probe = read_file(repo_root, path, max_chars=cfg.max_file_chars + 1)
-            if len(probe) > cfg.max_file_chars:
-                errors.append(
-                    f"Skipped {path}: file exceeds the configured read ceiling of "
-                    f"{cfg.max_file_chars} characters."
-                )
-                continue
-            context_blocks.append(
-                _format_file_context(
-                    path=path,
-                    text=probe,
-                    terms=terms,
-                    requested_context=state.get("requested_context", []),
-                    cfg=cfg,
-                )
-            )
-            inspected.append(path)
-        except Exception as exc:
-            errors.append(f"Worker {worker_id} could not read {path}: {exc}")
-
-    result = {
-        "generation": int(state.get("context_generation", 0)),
-        "worker_id": worker_id,
-        "objective": str(subtask.get("objective", "")),
-        "context_blocks": context_blocks,
-        "files_inspected": inspected,
-        "errors": errors,
-    }
-    # This is the only state key written by fan-out workers; it has an append reducer.
-    return {"context_worker_results": [result]}
-
-
-def _compact_upload_context(
-    state: CodingAgentState,
-    cfg: CodingAgentSettings,
-) -> tuple[list[str], list[str], list[str]]:
-    blocks: list[str] = []
-    used: list[str] = []
-    errors: list[str] = []
-    terms = _search_terms_from_worker_state(state)
-
-    for item in state.get("attached_files", []):
-        if item.get("source") == "repo":
-            continue
-        name = str(item.get("name", "attachment")).strip() or "attachment"
-        content = str(item.get("content", ""))
-        if not content:
-            continue
-        if item.get("truncated"):
-            errors.append(
-                f"Attachment {name} arrived already truncated by the client or an older API."
-            )
-        if len(content) <= cfg.max_full_file_chars:
-            block = f"Attachment: {name}\nContent-Status: complete\n```\n{content}\n```"
-        else:
-            ranges = _chunk_ranges_for_text(
-                content,
-                terms=terms,
-                requested_ranges=[],
-                cfg=cfg,
-            )
-            parts = [
-                f"Attachment: {name}\nContent-Status: selected-chunks "
-                f"({len(content)} total characters)"
-            ]
-            for start, end, start_line, end_line in ranges:
-                parts.append(
-                    f"Chunk-Lines: {start_line}-{end_line}\n```\n{content[start:end]}\n```"
-                )
-            block = "\n".join(parts)
-        blocks.append(block)
-        used.append(name)
-    return blocks, used, errors
-
-
-def _context_block_path(block: str) -> str | None:
-    first_line = block.splitlines()[0].strip() if block else ""
-    if not first_line.startswith("File: "):
-        return None
-    path = first_line.removeprefix("File: ").strip()
-    return path or None
-
-
-def _adaptive_context_prompt_budget(
-    *,
-    cfg: CodingAgentSettings,
-    priority_blocks: list[str],
-    direct_file_blocks: list[str],
-    upload_blocks: list[str],
-) -> tuple[int, int]:
-    """Choose a bounded context budget based on exact high-priority evidence.
-
-    ``context_prompt_base_chars`` keeps ordinary runs small. Broad runs grow only
-    when user attachments, navigator-selected files, patcher retry requests, or
-    other priority blocks actually require more room. ``max_context_prompt_chars``
-    remains the hard safety ceiling.
-    """
-
-    hard_cap = max(1, int(cfg.max_context_prompt_chars))
-    base = min(
-        hard_cap,
-        max(1, int(getattr(cfg, "context_prompt_base_chars", hard_cap))),
-    )
-    reserve = max(0, int(getattr(cfg, "context_prompt_reserve_chars", 0)))
-
-    priority_chars = sum(
-        len(block)
-        for block in [*priority_blocks, *direct_file_blocks, *upload_blocks]
-    )
-    desired = max(base, priority_chars + reserve)
-    return min(hard_cap, desired), priority_chars
-
-
-def gather_context_node(
-    state: CodingAgentState,
-    cfg: CodingAgentSettings = default_settings,
-) -> CodingAgentState:
-    """Fan-in worker results and build a bounded, priority-aware patch prompt."""
-
-    cfg = _settings_for_state(state, cfg)
-    repo_root = resolve_repo_root(state, cfg)
-    generation = int(state.get("context_generation", 0))
-    worker_results = [
-        item
-        for item in state.get("context_worker_results", [])
-        if int(item.get("generation", -1)) == generation
-    ]
-    errors = list(state.get("errors", []))
-    files_inspected: list[str] = []
-
-    selected_paths = [
-        str(item.get("path", "")).strip()
-        for item in state.get("repo_navigation_files", [])
-        if str(item.get("path", "")).strip()
-    ]
-    execution_block = (
-        "# Execution context\n"
-        f"Task mode: {state.get('task_mode', 'standard')}\n"
-        f"Selected skills: {', '.join(state.get('selected_skills') or [state.get('selected_skill', 'none')])}\n"
-        f"Plan:\n{bullets(state.get('plan', []))}\n"
-        f"Selected repository paths:\n{bullets(selected_paths)}"
-    )
-
-    priority_blocks: list[str] = [execution_block]
-    loop_focus = _format_loop_context_focus(state)
-    if loop_focus:
-        priority_blocks.append("# Retry focus\n" + loop_focus)
-
-    for tool_result in state.get("custom_tool_results", []):
-        tool_name = str(tool_result.get("tool_name", "custom_tool"))
-        if tool_result.get("success"):
-            priority_blocks.append(
-                f"# Approved custom tool result: {tool_name}\n"
-                f"Reason: {tool_result.get('reason', '')}\n"
-                f"{tool_result.get('output', '')}"
-            )
-        else:
-            errors.append(
-                f"Custom tool {tool_name} did not produce usable context: "
-                f"{tool_result.get('output', '')}"
-            )
-
-    # Fan-out result order is not stable. Keep all representations until request
-    # priority is known; a short selected chunk must not replace a complete file that
-    # the patcher explicitly asked to inspect on retry.
-    file_block_variants: dict[str, list[str]] = {}
-    worker_notes: list[str] = []
-    for result in worker_results:
-        worker_errors = [str(item) for item in result.get("errors", [])]
-        errors.extend(worker_errors)
-        files_inspected.extend(str(path) for path in result.get("files_inspected", []))
-
-        blocks = [str(block) for block in result.get("context_blocks", [])]
-        if blocks:
-            worker_notes.append(
-                f"- {result.get('worker_id', 'worker')}: {result.get('objective', '')}"
-            )
-        for block in blocks:
-            path = _context_block_path(block)
-            if not path:
-                continue
-            file_block_variants.setdefault(path, []).append(block)
-
-    requested_raw = [
-        str(item.get("path", "")).strip()
-        for item in state.get("requested_context", [])
-        if str(item.get("path", "")).strip()
-    ]
-    
-    requested_paths, _ = _resolve_context_paths(
-        repo_root=repo_root,
-        candidate_paths=requested_raw,
-    )
-    repo_attachment_paths, _ = _resolve_context_paths(
-        repo_root=repo_root,
-        candidate_paths=_repo_attachment_paths(state),
-    )
-
-    # Direct implementation files are mandatory evidence. A retry request,
-    # search result, or per-worker file cap must not make them disappear.
-    direct_path_list = dedupe(
-        [
-            *requested_paths,
-            *repo_attachment_paths,
-            *selected_paths,
-        ]
-    )
-    direct_terms = _search_terms_from_worker_state(state)
-    for path in direct_path_list:
-        if path in file_block_variants:
-            continue
-        try:
-            probe = read_file(repo_root, path, max_chars=cfg.max_file_chars + 1)
-            if len(probe) > cfg.max_file_chars:
-                errors.append(
-                    f"Skipped direct context {path}: file exceeds the configured read "
-                    f"ceiling of {cfg.max_file_chars} characters."
-                )
-                continue
-            file_block_variants[path] = [
-                _format_file_context(
-                    path=path,
-                    text=probe,
-                    terms=direct_terms,
-                    requested_context=state.get("requested_context", []),
-                    cfg=cfg,
-                )
-            ]
-            files_inspected.append(path)
-        except Exception as exc:
-            errors.append(f"Could not load direct repository context {path}: {exc}")
-
-    # Priority: patcher retry requests -> repo attachments -> navigator selections
-    # -> remaining search-derived worker files.
-    ordered_file_paths = dedupe(
-        [
-            *direct_path_list,
-            *files_inspected,
-        ]
-    )
-
-    direct_paths = set(direct_path_list)
-    file_blocks: dict[str, str] = {}
-
-    for path, variants in file_block_variants.items():
-        complete = [block for block in variants if "Content-Status: complete" in block]
-        if path in requested_paths:
-            # Retry requests need the richest exact representation available.
-            file_blocks[path] = min(complete, key=len) if complete else max(variants, key=len)
-        elif path in direct_paths:
-            file_blocks[path] = min(complete, key=len) if complete else max(variants, key=len)
-        else:
-            # Secondary search-derived context should stay compact.
-            file_blocks[path] = min(variants, key=len)
-
-    upload_blocks, attached_files_used, upload_errors = _compact_upload_context(state, cfg)
-    errors.extend(upload_errors)
-
-    trailing_blocks: list[str] = []
-    if worker_notes:
-        trailing_blocks.append("# Context workers\n" + "\n".join(worker_notes))
-    memories = state.get("long_term_memories", [])
-    if memories:
-        trailing_blocks.append(
-            "# Relevant prior coding memories\n" + bullets(memories[:5])
-        )
-    if state.get("web_search_results"):
-        trailing_blocks.append(
-            "# Web search results\n" + str(state.get("web_search_results"))[:8_000]
-        )
-
-    direct_file_blocks = [
-        file_blocks[path]
-        for path in ordered_file_paths
-        if path in file_blocks and path in direct_paths
-    ]
-    effective_context_budget, priority_context_chars = _adaptive_context_prompt_budget(
-        cfg=cfg,
-        priority_blocks=priority_blocks,
-        direct_file_blocks=direct_file_blocks,
-        upload_blocks=upload_blocks,
-    )
-
-    secondary_file_blocks = [
-        file_blocks[path]
-        for path in ordered_file_paths
-        if path in file_blocks and path not in direct_paths
-    ]
-    
-    candidate_blocks = [
-        *priority_blocks,
-        *direct_file_blocks,
-        *upload_blocks,
-        *secondary_file_blocks,
-        *trailing_blocks,
-    ]
-
-    # Keep blocks whole. Requested/direct files come first, and the budget expands
-    # automatically when those exact files need more than the normal baseline.
-    context: list[str] = []
-    used_chars = 0
-    omitted_blocks = 0
-    for block in candidate_blocks:
-        if used_chars + len(block) > effective_context_budget:
-            omitted_blocks += 1
-            continue
-        context.append(block)
-        used_chars += len(block)
-
-    if priority_context_chars > effective_context_budget:
-        errors.append(
-            "High-priority repository context exceeds the hard context ceiling: "
-            f"{priority_context_chars:,} required chars vs "
-            f"{effective_context_budget:,} allowed chars. "
-            "The patcher should request narrower file ranges or symbols."
-        )
-    elif omitted_blocks:
-        errors.append(
-            "Context prompt budget reached at "
-            f"{used_chars:,}/{effective_context_budget:,} chars "
-            f"(hard cap {cfg.max_context_prompt_chars:,}); omitted "
-            f"{omitted_blocks} lower-priority block(s) after preserving requested/direct context."
-        )
-
-    files_inspected = dedupe(files_inspected)
-    has_usable_context = bool(context and (files_inspected or attached_files_used))
-    return {
-        "context": context,
-        "files_inspected": files_inspected,
-        "attached_files_used": attached_files_used,
-        "errors": errors,
-        "status": "context_gathered" if has_usable_context else "context_failed",
-    }
-
-
-def patch_node(
-    state: CodingAgentState,
-    cfg: CodingAgentSettings = default_settings,
-) -> CodingAgentState:
-    """Ask the LLM for exact edits and apply them when writes are enabled."""
-    
-    cfg = _settings_for_state(state, cfg)
-    repo_root = resolve_repo_root(state, cfg)
-    errors = list(state.get("errors", []))
-    allow_write = resolve_allow_write(state, cfg)
-    patch_attempts = int(state.get("patch_attempts", 0)) + 1
-    max_patch_attempts = int(state.get("max_patch_attempts", MAX_PATCH_ATTEMPTS))
-
-    previous_file_changes = list(state.get("file_changes", []))
-    previous_diffs = list(state.get("diffs", []))
-    
-    known_changed_paths = {
-        item.get("path", "")
-        for item in previous_file_changes
-        if item.get("path")
-    }
-
-    file_changes: list[dict[str, str]] = [*previous_file_changes]
-    diffs: list[str] = [*previous_diffs]
-
-    attempt_file_changes: list[dict[str, str]] = []
-    attempt_write_results: list[str] = []
-    idempotent_noops = 0
-    converted_creates = 0
-
-    use_fast_patch_model = (
-        cfg.fast_path_enabled
-        and state.get("task_mode") == "simple"
-        and patch_attempts == 1
-    )
-    patch_prompt = build_patcher_user_prompt(
-        request=state["user_request"],
-        selected_skill=", ".join(state.get("selected_skills") or [state.get("selected_skill", "")]),
-        skill_instructions=skill_instructions_for_llm(
-            state.get("skill_instructions", "")
-        ),
-        plan=bullets(state.get("plan", [])),
-        context=build_patch_context(state),
-    )
-    patch_state = {**state, "patch_attempts": patch_attempts}
-    patch_model = (
-        _coding_node_model(cfg.simple_patch_max_tokens, cache_namespace="patch")
-        if use_fast_patch_model
-        else _reasoning_node_model(cfg.patch_max_tokens, cache_namespace="patch")
-    )
-
+_VALIDATION_INFRA_MARKERS = (
+    "not found",
+    "no such file or directory",
+    "command blocked",
+    "blocked by coding-agent allowlist",
+    "timed out",
+    "timeout",
+    "validation harness failed",
+    "executable file not found",
+    "is not recognized as an internal or external command",
+)
+
+
+def _validation_is_infrastructure_failure(result: dict[str, Any]) -> bool:
     try:
-        decision: PatchDecision = invoke_parsed_decision(
-            model=patch_model,
-            schema=PatchDecision,
-            node_name="patch_fast" if use_fast_patch_model else "patch",
-            state=patch_state,
-            system_prompt=PATCHER_SYSTEM_PROMPT,
-            user_prompt=patch_prompt,
-            max_attempts=1 if use_fast_patch_model else 2,
-        )
-    except Exception as exc:
-        if use_fast_patch_model:
-            errors.append(
-                f"Fast patch model failed; escalated to reasoning model: {exc}"
-            )
-            try:
-                decision = invoke_parsed_decision(
-                    model=_reasoning_node_model(
-                        cfg.patch_max_tokens,
-                        cache_namespace="patch",
-                    ),
-                    schema=PatchDecision,
-                    node_name="patch_escalated",
-                    state=patch_state,
-                    system_prompt=PATCHER_SYSTEM_PROMPT,
-                    user_prompt=patch_prompt,
-                    max_attempts=2,
-                )
-                use_fast_patch_model = False
-            except Exception as escalated_exc:
-                return {
-                    "patch_attempts": patch_attempts,
-                    "max_patch_attempts": max_patch_attempts,
-                    "patch_summary": f"LLM patching failed: {escalated_exc}",
-                    "errors": [
-                        *errors,
-                        f"LLM patching failed on attempt {patch_attempts}: {escalated_exc}",
-                    ],
-                    "status": "patch_failed",
-                }
-        else:
-            return {
-                "patch_attempts": patch_attempts,
-                "max_patch_attempts": max_patch_attempts,
-                "patch_summary": f"LLM patching failed: {exc}",
-                "errors": [*errors, f"LLM patching failed on attempt {patch_attempts}: {exc}"],
-                "status": "patch_failed",
-            }
-    
-
-    repo_files = filter_context_paths(list_files(repo_root, ".", max_depth=12))
-    requested_context, unresolved_context_requests = _canonicalize_context_requests(
-        repo_root=repo_root,
-        requests=[item.model_dump() for item in decision.context_requests],
-        repo_files=repo_files,
-    )
-    for unresolved_path in unresolved_context_requests:
-        errors.append(
-            f"Could not resolve patcher context request to a repository file or directory: "
-            f"{unresolved_path}"
-        )
-
-    for edit in decision.edits:
-
-        path = _clean_repo_path_reference(edit.path)
-
-        resolved_path = _resolve_repo_file_reference(
-            repo_root=repo_root,
-            candidate=path,
-            repo_files=repo_files,
-        )
-
-        if resolved_path and resolved_path != path:
-            errors.append(f"Resolved patch path {path} to {resolved_path}.")
-            path = resolved_path
-
-        if not path or is_forbidden_write_path(path):
-            errors.append(f"Skipped forbidden or empty write path: {path}")
-            continue
-
-        try:
-            effective_operation = edit.operation
-            converted_create_to_replace = False
-
-            if edit.operation == "create":
-                if edit.old.strip():
-                    raise ValueError(
-                        f"Create operation for {path} must use an empty old value."
-                    )
-
-                try:
-                    existing = read_file(repo_root, path, max_chars=cfg.max_file_chars)
-                except FileNotFoundError:
-                    before = ""
-                    after = edit.new
-                else:
-                    before = existing
-                    after = edit.new
-
-                    if _same_file_content(existing, edit.new):
-                        result = (
-                            f"No-op: {path} already exists with the requested content."
-                        )
-                        attempt_write_results.append(result)
-                        idempotent_noops += 1
-
-                        if path not in known_changed_paths:
-                            change = {
-                                "path": path,
-                                "operation": "create",
-                                "status": "unchanged",
-                                "reason": edit.reason,
-                                "write_result": result,
-                                "original": before,
-                                "modified": after,
-                            }
-                            attempt_file_changes.append(change)
-                            file_changes.append(change)
-                            known_changed_paths.add(path)
-
-                        continue
-
-                    # The model selected create for a file that already exists. Treat
-                    # the proposed full file contents as a safe full-file replacement
-                    # instead of failing the whole run.
-                    effective_operation = "replace"
-                    converted_create_to_replace = True
-                    converted_creates += 1
-
-            elif edit.operation == "replace":
-                if not edit.old:
-                    raise ValueError(
-                        f"Replace operation for {path} requires non-empty old text."
-                    )
-                before = read_file(repo_root, path, max_chars=cfg.max_file_chars)
-                after = apply_exact_replace(before, edit.old, edit.new, path=path)
-
-            elif edit.operation == "full_file_replace":
-                before = read_file(repo_root, path, max_chars=cfg.max_file_chars)
-                after = edit.new
-
-            elif edit.operation in {"insert_after", "insert_before"}:
-                if not edit.old:
-                    raise ValueError(
-                        f"{edit.operation} for {path} requires a non-empty anchor in old."
-                    )
-                before = read_file(repo_root, path, max_chars=cfg.max_file_chars)
-                replacement = (
-                    edit.old + edit.new
-                    if edit.operation == "insert_after"
-                    else edit.new + edit.old
-                )
-                after = apply_exact_replace(before, edit.old, replacement, path=path)
-
-            elif edit.operation == "append":
-                before = read_file(repo_root, path, max_chars=cfg.max_file_chars)
-                after = before + edit.new
-
-            else:
-                raise ValueError(f"Unsupported edit operation for {path}: {edit.operation}")
-
-            
-            diffs.append(unified_diff(path, before, after))
-            result = write_file(repo_root, path, after, allow_write=allow_write)
-
-            if converted_create_to_replace:
-                result = (
-                    f"{result} Converted requested create operation to replace because "
-                    f"{path} already existed."
-                )
-
-            attempt_write_results.append(result)
-
-            change = {
-                "path": path,
-                "operation": effective_operation,
-                "requested_operation": edit.operation,
-                "status": "modified" if before else "added",
-                "reason": edit.reason,
-                "write_result": result,
-                "original": before,
-                "modified": after,
-            }
-
-            attempt_file_changes.append(change)
-            file_changes.append(change)
-            known_changed_paths.add(path)
-
-        except Exception as exc:
-            errors.append(f"Failed to process edit for {path}: {exc}")
-
-    validation_commands = decision.validation_commands or state.get("validation_commands") or []
-    mode = "WRITE MODE" if allow_write else "DRY RUN"
-
-    successful_attempt_items = len(attempt_file_changes) + idempotent_noops
-
-    patch_summary = (
-        f"{mode}: {decision.summary}\n\n"
-        f"Patch attempt: {patch_attempts}/{max_patch_attempts}\n"
-        f"Files changed/proposed this attempt: {len(attempt_file_changes)}\n"
-        f"Idempotent create no-ops this attempt: {idempotent_noops}\n"
-        f"Create operations converted to replace this attempt: {converted_creates}\n"
-        f"Total files changed/proposed: {len(file_changes)}\n"
-        f"Write results:\n{bullets(attempt_write_results)}"
-    )
-
-
-    if decision.edits and successful_attempt_items == 0:
-        status: Literal["patched", "patch_failed", "patch_skipped"] = "patch_failed"
-    elif not decision.edits:
-        status = "patch_skipped"
-    else:
-        status = "patched"
-
-    patch_retry_fields: dict[str, object] = {}
-
-    should_retry_patch = (
-        status == "patch_failed"
-        or (status == "patch_skipped" and bool(requested_context))
-    )
-    if should_retry_patch and patch_attempts < max_patch_attempts:
-        if status == "patch_failed":
-            retry_reason = "failed while processing the proposed edits"
-            retry_detail = (
-                "Emphasize the files involved in the failed edits, exact current file "
-                "contents, and any missing surrounding symbols/imports needed for a "
-                "valid replacement."
-            )
-        else:
-            retry_reason = "returned no edits even though repository context was gathered"
-            retry_detail = (
-                "Treat the patch summary as a missing-context signal. Re-select the "
-                "direct implementation files and related schemas/transport files, then "
-                "load their exact repository contents before retrying."
-            )
-
-        context_request_detail = ""
-        if requested_context:
-            context_request_detail = (
-                " Exact context requested: "
-                + "; ".join(
-                    f"{item.get('path')} lines {item.get('start_line') or '?'}-"
-                    f"{item.get('end_line') or '?'} ({item.get('reason') or 'no reason'})"
-                    for item in requested_context
-                )
-            )
-        patch_retry_focus = (
-            f"Patch attempt {patch_attempts} {retry_reason}. {retry_detail} "
-            f"Patcher summary: {decision.summary or '(none)'}.{context_request_detail}"
-        )
-
-        patch_retry_fields = {
-            "requested_context": requested_context,
-            "continue_loop": True,
-            "loop_context_focus": patch_retry_focus,
-            "loop_notes": [
-                *state.get("loop_notes", []),
-                (
-                    f"Patch attempt {patch_attempts}: {status}; refresh prioritized "
-                    "repository context before retry."
-                ),
-            ][-8:],
-            "search_results": [],
-            "repo_navigation_files": [],
-            "repo_navigation_missing_context": [],
-            "context": [],
-            "files_inspected": [],
-        }
-
-    return {
-        **patch_retry_fields,
-        "requested_context": (
-            requested_context
-            if patch_retry_fields
-            else []
-        ),
-        "continue_loop": bool(patch_retry_fields),
-        "patch_attempts": patch_attempts,
-        "max_patch_attempts": max_patch_attempts,
-        "file_changes": file_changes,
-        "diffs": diffs,
-        "patch_summary": patch_summary,
-        "validation_commands": validation_commands,
-        "errors": errors,
-        "status": status,
-    }
-
-
+        returncode = int(result.get("returncode", 0))
+    except (TypeError, ValueError):
+        returncode = 1
+    if returncode == 0:
+        return False
+    haystack = "\n".join(
+        str(result.get(key, ""))
+        for key in ("stderr", "stdout", "reason")
+    ).lower()
+    return any(marker in haystack for marker in _VALIDATION_INFRA_MARKERS)
 
 
 def validate_node(
@@ -2060,8 +1314,25 @@ def validate_node(
             }
         ]
 
-    blocking_failures = blocking_validation_failures(results)
-    advisory_failures = advisory_validation_failures(results)
+    infrastructure_failures = [
+        item for item in results if _validation_is_infrastructure_failure(item)
+    ]
+    code_results = [
+        item for item in results if not _validation_is_infrastructure_failure(item)
+    ]
+    for item in infrastructure_failures:
+        item["failure_kind"] = "infrastructure"
+        existing_reason = str(item.get("reason", "")).strip()
+        item["reason"] = (
+            "Validation infrastructure unavailable; this does not reopen implementation work."
+            + (f" {existing_reason}" if existing_reason else "")
+        )
+
+    blocking_failures = blocking_validation_failures(code_results)
+    advisory_failures = [
+        *advisory_validation_failures(code_results),
+        *infrastructure_failures,
+    ]
 
     errors = list(state.get("errors", []))
 
@@ -2086,252 +1357,109 @@ def validate_node(
     }
 
 
-def assess_progress_node(
-    state: CodingAgentState,
-    cfg: CodingAgentSettings = default_settings,
-) -> CodingAgentState:
-    
-    cfg = _settings_for_state(state, cfg)
-    iteration = int(state.get("iteration", 0)) + 1
-    max_iterations = int(state.get("max_iterations", 3))
-    errors = list(state.get("errors", []))
-    loop_notes = list(state.get("loop_notes", []))
-
-    validation_results = state.get("validation_results", [])
-    validation_failed = validation_failed_results(validation_results)
-
-    if iteration >= max_iterations:
-        return {
-            "iteration": iteration,
-            "max_iterations": max_iterations,
-            "continue_loop": False,
-            "progress_reason": (
-                f"Loop limit reached at {iteration}/{max_iterations}. "
-                "Reporting current work instead of continuing."
-            ),
-            "loop_notes": [
-                *loop_notes,
-                f"Iteration {iteration}: loop limit reached.",
-            ][-8:],
-            "status": "loop_limit_reached",
-        }
-
-    validation_summary = "\n".join(
-        f"- {item.get('command', 'unknown')} -> exit code {item.get('returncode', 'unknown')}"
-        for item in validation_results
-    ) or "No validation results."
-
-    try:
-        decision: ProgressDecision = invoke_parsed_decision(
-            model=_reasoning_node_model(cfg.progress_max_tokens, cache_namespace="progress"),
-            schema=ProgressDecision,
-            node_name="assess_progress",
-            state=state,
-            system_prompt=(
-                "You are the progress assessment node for a coding agent. "
-                "Decide if the user's request is complete or if another implementation "
-                "loop is needed. Continue only when there is concrete remaining work, "
-                "failed validation that can likely be fixed, or missing context that can "
-                "be gathered. Do not loop just to polish."
-            ),
-            user_prompt=dedent(
-                f"""
-                Assess whether this coding task is complete.
-
-                # User request
-                {state.get("user_request", "")}
-
-                # Plan
-                {bullets(state.get("plan", []))}
-
-                # Files inspected
-                {bullets(state.get("files_inspected", []))}
-
-                # File changes
-                {bullets([
-                    item.get("path", "") + " - " + item.get("write_result", "")
-                    for item in state.get("file_changes", [])
-                ])}
-
-                # Patch summary
-                {state.get("patch_summary", "")}
-
-                # Validation
-                {validation_summary}
-
-                # Existing errors
-                {bullets(errors) if errors else "None"}
-
-                # Prior loop notes
-                {bullets(loop_notes) if loop_notes else "None"}
-
-                # Iteration
-                {iteration}/{max_iterations}
-
-                Return whether the task is complete, whether to continue, and what
-                the next loop should focus on.
-                """
-            ).strip(),
-        )
-    except Exception as exc:
-        if validation_failed and patch_attempts_remaining(state):
-            return {
-                "iteration": iteration,
-                "max_iterations": max_iterations,
-                "continue_loop": True,
-                "progress_reason": f"Progress assessment failed, but validation failed: {exc}",
-                "remaining_tasks": ["Fix failing validation."],
-                "loop_context_focus": (
-                    "Progress assessment failed, but validation failed. "
-                    "Refresh context around changed files and validation errors before patching again."
-                ),
-                "loop_notes": [
-                    *loop_notes,
-                    f"Iteration {iteration}: validation failed; continue with repair loop.",
-                ][-8:],
-                "search_requests": _derive_loop_search_requests(
-                    state=state,
-                    remaining_tasks=["Fix failing validation."],
-                    next_iteration_notes="Refresh context around changed files and validation errors.",
-                    reason=str(exc),
-                ),
-                "search_results": [],
-                "subtasks": [],
-                "repo_navigation_files": [],
-                "repo_navigation_missing_context": [],
-                "context": [],
-                "files_inspected": [],
-                "errors": [*errors, f"Progress assessment failed: {exc}"],
-                "status": "assessed",
-            }
-
-        return {
-            "iteration": iteration,
-            "max_iterations": max_iterations,
-            "continue_loop": False,
-            "progress_reason": f"Progress assessment failed; reporting current state: {exc}",
-            "errors": [*errors, f"Progress assessment failed: {exc}"],
-            "status": "assessed",
-        }
-
-    additional_search_requests = [
-        item
-        for item in (_dump_search_request(item) for item in decision.additional_search_requests)
-        if item
-    ]
-
-    should_continue = (
-        decision.should_continue
-        and not decision.is_complete
-        and iteration < max_iterations
-    )
-
-    next_loop_focus = "\n".join(
-        item
-        for item in [
-            f"Iteration {iteration} assessment: {decision.reason}",
-            f"Next iteration focus: {decision.next_iteration_notes}"
-            if decision.next_iteration_notes
-            else "",
-            "Remaining tasks:\n" + bullets(decision.remaining_tasks)
-            if decision.remaining_tasks
-            else "",
-        ]
-        if item
-    )
-
-    next_loop_search_requests = additional_search_requests or _derive_loop_search_requests(
-        state=state,
-        remaining_tasks=decision.remaining_tasks,
-        next_iteration_notes=decision.next_iteration_notes,
-        reason=decision.reason,
-    )
-
-    return {
-        "iteration": iteration,
-        "max_iterations": max_iterations,
-        "continue_loop": should_continue,
-        "remaining_tasks": decision.remaining_tasks,
-        "progress_reason": decision.reason,
-        "loop_context_focus": next_loop_focus if should_continue else state.get("loop_context_focus", ""),
-        "loop_notes": [
-            *loop_notes,
-            f"Iteration {iteration}: {decision.reason}\nNext: {decision.next_iteration_notes}",
-        ][-8:],
-        # Force fresh navigation/search/context on the next loop.
-        "search_requests": next_loop_search_requests if should_continue else state.get("search_requests", []),
-        "search_results": [] if should_continue else state.get("search_results", []),
-        "subtasks": [] if should_continue else state.get("subtasks", []),
-        "repo_navigation_summary": "" if should_continue else state.get("repo_navigation_summary", ""),
-        "repo_navigation_files": [] if should_continue else state.get("repo_navigation_files", []),
-        "repo_navigation_missing_context": [],
-        "context": [] if should_continue else state.get("context", []),
-        "files_inspected": [] if should_continue else state.get("files_inspected", []),
-        "status": "assessed",
-    }
-
-
-
-
-
-
 def report_node(state: CodingAgentState) -> CodingAgentState:
+    """Return a concise user-facing Markdown summary.
+
+    Detailed execution diagnostics already travel in structured result fields (plan,
+    completion_ledger, runtime_settings, validation_results, etc.). The chat response
+    should explain the outcome without dumping those internals back at the user.
+    """
+
+    file_changes = [
+        item for item in state.get("file_changes", []) if str(item.get("path", "")).strip()
+    ]
+    patch_summary = str(state.get("patch_summary", "")).strip()
     validation_results = state.get("validation_results", [])
-    validation_lines = [
-        f"- `{item.get('command', 'unknown')}` -> exit code "
-        f"{item.get('returncode', 'unknown')}"
-        for item in validation_results
-    ]
-    all_errors = [*state.get("errors", []), *state.get("memory_errors", [])]
-    changed = [
-        item.get("path", "") + " - " + item.get("write_result", "")
-        for item in state.get("file_changes", [])
-    ]
-    current_generation = int(state.get("context_generation", 0))
-    worker_count = sum(
-        1
-        for item in state.get("context_worker_results", [])
-        if int(item.get("generation", -1)) == current_generation
+    all_errors = dedupe(
+        [
+            str(item).strip()
+            for item in [*state.get("errors", []), *state.get("memory_errors", [])]
+            if str(item).strip()
+        ]
     )
 
-    report = f"""Coding agent run summary
+    successful_statuses = {
+        "complete",
+        "completed",
+        "done",
+        "success",
+        "succeeded",
+        "applied",
+        "no_change_needed",
+    }
+    incomplete_units: list[tuple[str, str, str]] = []
+    
+    for unit_id, entry in (state.get("completion_ledger") or {}).items():
+        status = str(entry.get("status", "unknown")).strip().lower() or "unknown"
+        if status in successful_statuses:
+            continue
+        incomplete_units.append(
+            (
+                str(unit_id),
+                status,
+                str(entry.get("last_error", "")).strip(),
+            )
+        )
 
-Request:
-{state.get('user_request', '')}
+    if patch_summary:
+        summary = patch_summary
+    elif file_changes:
+        summary = (
+            f"Prepared {len(file_changes)} file change"
+            f"{'s' if len(file_changes) != 1 else ''} for review."
+        )
+    elif incomplete_units:
+        summary = "The run finished without a complete patch for every implementation unit."
+    else:
+        summary = "The run completed without proposing repository changes."
 
-Execution mode:
-{state.get('task_mode', 'standard')} ({worker_count} context worker(s))
+    lines = ["## Summary", "", summary]
 
-Execution profile:
-{state.get('runtime_settings', {})}
+    if file_changes:
+        lines.extend(["", "## Changes", ""])
+        for item in file_changes:
+            path = str(item.get("path", "")).strip()
+            detail = (
+                str(item.get("reason", "")).strip()
+                or str(item.get("write_result", "")).strip()
+                or "Updated"
+            )
+            lines.append(f"- `{path}` — {detail}")
 
-Selected skills:
-{bullets(state.get('selected_skills') or [state.get('selected_skill', 'none')])}
+    lines.extend(["", "## Validation", ""])
+    if validation_results:
+        for item in validation_results:
+            command = str(item.get("command", "unknown")).strip() or "unknown"
+            returncode = item.get("returncode")
+            failure_kind = str(item.get("failure_kind", "")).strip().lower()
+            if returncode == 0:
+                outcome = "Passed"
+            elif failure_kind == "infrastructure":
+                outcome = "Warning: validation infrastructure unavailable"
+            else:
+                outcome = f"Failed (exit code {returncode if returncode is not None else 'unknown'})"
+            lines.append(f"- **{outcome}:** `{command}`")
+    else:
+        lines.append("- No validation commands were run.")
 
-Plan:
-{bullets(state.get('plan', []))}
+    notes: list[str] = []
+    for unit_id, status, last_error in incomplete_units:
+        note = f"`{unit_id}` ended with status **{status}**"
+        if last_error:
+            note += f": {last_error}"
+        notes.append(note)
 
-Approved custom tools used:
-{bullets([
-    item.get('tool_name', '') + (' (ok)' if item.get('success') else ' (failed)')
-    for item in state.get('custom_tool_results', [])
-]) if state.get('custom_tool_results') else 'None'}
+    # Keep errors visible, but dedupe them and avoid turning successful runs into a
+    # wall of internal diagnostics. The structured result still retains every error.
+    notes.extend(all_errors[:6])
+    if file_changes and not state.get("blocking_validation_failed", False):
+        notes.append("The proposed changes are ready for human review and approval.")
 
-Files inspected:
-{bullets(state.get('files_inspected', []))}
+    if notes:
+        lines.extend(["", "## Notes", ""])
+        lines.extend(f"- {note}" for note in dedupe(notes))
 
-Files changed/proposed:
-{bullets(changed)}
-
-Patch:
-{state.get('patch_summary', 'No patch summary generated.')}
-
-Validation:
-{chr(10).join(validation_lines) if validation_lines else 'No validation commands were run.'}
-
-Errors:
-{bullets(all_errors) if all_errors else 'None'}
-""".strip()
+    report = "\n".join(lines).strip()
     return {"report": report, "status": "reported"}
 
 

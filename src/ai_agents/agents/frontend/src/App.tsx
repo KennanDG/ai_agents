@@ -11,8 +11,11 @@ import { TaskPanel } from "./components/TaskPanel";
 import {
   createCodingAgentSocket,
   type CodingAgentAttachedFile,
+  type CodingAgentCompletionLedger,
+  type CodingAgentImplementationUnit,
   type CodingAgentRunResult,
   type CodingAgentServerEvent,
+  type CodingAgentTaskMode,
 } from "./lib/codingAgentSocket";
 
 import {
@@ -34,10 +37,6 @@ import {
   type GitHubRepositorySummary,
 } from "./lib/repositoryApi";
 import { selectVoiceContextAttachments, submitVoiceTurn } from "./lib/voiceAgentApi";
-import {
-  fetchAgentConfiguration,
-  type AgentConfiguration,
-} from "./lib/adminApi";
 import type { AgentMessage, AgentRunState, ChangeStatus, FileChange, RepositoryFile, RepositoryTreeEntry } from "./types";
 
 const apiBaseUrl = import.meta.env.VITE_AI_AGENTS_API_BASE ?? "http://0.0.0.0:8000";
@@ -45,7 +44,21 @@ const apiKey = import.meta.env.VITE_AI_AGENTS_API_KEY ?? "";
 const configuredRepoRoot : string = import.meta.env.VITE_CODING_AGENT_REPO_ROOT ?? ".";
 const configuredWorkspaceRoot : string = import.meta.env.VITE_CODING_AGENT_WORKSPACE_ROOT ?? configuredRepoRoot;
 
-const createRunState = (status: AgentRunState["status"] = "connecting"): AgentRunState => ({
+type DivideConquerRunState = AgentRunState & {
+  selectedSkills?: string[];
+  taskMode?: CodingAgentTaskMode | null;
+  implementationUnits?: CodingAgentImplementationUnit[];
+  completionLedger?: CodingAgentCompletionLedger;
+  implementationGeneration?: number;
+  implementationIteration?: number;
+  maxImplementationIterations?: number;
+  subtaskWorkerCount?: number;
+  subtaskWorkerResults?: Record<string, unknown>[];
+  contextWorkerCount?: number;
+  runtimeSettings?: Record<string, unknown>;
+};
+
+const createRunState = (status: AgentRunState["status"] = "connecting"): DivideConquerRunState => ({
   status,
   plan: [],
   completedNodes: [],
@@ -61,6 +74,17 @@ const createRunState = (status: AgentRunState["status"] = "connecting"): AgentRu
   appliedFiles: [],
   errors: [],
   logs: [],
+  selectedSkills: [],
+  taskMode: null,
+  implementationUnits: [],
+  completionLedger: {},
+  implementationGeneration: 0,
+  implementationIteration: 0,
+  maxImplementationIterations: 0,
+  subtaskWorkerCount: 0,
+  subtaskWorkerResults: [],
+  contextWorkerCount: 0,
+  runtimeSettings: {},
 });
 
 const initialRunState = createRunState();
@@ -116,6 +140,39 @@ const asStringArray = (value: unknown): string[] | undefined => {
 
 const asRecordArray = (value: unknown): Record<string, unknown>[] | undefined => {
   return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object") : undefined;
+}
+
+const asRecord = (value: unknown): Record<string, unknown> | undefined => {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+const asNumber = (value: unknown): number | undefined => {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+const asTaskMode = (value: unknown): CodingAgentTaskMode | undefined => {
+  return value === "simple" || value === "standard" || value === "parallel" ? value : undefined;
+}
+
+const mergeWorkerResults = (
+  current: Record<string, unknown>[] = [],
+  incoming: Record<string, unknown>[] | undefined,
+): Record<string, unknown>[] => {
+  if (!incoming) return current;
+
+  const merged = new Map<string, Record<string, unknown>>();
+  const add = (item: Record<string, unknown>, fallbackIndex: number) => {
+    const id = item.unit_id ?? item.id ?? item.subtask_id ?? item.worker_id;
+    const generation = item.generation ?? "";
+    const key = typeof id === "string" ? `${generation}:${id}` : `anonymous:${fallbackIndex}:${JSON.stringify(item)}`;
+    merged.set(key, item);
+  };
+
+  current.forEach(add);
+  incoming.forEach((item, index) => add(item, current.length + index));
+  return [...merged.values()];
 }
 
 
@@ -189,14 +246,27 @@ const asFileChanges = (value: unknown): FileChange[] | undefined => {
 }
 
 
-const mergeResult = (state: AgentRunState, result: CodingAgentRunResult): AgentRunState => {
+const mergeResult = (state: AgentRunState, result: CodingAgentRunResult): DivideConquerRunState => {
+  const current = state as DivideConquerRunState;
+
   return {
     ...state,
     threadId: result.thread_id,
     selectedSkill: result.selected_skill,
+    selectedSkills: result.selected_skills ?? current.selectedSkills ?? [],
+    taskMode: result.task_mode ?? current.taskMode ?? null,
     routeConfidence: result.route_confidence,
     routeReason: result.route_reason,
     plan: result.plan ?? state.plan,
+    implementationUnits: result.implementation_units ?? current.implementationUnits ?? [],
+    completionLedger: result.completion_ledger ?? current.completionLedger ?? {},
+    implementationGeneration: result.implementation_generation ?? current.implementationGeneration ?? 0,
+    implementationIteration: result.implementation_iteration ?? current.implementationIteration ?? 0,
+    maxImplementationIterations: result.max_implementation_iterations ?? current.maxImplementationIterations ?? 0,
+    subtaskWorkerCount: result.subtask_worker_count ?? current.subtaskWorkerCount ?? 0,
+    subtaskWorkerResults: result.subtask_worker_results ?? current.subtaskWorkerResults ?? [],
+    contextWorkerCount: result.context_worker_count ?? current.contextWorkerCount ?? 0,
+    runtimeSettings: result.runtime_settings ?? current.runtimeSettings ?? {},
     filesInspected: result.files_inspected ?? state.filesInspected,
     patchSummary: result.patch_summary,
     fileChanges: asFileChanges(result.file_changes) ?? state.fileChanges,
@@ -209,12 +279,13 @@ const mergeResult = (state: AgentRunState, result: CodingAgentRunResult): AgentR
     advisoryValidationFailed: Boolean(result.advisory_validation_failed),
     appliedFiles: result.applied_files ?? state.appliedFiles,
     report: result.report,
+    markdown_response: result.markdown_response,
     errors: result.errors ?? state.errors,
   };
 }
 
 
-const runReducer = (state: AgentRunState, event: RunAction): AgentRunState => {
+const runReducer = (state: AgentRunState, event: RunAction): DivideConquerRunState => {
   switch (event.type) {
     case "session.reset":
       return createRunState("ready");
@@ -226,17 +297,28 @@ const runReducer = (state: AgentRunState, event: RunAction): AgentRunState => {
         logs: [...state.logs, `[socket] ${event.payload.message}`],
       };
 
-    case "run.started":
+    case "run.started": {
+      const workerCount = event.payload.subtask_worker_count ?? event.payload.subagent_count;
+      const maxImplementationIterations = event.payload.max_implementation_iterations;
+
       return {
         ...createRunState("running"),
         runId: event.run_id,
         threadId: event.thread_id,
+        subtaskWorkerCount: workerCount ?? 0,
+        maxImplementationIterations: maxImplementationIterations ?? 0,
+        runtimeSettings: event.payload.runtime_settings ?? {},
         logs: [
           `[run] started ${event.thread_id}`,
           `[repo] ${event.payload.repo_root}`,
           `[mode] ${event.payload.allow_write ? "write" : "read-only"}`,
+          ...(workerCount != null ? [`[workers] ${workerCount} implementation worker(s)`] : []),
+          ...(maxImplementationIterations != null
+            ? [`[iterations] max ${maxImplementationIterations} implementation iteration(s)`]
+            : []),
         ],
       };
+    }
 
     case "node.completed": {
       const payload = event.payload;
@@ -247,6 +329,15 @@ const runReducer = (state: AgentRunState, event: RunAction): AgentRunState => {
       const validationCommands = asStringArray(payload.validation_commands) ?? state.validationCommands;
       const validationResults = asRecordArray(payload.validation_results) ?? state.validationResults;
       const errors = asStringArray(payload.errors) ?? state.errors;
+      const current = state as DivideConquerRunState;
+      const implementationUnits = (asRecordArray(payload.implementation_units) as CodingAgentImplementationUnit[] | undefined)
+        ?? current.implementationUnits
+        ?? [];
+      const completionLedger = (asRecord(payload.completion_ledger) as CodingAgentCompletionLedger | undefined)
+        ?? current.completionLedger
+        ?? {};
+      const incomingWorkerResults = asRecordArray(payload.subtask_worker_results);
+      const subtaskWorkerResults = mergeWorkerResults(current.subtaskWorkerResults, incomingWorkerResults);
 
       return {
         ...state,
@@ -260,10 +351,22 @@ const runReducer = (state: AgentRunState, event: RunAction): AgentRunState => {
         validationResults,
         errors,
         selectedSkill: typeof payload.selected_skill === "string" ? payload.selected_skill : state.selectedSkill,
+        selectedSkills: asStringArray(payload.selected_skills) ?? current.selectedSkills ?? [],
+        taskMode: asTaskMode(payload.task_mode) ?? current.taskMode ?? null,
+        implementationUnits,
+        completionLedger,
+        implementationGeneration: asNumber(payload.implementation_generation) ?? current.implementationGeneration ?? 0,
+        implementationIteration: asNumber(payload.implementation_iteration) ?? current.implementationIteration ?? 0,
+        maxImplementationIterations: asNumber(payload.max_implementation_iterations) ?? current.maxImplementationIterations ?? 0,
+        subtaskWorkerCount: asNumber(payload.subtask_worker_count) ?? current.subtaskWorkerCount ?? 0,
+        subtaskWorkerResults,
+        contextWorkerCount: asNumber(payload.context_worker_count) ?? current.contextWorkerCount ?? 0,
+        runtimeSettings: asRecord(payload.runtime_settings) ?? current.runtimeSettings ?? {},
         routeConfidence: typeof payload.route_confidence === "number" ? payload.route_confidence : state.routeConfidence,
         routeReason: typeof payload.route_reason === "string" ? payload.route_reason : state.routeReason,
         patchSummary: typeof payload.patch_summary === "string" ? payload.patch_summary : state.patchSummary,
         report: typeof payload.report === "string" ? payload.report : state.report,
+        markdown_response: typeof payload.markdown_response === "string" ? payload.markdown_response : state.markdown_response,
         completedNodes: [...state.completedNodes, event.node],
         logs: [...state.logs, `[node] completed ${event.node}`],
       };
@@ -335,7 +438,6 @@ const runReducer = (state: AgentRunState, event: RunAction): AgentRunState => {
 const App = () => {
   const [activeView, setActiveView] = useState<ActivityView>("explorer");
   const [agentSettingsOpen, setAgentSettingsOpen] = useState(false);
-  const [agentConfiguration, setAgentConfiguration] = useState<AgentConfiguration | null>(null);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [activeFile, setActiveFile] = useState<RepositoryFile | null>(null);
   const [allowWrite, setAllowWrite] = useState(true);
@@ -778,9 +880,6 @@ const App = () => {
       if (resolvedRoot) setLocalRepoRoot(resolvedRoot);
     });
     void refreshGitHubRepositories();
-    void fetchAgentConfiguration({ apiBaseUrl, apiKey })
-      .then(setAgentConfiguration)
-      .catch((error) => console.error("Failed to load agent execution settings.", error));
   }, [loadRepository, refreshGitHubRepositories]);
 
   useEffect(() => {
@@ -880,11 +979,14 @@ const App = () => {
           newThreadForNextRunRef.current = false;
         }
 
-        if (event.type === "run.completed" && event.payload.report) {
-          setMessages((current) => [
-            ...current,
-            { id: crypto.randomUUID(), role: "agent", body: event.payload.report ?? "Run completed.", time: nowLabel() },
-          ]);
+        if (event.type === "run.completed") {
+          const response = event.payload.markdown_response ?? event.payload.report;
+          if (response) {
+            setMessages((current) => [
+              ...current,
+              { id: crypto.randomUUID(), role: "agent", body: response, time: nowLabel() },
+            ]);
+          }
         }
 
         if (event.type === "run.failed") {
@@ -898,7 +1000,13 @@ const App = () => {
         console.log("Coding agent socket connected.");
       },
       onClose: () => {
-        dispatchRun({ type: "run.failed", payload: { error: "Coding agent socket closed." } });
+        dispatchRun({
+          type: "run.failed",
+          run_id: null,
+          thread_id: null,
+          node: null,
+          payload: { error: "Coding agent socket closed." },
+        });
       },
       onError: (event) => {
         console.error("Coding agent socket error.", event);
@@ -1059,14 +1167,6 @@ const App = () => {
       allow_write: allowWrite,
       memory_enabled: memoryEnabled,
       attached_files: attachedFiles,
-      max_iterations: 3,
-      subagent_count: agentConfiguration?.coding_subagent_count,
-      route_max_tokens: agentConfiguration?.coding_route_max_tokens,
-      planner_max_tokens: agentConfiguration?.coding_planner_max_tokens,
-      repo_navigation_max_tokens: agentConfiguration?.coding_repo_navigation_max_tokens,
-      simple_patch_max_tokens: agentConfiguration?.coding_simple_patch_max_tokens,
-      patch_max_tokens: agentConfiguration?.coding_patch_max_tokens,
-      progress_max_tokens: agentConfiguration?.coding_progress_max_tokens,
     };
     clearChanges();
     socketRef.current?.run(runRequest);
@@ -1081,8 +1181,7 @@ const App = () => {
     const messageId = crypto.randomUUID();
 
     activeRunMessageIdRef.current = messageId;
-    setMessages((current) => [
-      ...current,
+    setMessages([
       {
         id: messageId,
         role: "user",
@@ -1153,7 +1252,7 @@ const App = () => {
                   onChange={() => setAllowWrite(!allowWrite)}
                   className="accent-accent"
                 />
-                Allow Write
+                Write
               </label>
 
               <label className="flex cursor-pointer items-center gap-1.5 text-xs text-ink-soft">
@@ -1163,7 +1262,7 @@ const App = () => {
                   onChange={() => setMemoryEnabled(!memoryEnabled)}
                   className="accent-accent"
                 />
-                Memory Enabled
+                Memory
               </label>
 
               <button
@@ -1172,7 +1271,7 @@ const App = () => {
                 title={diffPanelHidden ? "Show the diff panel" : "Hide the diff panel and expand the task panel"}
                 onClick={() => setDiffPanelHidden((current) => !current)}
               >
-                {diffPanelHidden ? "Show diff panel" : "Expand task panel"}
+                {diffPanelHidden ? "Show Diffs" : "Expand"}
               </button>
             </div>
 
@@ -1188,6 +1287,7 @@ const App = () => {
               activeFile={activeFile}
               onApproveAll={approveAllChanges}
               onRejectChanges={rejectChanges}
+              onResetSession={resetAgentWorkspace}
             />
           </div>
 
@@ -1257,7 +1357,6 @@ const App = () => {
         apiBaseUrl={apiBaseUrl}
         apiKey={apiKey}
         onClose={() => setAgentSettingsOpen(false)}
-        onSaved={setAgentConfiguration}
       />
     </main>
   );
