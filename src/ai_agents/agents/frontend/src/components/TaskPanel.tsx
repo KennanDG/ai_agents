@@ -1,5 +1,5 @@
 import { ArrowUp, Check, Circle, Mic, Paperclip, ShieldCheck, Sparkles, Square } from "lucide-react";
-import { type ChangeEvent, type ClipboardEvent, type DragEvent, type SubmitEvent, useRef, useState } from "react";
+import { type ChangeEvent, type ClipboardEvent, type DragEvent, type PointerEvent, type SubmitEvent, useRef, useState } from "react";
 import type { AgentMessage, AgentRunState, RepositoryFile } from "../types";
 import type {
   CodingAgentAttachedFile,
@@ -171,6 +171,9 @@ const PlanCard = ({ run }: { run: AgentRunState }) => {
 
 const MAX_TEXT_ATTACHMENT_BYTES = 1_000_000;
 const MAX_IMAGE_ATTACHMENT_BYTES = 5_000_000;
+const MIN_PROMPT_HEIGHT = 48;
+
+const maxPromptHeight = () => Math.max(MIN_PROMPT_HEIGHT, Math.floor(window.innerHeight * 0.5));
 
 const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 const TEXT_FILE_EXTENSIONS = /\.(c|cpp|cc|cxx|c\+\+|h|hpp|hh|hxx|css|csv|html|java|js|jsx|json|md|py|rs|sql|toml|ts|tsx|txt|xml|ya?ml)$/i;
@@ -210,6 +213,7 @@ const readAsDataUrl = (file: File) =>
 */
 export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl, onApproveAll, onRejectChanges, allowWrite, activePath, activeFile }: TaskPanelProps) => {
   const [prompt, setPrompt] = useState("");
+  const [promptHeight, setPromptHeight] = useState(MIN_PROMPT_HEIGHT);
   const [attachedFiles, setAttachedFiles] = useState<CodingAgentAttachedFile[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
@@ -225,6 +229,7 @@ export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl
   const audioChunksRef = useRef<Blob[]>([]);
   const promptRef = useRef(prompt);
   const attachedFilesRef = useRef(attachedFiles);
+  const promptResizeRef = useRef<{ pointerId: number; startY: number; startHeight: number } | null>(null);
 
   promptRef.current = prompt;
   attachedFilesRef.current = attachedFiles;
@@ -402,6 +407,32 @@ export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl
     const files = e.dataTransfer?.files;
     if (files && files.length > 0) {
       processFiles(Array.from(files));
+    }
+  };
+
+  const handlePromptResizeStart = (event: PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    promptResizeRef.current = {
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      startHeight: promptHeight,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handlePromptResizeMove = (event: PointerEvent<HTMLDivElement>) => {
+    const resize = promptResizeRef.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+
+    setPromptHeight(Math.min(maxPromptHeight(), Math.max(MIN_PROMPT_HEIGHT, resize.startHeight + resize.startY - event.clientY)));
+  };
+
+  const handlePromptResizeEnd = (event: PointerEvent<HTMLDivElement>) => {
+    if (promptResizeRef.current?.pointerId !== event.pointerId) return;
+
+    promptResizeRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
     }
   };
 
@@ -617,7 +648,31 @@ export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl
           <div className="rounded-lg border border-line-strong bg-surface p-2.5 focus-within:border-accent/70 focus-within:ring-1 focus-within:ring-accent/20">
             
             <label htmlFor="agent-prompt" className="sr-only">Message the coding agent</label>
-            <div className="overflow-y-auto max-h-[50vh]">
+            <div
+              role="separator"
+              tabIndex={0}
+              aria-controls="agent-prompt"
+              aria-label="Resize message area"
+              aria-orientation="horizontal"
+              aria-valuemin={MIN_PROMPT_HEIGHT}
+              aria-valuemax={maxPromptHeight()}
+              aria-valuenow={promptHeight}
+              className="-mt-1 mb-1 flex h-3 cursor-ns-resize touch-none select-none items-center justify-center rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+              onPointerDown={handlePromptResizeStart}
+              onPointerMove={handlePromptResizeMove}
+              onPointerUp={handlePromptResizeEnd}
+              onPointerCancel={handlePromptResizeEnd}
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+
+                event.preventDefault();
+                const change = event.key === "ArrowUp" ? 16 : -16;
+                setPromptHeight((height) => Math.min(maxPromptHeight(), Math.max(MIN_PROMPT_HEIGHT, height + change)));
+              }}
+            >
+              <span className="w-8 border-t border-line-strong" aria-hidden="true" />
+            </div>
+            <div className="max-h-[50vh] overflow-y-auto" style={{ height: `${promptHeight}px` }}>
               <textarea
                 id="agent-prompt"
                 value={prompt}
@@ -631,7 +686,7 @@ export const TaskPanel = ({ messages, run, onSubmit, onVoiceAudio, voiceReplyUrl
                 }}
                 onPaste={handlePaste}
                 placeholder="Describe the coding task and attach relevant files…"
-                className="w-full resize-y min-h-12 max-h-[50vh] border border-transparent rounded bg-transparent text-xs leading-5 text-ink outline-none placeholder:text-faint"
+                className="block h-full w-full resize-none rounded border border-transparent bg-transparent text-xs leading-5 text-ink outline-none placeholder:text-faint"
                 disabled={isVoiceLoading || isRunning}
               />
             </div>

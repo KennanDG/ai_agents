@@ -1262,7 +1262,7 @@ const App = () => {
                   onChange={() => setAllowWrite(!allowWrite)}
                   className="accent-accent"
                 />
-                Allow Write
+                Write
               </label>
 
               <label className="flex cursor-pointer items-center gap-1.5 text-xs text-ink-soft">
@@ -1272,7 +1272,7 @@ const App = () => {
                   onChange={() => setMemoryEnabled(!memoryEnabled)}
                   className="accent-accent"
                 />
-                Memory Enabled
+                Memory
               </label>
 
               <button
@@ -1281,7 +1281,7 @@ const App = () => {
                 title={diffPanelHidden ? "Show the diff panel" : "Hide the diff panel and expand the task panel"}
                 onClick={() => setDiffPanelHidden((current) => !current)}
               >
-                {diffPanelHidden ? "Show diff panel" : "Expand task panel"}
+                {diffPanelHidden ? "Show Diffs" : "Expand"}
               </button>
             </div>
 
